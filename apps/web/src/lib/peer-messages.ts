@@ -1,4 +1,5 @@
 import type { MessageBlock, ThreadMessage } from "@rakazo/contracts";
+import { peerReceiptDisplayName } from "@rakazo/core";
 
 export interface PeerMessage {
   messageId: string;
@@ -42,7 +43,7 @@ export function peerMessagesFrom(messages: readonly ThreadMessage[]): PeerMessag
               messageId: message.id,
               direction: "received",
               peerBotId: block.fromBotId,
-              peerBotName: block.fromBotName,
+              peerBotName: peerReceiptDisplayName(block),
               text: block.text,
               createdAt: message.createdAt,
             },

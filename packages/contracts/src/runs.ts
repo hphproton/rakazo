@@ -39,6 +39,7 @@ export const RunActivityRowSchema = z.object({
     "spawn",
     "skill",
     "bot_message",
+    "hub_message",
     "webhook",
     "messaging",
     "cloud_agent",

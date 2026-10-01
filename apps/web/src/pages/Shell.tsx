@@ -48,6 +48,7 @@ import {
   latestAnswerableAskMessageId,
   mentionChipKey,
   nestRosterByParent,
+  peerReceiptDisplayName,
   plainTextFromMarkdown,
   projectMessageReactions,
   reorderBotTo,
@@ -6355,7 +6356,7 @@ const MessageView = memo(function MessageView({
         }
         if (block.kind === "bot_message_sent" || block.kind === "bot_message_received") {
           const sent = block.kind === "bot_message_sent";
-          const peer = sent ? block.toBotName : block.fromBotName;
+          const peer = peerReceiptDisplayName(block);
           const peerBotId = sent ? block.toBotId : block.fromBotId;
           const label = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
           return (

@@ -61,6 +61,28 @@ describe("user-visible messages", () => {
     ).toEqual(["reply", "answer"]);
   });
 
+  it("shows a Hub receipt without hiding the target bot's turn", () => {
+    const messages = [
+      message("hub", "run-hub", [
+        {
+          kind: "bot_message_received",
+          fromBotId: "hub-atlas",
+          fromBotName: "Atlas",
+          origin: "hub",
+          text: "Check the deploy.",
+        },
+      ]),
+      message("steps", "run-hub", [
+        { kind: "steps", steps: [{ label: "Look up deploy", count: 1 }] },
+      ]),
+      message("reply", "run-hub", [{ kind: "text", text: "Deploy is green." }]),
+    ];
+    expect(
+      userVisibleMessages(messages, { includePeerReceipts: true }).map((item) => item.id),
+    ).toEqual(["hub", "steps", "reply"]);
+    expect(userVisibleMessages(messages).map((item) => item.id)).toEqual(["steps", "reply"]);
+  });
+
   it("keeps a peer-run ask card and text reply while hiding other peer activity", () => {
     const messages = [
       message("ask", "run-peer", [
