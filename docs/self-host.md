@@ -182,6 +182,10 @@ account before exposing the service. Further accounts still need SMTP.
 For a public deployment, configure SMTP and an allowlist before the API's first start.
 Keep an installation without email on a trusted local network.
 
+For one operator, one default space, and an external bridge, follow
+[Single-space bridge](./single-space-bridge.md). It uses these signup settings plus the
+operator session or one bot webhook secret, and it does not add another credential type.
+
 ### Verification and password recovery email
 
 Password changes for signed-in users require no email configuration. Forgotten-password recovery
@@ -398,6 +402,9 @@ RAKAZO_IMAGE_TAG=local
 # Optional: required only with `--profile updater`.
 # RAKAZO_UPDATER_TOKEN=replace-with-32-plus-character-updater-token
 ```
+
+A one-operator install uses a single allowlist entry and follows
+[Single-space bridge](./single-space-bridge.md) after the owner account exists.
 
 4. Build the images from your checkout and start the stack, then verify its public health endpoint:
 
