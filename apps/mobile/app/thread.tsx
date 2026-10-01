@@ -24,6 +24,7 @@ import {
   isSecretAskBlock,
   latestAnswerableAskMessageId,
   mentionChipKey,
+  peerReceiptDisplayName,
   plainTextFromMarkdown,
   projectMessageReactions,
   resolveComposerSendPlan,
@@ -2654,7 +2655,7 @@ const MessageBubble = memo(function MessageBubble({
   );
   if (peerMessage) {
     const sent = peerMessage.kind === "bot_message_sent";
-    const peer = sent ? peerMessage.toBotName : peerMessage.fromBotName;
+    const peer = peerReceiptDisplayName(peerMessage);
     const peerBotId = sent ? peerMessage.toBotId : peerMessage.fromBotId;
     const label = sent
       ? t("Messaged {peer}", { peer: peer ?? t("Bot") })

@@ -31,6 +31,7 @@ const runTriggers = new Set<Run["trigger"]>([
   "spawn",
   "skill",
   "bot_message",
+  "hub_message",
   "webhook",
   "messaging",
   "cloud_agent",

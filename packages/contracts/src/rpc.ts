@@ -19,6 +19,7 @@ import {
   ArtifactVersionSchema,
   ArtifactWithContentSchema,
   AvatarStyleSchema,
+  BOT_NAME_MAX_LENGTH,
   BotMcpServerSchema,
   BotSchema,
   BotSectionSchema,
@@ -81,7 +82,7 @@ import {
   VoiceInfoSchema,
   VoiceStatusSchema,
 } from "./domain.js";
-import { ComputerCommandSchema, ProductEventSchema } from "./events.js";
+import { BotMessageIntent, ComputerCommandSchema, ProductEventSchema } from "./events.js";
 import { Id, IsoDate } from "./ids.js";
 import {
   IntegrationProviderConfigSchema,
@@ -326,6 +327,29 @@ export const appContract = {
         runIds: z.array(Id).optional(),
       }),
     ),
+    /**
+     * Deliver a Hub agent's message into a bot thread as a peer receipt.
+     * Does not require another bot to call message_bot.
+     */
+    receiveHub: oc
+      .input(
+        z.object({
+          botId: Id,
+          hubAgentId: z.string().trim().min(1).max(200),
+          hubAgentName: z.string().trim().min(1).max(BOT_NAME_MAX_LENGTH),
+          text: z.string().trim().min(1).max(8_000),
+          intent: BotMessageIntent.optional(),
+          clientNonce: z.string().min(1).max(200).optional(),
+        }),
+      )
+      .output(
+        z.object({
+          taskId: Id,
+          runId: Id,
+          seq: z.number().int(),
+          runIds: z.array(Id).optional(),
+        }),
+      ),
     react: oc
       .input(
         threadTarget.safeExtend({

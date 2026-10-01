@@ -9,6 +9,8 @@ export type UserVisibleMessagesOptions = {
   /**
    * Keep `bot_message_sent` / `bot_message_received` rows as compact chips
    * (web CollaborationMarker; mobile AgentEventLabel). Peer bodies stay hidden.
+   * A Hub receipt (`origin: "hub"`) is still a chip, but it does not hide the
+   * target bot's own turn.
    */
   includePeerReceipts?: boolean;
   /** Peer-run ids from `run.trigger === "bot_message"` when receipts may be out of window. */
@@ -35,7 +37,11 @@ export function userVisibleMessages<T extends PresentableMessage>(
   const peerRunIds = new Set([
     ...(options.knownPeerRunIds ?? []),
     ...messages
-      .filter((message) => message.blocks.some((block) => block.kind === "bot_message_received"))
+      .filter((message) =>
+        message.blocks.some(
+          (block) => block.kind === "bot_message_received" && block.origin !== "hub",
+        ),
+      )
       .flatMap((message) => (message.runId ? [message.runId] : [])),
   ]);
   const includePeerReceipts = options.includePeerReceipts === true;
