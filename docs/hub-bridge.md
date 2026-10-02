@@ -63,10 +63,13 @@ Hub → Rakazo uses `POST /rpc/threads/receiveHub`. That stores a peer receipt a
     "botId": "<target bot id>",
     "hubAgentId": "hub-atlas",
     "hubAgentName": "Atlas",
-    "text": "Deploy the staging build."
+    "text": "Deploy the staging build.",
+    "spaceTopicKey": "burst-1"
   }
 }
 ```
+
+`spaceTopicKey` is optional, at most 200 characters. The same value on each bot joins that burst. Omit it and the delivery stays on that bot's thread. It is not `clientNonce`.
 
 `threads/send` remains a person typing. A bot webhook whose JSON has `origin` `hub`, `event` `hub_message`, or both `hubAgentId` and `hubAgentName` responds `409` with `Hub inbound uses threads/receiveHub` and does not store a user message. Other webhook bodies are unchanged.
 
@@ -76,9 +79,9 @@ A Rakazo bot delivers with the builtin tool `hub_send_message`. The user does no
 
 The tool writes a `HUB-INBOX` row with status `wake` and a `hub_message_sent` message in the sending bot's thread. That row is a Hub chip in the same family as an inbound receipt (`Message from Hub · {name}`): avatar, pill, left alignment, and no payload bubble in the bot thread. The label is `To Hub · {name}`. When one topic includes more than one Hub member, the thread collapses each direction that has more than one turn into a single chip. The sends share `To Hub · Box Principal, OSS Local Lab`. The replies share `Message from Hub · Box Principal, OSS Local Lab`. A topic with one member still shows `To Hub · {name}` and `Message from Hub · {name}` as separate chips. The stored blocks stay; this only changes which chips the thread draws. Either chip opens the view-only topic that contains that chip. A topic is one stretch on one bot thread. Several `hub_send_message` calls before the bot writes a reply share it, and so do inbound receipts from those members. A burst of receipts from several Hub agents, with no bot reply between them, is the same kind of topic. The header lists every member (`{bot} · Hub · Box Principal, OSS Local Lab`). Each turn names its speaker. An outbound in that topic is `{bot} · Hub · {name}` so the sends stay distinct. A topic with one member keeps the 1:1 labels.
 
-A person message — a user row that is not itself a Hub or teammate receipt — ends every open topic on that thread. For a single member, a bot text reply still starts a new topic when the next Hub turn repeats a direction already present, or the topic already has both directions. The missing direction still joins after that reply, so an inbound receipt and the outbound that answers it stay one transcript. A different Hub member who starts only after that reply gets their own topic, so two 1:1s in a row stay apart. An older chip does not open a later topic. If the clicked message is not in the loaded thread, the view stays empty and does not substitute the latest topic. The stored blocks have no Hub topic id, and `threadKey` on the outbox row is not copied onto the echo. The person does not type in the transcript. Delivery stays this tool, then the outbox, then the mesh. The outbox row is the first-party drain. This tip has no separate native outbound sender, so cutover still reports `rakazoToHub` `mcp`: a host-straight mesh reads the outbox instead of scraping a `TO_HUB:` user message.
+A person message — a user row that is not itself a Hub or teammate receipt — ends every open topic on that thread. For a single member, a bot text reply still starts a new topic when the next Hub turn repeats a direction already present, or the topic already has both directions. The missing direction still joins after that reply, so an inbound receipt and the outbound that answers it stay one transcript. A different Hub member who starts only after that reply gets their own topic, so two 1:1s in a row stay apart. An older chip does not open a later topic. If the clicked message is not in the loaded thread, the view stays empty and does not substitute the latest topic. An optional `spaceTopicKey` on the Hub block is the only join across Rakazo bots. The answering `hub_send_message` echo copies that key when the run's open topic on that thread already has one, and does not invent one. `threadKey` on the outbox row is still not copied onto the echo. `clientNonce` is not the key. With no `spaceTopicKey`, each bot thread keeps its own topic. Messaging two Hub members does not require one shared page; separate 1:1 topics stay valid. The person does not type in the transcript. Delivery stays this tool, then the outbox, then the mesh. The outbox row is the first-party drain. This tip has no separate native outbound sender, so cutover still reports `rakazoToHub` `mcp`: a host-straight mesh reads the outbox instead of scraping a `TO_HUB:` user message.
 
-The transcript is not a Hub seat. Directory rows stay out of the sidebar, search, and `message_bot`. Web loads that bot's thread (`threads/messages` with peer runs) and selects the topic for the clicked message. Mobile does the same from either Hub chip. A second Rakazo bot's thread is a separate transcript even when both message the same `hubAgentId`. There is still no space-wide Hub inbox, no live update while the view is open, and no composer.
+The transcript is not a Hub seat. Directory rows stay out of the sidebar, search, and `message_bot`. Web loads that bot's thread (`threads/messages` with peer runs) and selects the topic for the clicked message. Mobile does the same from either Hub chip. A second Rakazo bot stays on its own transcript unless both sides carry the same `spaceTopicKey`. Opening a chip then includes the other bot's turns for that key in the existing view-only transcript. The header names both Rakazo bots and the Hub members. Each turn keeps its speaker. Chips stay on the bot thread that stored them, at most two for a multi-member burst, and never one chip that spans bots. There is still no space-wide Hub inbox, no live update while the view is open, and no composer.
 
 ## Lab smoke: multi-party topic
 
@@ -92,6 +95,16 @@ One Rakazo bot. Two Hub members, for example Box Principal and OSS Local Lab.
 The view is one topic. Both chips open it. Both sends and both replies are interleaved. The header reads `{bot} · Hub · Box Principal, OSS Local Lab`. Each reply shows its Hub name. The footer stays `This chat is view-only`. There is no composer. Hub members stay out of the sidebar.
 
 A chip from a 1:1 that the person message already closed still opens only that 1:1. A Hub member addressed only after the bot has replied stays on their own topic.
+
+## Space-wide topic
+
+Optional. Two Rakazo bots share the existing view-only transcript only when each Hub block carries the same `spaceTopicKey`.
+
+1. Deliver the burst to each bot with `threads/receiveHub` and that key.
+2. Each bot's answering `hub_send_message` echoes the key while its own topic is still open. A person message on one bot does not close the other bot's topic.
+3. Each bot thread still shows at most two chips for a multi-member burst. Open either chip.
+
+The transcript lists both bots' turns for that key. A burst with no key stays on the bot thread that stored it, even when the texts and timestamps match. Two Hub members can stay on separate 1:1 topics. This does not add a space inbox or a composer.
 
 The Hub directory prompt and the `message_bot` tool tell the model those names are not chats. `message_bot` refuses a Hub roster row and does not start a run.
 

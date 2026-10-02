@@ -5,7 +5,13 @@ import { BotAvatar, Button, Dialog, DialogClose, DialogContent, DialogTitle } fr
 import { useEffect, useMemo, useState } from "react";
 import { loadPeerHistory } from "../lib/peer-history";
 import type { PeerMessage, PeerParticipant, PeerTranscriptChip } from "../lib/peer-messages";
-import { peerTranscriptForChip, peerTurnSpeaker } from "../lib/peer-messages";
+import {
+  hubTranscriptTitle,
+  messagesForHubTranscript,
+  peerTranscriptForChip,
+  peerTurnSpeaker,
+  spaceTopicKeyOnAnchor,
+} from "../lib/peer-messages";
 import { rpc } from "../lib/rpc";
 
 /** Bubbles for one view-only topic. Sent is the Rakazo bot; received is a Hub member or teammate. */
@@ -52,9 +58,11 @@ export function PeerConversationTranscript({
 /**
  * Full-screen view-only transcript opened from one chip.
  * A Hub chip opens the topic that contains that chip. One burst can include
- * several Hub members; a 1:1 chip still opens only that exchange. A teammate
- * chip stays one conversation per bot. There is no composer: delivery stays
- * on hub_send_message, and Hub members are not sidebar seats.
+ * several Hub members; a 1:1 chip still opens only that exchange. Two Hub
+ * members do not require a new page. A shared spaceTopicKey also includes the
+ * other Rakazo bot's turns for that key. A teammate chip stays one conversation
+ * per bot. There is no composer: delivery stays on hub_send_message, and Hub
+ * members are not sidebar seats.
  */
 export function PeerMessagesOverlay({
   botId,
@@ -78,7 +86,8 @@ export function PeerMessagesOverlay({
   onClose: () => void;
 }) {
   const { t } = useLingui();
-  const [messages, setMessages] = useState<readonly ThreadMessage[]>([]);
+  const [messages, setMessages] = useState<readonly TranscriptMessage[]>([]);
+  const [botColors, setBotColors] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [historyReady, setHistoryReady] = useState(false);
   const [historyFailed, setHistoryFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -89,20 +98,25 @@ export function PeerMessagesOverlay({
   const peerBotName = conversation?.peerBotName ?? initialPeerBotName;
   const participants: readonly PeerParticipant[] = conversation?.participants ?? [];
   const participantCount = participants.length > 1 ? participants.length : 1;
+  const spaceBots = conversation?.rakazoBots ?? [];
 
   useEffect(() => {
     const abort = new AbortController();
     setHistoryReady(false);
     setHistoryFailed(false);
     setMessages([]);
-    void loadPeerHistory({
+    void loadHubChipTranscript({
       signal: abort.signal,
-      loadPage: (before, signal) =>
-        rpc.threads.messages({ botId, before, includePeerRuns: true }, { signal }),
+      botId,
+      botName,
+      messageId,
+      peerBotId,
+      transcriptScope,
     })
       .then((loaded) => {
         if (abort.signal.aborted) return;
-        setMessages(loaded);
+        setBotColors(loaded.colors);
+        setMessages(loaded.messages);
         setHistoryReady(true);
       })
       .catch(() => {
@@ -113,9 +127,11 @@ export function PeerMessagesOverlay({
     return () => {
       abort.abort();
     };
-  }, [botId, reloadKey]);
+  }, [botId, botName, messageId, peerBotId, reloadKey, transcriptScope]);
 
-  const title = `${botName} · ${peerBotName}`;
+  const title = conversation
+    ? hubTranscriptTitle(botName, conversation)
+    : `${botName} · ${initialPeerBotName}`;
 
   return (
     <Dialog
@@ -132,7 +148,18 @@ export function PeerMessagesOverlay({
         <div className="flex items-center justify-between gap-4 border-b border-sidebar-border px-[18px] py-3.5">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="flex items-center -space-x-2">
-              <BotAvatar color={botColor} identity={botId} size={28} />
+              {spaceBots.length > 1 ? (
+                spaceBots.map((bot) => (
+                  <BotAvatar
+                    key={bot.botId}
+                    color={bot.botId === botId ? botColor : (botColors.get(bot.botId) ?? botColor)}
+                    identity={bot.botId}
+                    size={28}
+                  />
+                ))
+              ) : (
+                <BotAvatar color={botColor} identity={botId} size={28} />
+              )}
               {participants.length > 1 ? (
                 participants.map((participant) => (
                   <BotAvatar
@@ -192,4 +219,68 @@ export function PeerMessagesOverlay({
       </DialogContent>
     </Dialog>
   );
+}
+
+type TranscriptMessage = ThreadMessage & { botName?: string };
+
+/**
+ * The opened bot's thread. When that chip's Hub block has a spaceTopicKey,
+ * also load other bots' turns that carry the same key. No key stays on this thread.
+ * A failed sibling load still opens the bot's own topic.
+ */
+async function loadHubChipTranscript({
+  signal,
+  botId,
+  botName,
+  messageId,
+  peerBotId,
+  transcriptScope,
+}: {
+  signal: AbortSignal;
+  botId: string;
+  botName: string;
+  messageId: string;
+  peerBotId: string;
+  transcriptScope: PeerTranscriptChip["scope"];
+}): Promise<{ messages: TranscriptMessage[]; colors: ReadonlyMap<string, string> }> {
+  const own = await loadPeerHistory({
+    signal,
+    loadPage: (before, pageSignal) =>
+      rpc.threads.messages({ botId, before, includePeerRuns: true }, { signal: pageSignal }),
+  });
+  const stampedOwn = own.map((message) => ({ ...message, botId, botName }));
+  const anchor = { messageId, peerBotId };
+  if (transcriptScope !== "hub" || !spaceTopicKeyOnAnchor(stampedOwn, anchor)) {
+    return { messages: stampedOwn, colors: new Map() };
+  }
+  try {
+    const bots = await rpc.bots.list(undefined, { signal });
+    if (signal.aborted) return { messages: stampedOwn, colors: new Map() };
+    const settled = await Promise.allSettled(
+      bots
+        .filter((bot) => bot.id !== botId)
+        .map(async (bot) => {
+          const page = await loadPeerHistory({
+            signal,
+            loadPage: (before, pageSignal) =>
+              rpc.threads.messages(
+                { botId: bot.id, before, includePeerRuns: true },
+                { signal: pageSignal },
+              ),
+          });
+          return page.map((message) => ({ ...message, botId: bot.id, botName: bot.name }));
+        }),
+    );
+    if (signal.aborted) return { messages: stampedOwn, colors: new Map() };
+    const siblings = settled.flatMap((result) =>
+      result.status === "fulfilled" ? result.value : [],
+    );
+    return {
+      messages: messagesForHubTranscript(stampedOwn, siblings, anchor),
+      colors: new Map(bots.map((bot) => [bot.id, bot.color])),
+    };
+  } catch {
+    if (signal.aborted) return { messages: stampedOwn, colors: new Map() };
+    return { messages: stampedOwn, colors: new Map() };
+  }
 }

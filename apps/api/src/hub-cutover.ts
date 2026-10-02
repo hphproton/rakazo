@@ -30,6 +30,7 @@ export async function deliverHubInbound(
     text: string;
     intent?: BotMessageIntent;
     clientNonce?: string;
+    spaceTopicKey?: string;
   },
 ) {
   const route = hubInboundCall({
@@ -39,6 +40,7 @@ export async function deliverHubInbound(
     text: input.text,
     intent: input.intent,
     clientNonce: input.clientNonce,
+    ...(input.spaceTopicKey ? { spaceTopicKey: input.spaceTopicKey } : {}),
   });
   if (route.procedure !== HUB_INBOUND_PROCEDURE) {
     throw new ORPCError("BAD_REQUEST", { message: HUB_INBOUND_CUTOVER_ERROR });
@@ -49,6 +51,7 @@ export async function deliverHubInbound(
     text: route.input.text,
     intent: route.input.intent,
     clientNonce: route.input.clientNonce,
+    ...(route.input.spaceTopicKey ? { spaceTopicKey: route.input.spaceTopicKey } : {}),
   });
 }
 
