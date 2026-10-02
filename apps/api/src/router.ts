@@ -30,6 +30,7 @@ import type {
   RemoteConnectorDependencies,
 } from "@rakazo/adapters";
 import {
+  ackHubInbox,
   acquireComputerExecutionLease,
   applyCodexLiveCatalog,
   applyTeachingDesktopInput,
@@ -66,6 +67,7 @@ import {
   kickModelCredentialRefresh,
   listAvailablePiCatalog,
   listBotSecretMetadata,
+  listHubInbox,
   listPiCatalog,
   listScratchpadItems,
   McpOAuthBroker,
@@ -1883,6 +1885,13 @@ export function createRouter(deps: RouterDeps) {
           signingKey: deps.env.hubDirectorySigningKey,
         }),
       ),
+      outbox: authed.hub.outbox.handler(async ({ context }) => ({
+        items: await listHubInbox(deps.prisma, context.actor),
+      })),
+      ackOutbound: authed.hub.ackOutbound.handler(async ({ context, input }) => ({
+        ok: true as const,
+        acked: await ackHubInbox(deps.prisma, context.actor, input.deliveryIds),
+      })),
     },
     threads: {
       head: authed.threads.head.handler(async ({ context, input }) => {

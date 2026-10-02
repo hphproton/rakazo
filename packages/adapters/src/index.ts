@@ -67,6 +67,7 @@ export * from "./graphql-connectors.js";
 export * from "./group-handoff.js";
 export * from "./home.js";
 export * from "./host-aware-sandbox.js";
+export * from "./hub-send.js";
 export * from "./installed-connectors.js";
 export * from "./integration-provider-settings.js";
 export * from "./jev-auto-review.js";

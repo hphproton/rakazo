@@ -25,6 +25,7 @@ export * from "./featured-connectors.js";
 export * from "./group-mentions.js";
 export * from "./http-response.js";
 export * from "./hub-directory.js";
+export * from "./hub-resolve.js";
 export * from "./markdown-plain.js";
 export * from "./mcp.js";
 export * from "./message-pages.js";

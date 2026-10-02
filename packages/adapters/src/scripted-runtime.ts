@@ -162,6 +162,34 @@ export function inferScript(
       },
     ];
   }
+  if (
+    lower.includes("message the hub") ||
+    lower.includes("hub member named") ||
+    lower.includes("message hub member")
+  ) {
+    const target =
+      /named\s+"([^"]{1,80})"/i.exec(prompt)?.[1]?.trim() || namedBot(prompt) || "Principal";
+    const text =
+      /named\s+(?:"[^"]{1,80}"|[A-Za-z0-9][A-Za-z0-9_-]{0,39})\s+(?:saying|with|:)\s*([\s\S]+)$/i
+        .exec(prompt)?.[1]
+        ?.trim() ?? `Please help with: ${prompt}`;
+    return [
+      {
+        assistant: "messaging that Hub member now.",
+        toolCalls: [
+          {
+            name: "hub_send_message",
+            args: {
+              target,
+              text,
+              intent: "request",
+            },
+          },
+        ],
+        complete: true,
+      },
+    ];
+  }
   if (lower.includes("message the bot named") || lower.includes("message bot named")) {
     const name = namedBot(prompt) ?? "Peer";
     const message =

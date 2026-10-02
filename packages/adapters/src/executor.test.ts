@@ -1043,6 +1043,25 @@ describe("userTurnInstructions", () => {
     expect(instructions.join("\n\n")).not.toContain("Current date and time:");
   });
 
+  it("places the hub directory after the teammate directory", () => {
+    const instructions = userTurnInstructions({
+      ...base,
+      groupContext: undefined,
+      messagingContext: undefined,
+      redactedMemoryContext: undefined,
+      redactedScratchpadContext: undefined,
+      hasHistoricalContext: false,
+      agentEnvironmentInstruction: undefined,
+      botDirectory: "Bot directory",
+      hubDirectory: "Hub directory",
+      pluginLine: undefined,
+      agentSkillsLine: undefined,
+      taughtSkillsLine: undefined,
+    }).filter(Boolean);
+    const botAt = instructions.indexOf("Bot directory");
+    expect(instructions[botAt + 1]).toBe("Hub directory");
+  });
+
   it("inserts task catalog guidance after the computer line", () => {
     const instructions = userTurnInstructions({
       ...base,
