@@ -4,7 +4,8 @@ import type { ThreadMessage } from "@rakazo/contracts";
 import { BotAvatar, Button, Dialog, DialogClose, DialogContent, DialogTitle } from "@rakazo/ui-web";
 import { useEffect, useMemo, useState } from "react";
 import { loadPeerHistory } from "../lib/peer-history";
-import { type PeerMessage, peerConversations } from "../lib/peer-messages";
+import type { PeerMessage, PeerTranscriptChip } from "../lib/peer-messages";
+import { peerTranscriptForChip } from "../lib/peer-messages";
 import { rpc } from "../lib/rpc";
 
 /** Bubbles for one view-only exchange. Sent is the Rakazo bot; received is the other side. */
@@ -49,11 +50,11 @@ export function PeerConversationTranscript({
 }
 
 /**
- * Full-screen view-only transcript of one exchange.
- * Opened from a Messaged / Message from chip, or from a To Hub chip.
- * Hub inbound and outbound turns for the same member are one conversation.
- * There is no composer: delivery stays on hub_send_message, and Hub members
- * are not sidebar seats.
+ * Full-screen view-only transcript opened from one chip.
+ * A Hub chip opens the exchange that contains that chip's message, not every
+ * turn with that Hub member and not the latest exchange. A teammate chip
+ * stays one conversation per bot. There is no composer: delivery stays on
+ * hub_send_message, and Hub members are not sidebar seats.
  */
 export function PeerMessagesOverlay({
   botId,
@@ -62,6 +63,8 @@ export function PeerMessagesOverlay({
   peerBotId,
   peerBotName: initialPeerBotName,
   peerBotColor,
+  messageId,
+  transcriptScope,
   onClose,
 }: {
   botId: string;
@@ -70,6 +73,8 @@ export function PeerMessagesOverlay({
   peerBotId: string;
   peerBotName: string;
   peerBotColor: string;
+  messageId: string;
+  transcriptScope: PeerTranscriptChip["scope"];
   onClose: () => void;
 }) {
   const { t } = useLingui();
@@ -79,8 +84,8 @@ export function PeerMessagesOverlay({
   const [reloadKey, setReloadKey] = useState(0);
   const conversation = useMemo(() => {
     if (!historyReady) return null;
-    return peerConversations(messages).find((entry) => entry.peerBotId === peerBotId) ?? null;
-  }, [historyReady, messages, peerBotId]);
+    return peerTranscriptForChip(messages, { scope: transcriptScope, messageId, peerBotId });
+  }, [historyReady, messageId, messages, peerBotId, transcriptScope]);
   const peerBotName = conversation?.peerBotName ?? initialPeerBotName;
 
   useEffect(() => {

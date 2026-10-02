@@ -1,5 +1,6 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
-import { type PeerMessage, peerConversations } from "@rakazo/core";
+import type { PeerMessage } from "@rakazo/core";
+import { hubExchangeForAnchor } from "@rakazo/core";
 import { useEffect, useState } from "react";
 import { Modal, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import { type MobileMessage, type MobileMessagePage, rpc } from "../lib/api";
@@ -8,20 +9,23 @@ import { useI18n } from "../lib/i18n";
 import { useResolvedAppearance } from "../lib/native";
 
 /**
- * View-only Hub transcript for one member. Opened from either Hub chip.
- * Not a sidebar seat and not a composer.
+ * View-only Hub transcript for the exchange that contains the opened chip.
+ * Not every turn with that member, and not the latest exchange. Not a sidebar
+ * seat and not a composer.
  */
 export function HubConversationSheet({
   botId,
   botName,
   peerBotId,
   peerBotName: initialPeerBotName,
+  messageId,
   onClose,
 }: {
   botId: string;
   botName: string;
   peerBotId: string;
   peerBotName: string;
+  messageId: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -40,9 +44,7 @@ export function HubConversationSheet({
     void loadBotThread(botId, abort.signal)
       .then((messages) => {
         if (abort.signal.aborted) return;
-        const conversation = peerConversations(messages).find(
-          (entry) => entry.peerBotId === peerBotId,
-        );
+        const conversation = hubExchangeForAnchor(messages, { messageId, peerBotId });
         setPeerBotName(conversation?.peerBotName ?? initialPeerBotName);
         setTurns(conversation?.messages ?? []);
       })
@@ -54,7 +56,7 @@ export function HubConversationSheet({
     return () => {
       abort.abort();
     };
-  }, [botId, initialPeerBotName, peerBotId, reloadKey]);
+  }, [botId, initialPeerBotName, messageId, peerBotId, reloadKey]);
 
   const title = `${botName} · ${peerBotName}`;
 

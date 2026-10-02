@@ -313,6 +313,13 @@ type PendingBrowserNotification = {
 const ATTACHMENT_ACCEPT = ATTACHMENT_ALLOWED_MIME_TYPES.join(",");
 /** Identity colour for bots the roster no longer knows about. */
 const FALLBACK_BOT_COLOR = "#85858A";
+
+type OpenPeerTranscript = {
+  peerBotId: string;
+  peerBotName: string;
+  messageId: string;
+  transcriptScope: "hub" | "peer";
+};
 const THREAD_SNAPSHOT_TIMEOUT_MS = 2_000;
 /** Bound Settings leave so a hung voice status refresh cannot block dismissal. */
 const VOICE_STATUS_REFRESH_TIMEOUT_MS = 10_000;
@@ -461,10 +468,7 @@ export function ShellPage() {
       currentSearch.setSearchParams(params, { replace: true });
     }
   }, []);
-  const [peerConversation, setPeerConversation] = useState<{
-    peerBotId: string;
-    peerBotName: string;
-  } | null>(null);
+  const [peerConversation, setPeerConversation] = useState<OpenPeerTranscript | null>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [routinesBotId, setRoutinesBotId] = useState<string | null>(null);
   const [taughtSkills, setTaughtSkills] = useState<TaughtSkill[]>([]);
@@ -4445,6 +4449,7 @@ export function ShellPage() {
         ) : null}
         {peerConversation && active ? (
           <PeerMessagesOverlay
+            key={`${peerConversation.transcriptScope}:${peerConversation.messageId}:${peerConversation.peerBotId}`}
             botId={active.id}
             botName={active.name}
             botColor={active.color}
@@ -4453,6 +4458,8 @@ export function ShellPage() {
             peerBotColor={
               resolveTranscriptBot(peerConversation.peerBotId)?.color ?? FALLBACK_BOT_COLOR
             }
+            messageId={peerConversation.messageId}
+            transcriptScope={peerConversation.transcriptScope}
             onClose={() => setPeerConversation(null)}
           />
         ) : null}
@@ -4679,7 +4686,7 @@ const Transcript = memo(function Transcript({
   onQuote: (message: ThreadMessage, quote: string) => void;
   onReact: (message: ThreadMessage, reaction: MessageReaction) => Promise<void>;
   onJumpToMessage: (messageId: string) => void;
-  onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
+  onOpenPeerMessages: (peer: OpenPeerTranscript) => void;
   memberName?: (botId: string | undefined) => string | undefined;
   peerBot: (botId: string) => { color: string; status?: string } | undefined;
   onRefresh: () => Promise<void>;
@@ -6187,7 +6194,7 @@ const MessageView = memo(function MessageView({
   message: ThreadMessage;
   onAnswer: (message: ThreadMessage, text: string, username?: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
-  onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
+  onOpenPeerMessages: (peer: OpenPeerTranscript) => void;
   speakerName?: string;
   memberName?: (botId: string | undefined) => string | undefined;
   peerBot: (botId: string) => { color: string; status?: string } | undefined;
@@ -6369,6 +6376,8 @@ const MessageView = memo(function MessageView({
                 onOpenPeerMessages({
                   peerBotId: block.hubAgentId,
                   peerBotName: hubMemberLabel(name),
+                  messageId: message.id,
+                  transcriptScope: "hub",
                 })
               }
             />
@@ -6379,6 +6388,7 @@ const MessageView = memo(function MessageView({
           const peer = peerReceiptDisplayName(block);
           const peerBotId = sent ? block.toBotId : block.fromBotId;
           const label = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
+          const hubPeer = block.kind === "bot_message_received" && block.origin === "hub";
           return (
             <CollaborationMarker
               key={i}
@@ -6386,7 +6396,14 @@ const MessageView = memo(function MessageView({
               color={peerBot(peerBotId)?.color ?? FALLBACK_BOT_COLOR}
               identity={peerBotId}
               label={label}
-              onClick={() => onOpenPeerMessages({ peerBotId, peerBotName: peer })}
+              onClick={() =>
+                onOpenPeerMessages({
+                  peerBotId,
+                  peerBotName: peer,
+                  messageId: message.id,
+                  transcriptScope: hubPeer ? "hub" : "peer",
+                })
+              }
             />
           );
         }

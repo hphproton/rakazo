@@ -1,6 +1,6 @@
 import type { ThreadMessage } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { peerConversations, peerMessagesFrom } from "./peer-messages.js";
+import { peerConversations, peerMessagesFrom, peerTranscriptForChip } from "./peer-messages.js";
 
 function message(id: string, createdAt: string, blocks: ThreadMessage["blocks"]): ThreadMessage {
   return { id, threadId: "t_1", seq: 1, role: "bot", blocks, createdAt };
@@ -61,6 +61,47 @@ describe("peer conversations", () => {
     );
     expect(atlas?.peerBotName).toBe("Hub · Atlas");
     expect(atlas?.messages.map((turn) => turn.direction)).toEqual(["sent", "received"]);
+  });
+
+  it("opens the clicked Hub chip's exchange instead of the latest bag for that member", () => {
+    const older = message("m_old", "2026-10-01T10:00:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: "hub-atlas",
+        name: "Atlas",
+        text: "older outbound",
+        intent: "request",
+      },
+    ]);
+    const boundary = message("m_person", "2026-10-02T09:00:00.000Z", [
+      { kind: "text", text: "a different request" },
+    ]);
+    boundary.role = "user";
+    boundary.seq = 4;
+    older.seq = 3;
+    const smoke = message("m_out", "2026-10-02T15:04:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: "hub-atlas",
+        name: "Atlas",
+        text: "NATIVE_HUB_SEND_SMOKE",
+        intent: "request",
+      },
+    ]);
+    smoke.seq = 7;
+    const opened = peerTranscriptForChip([smoke, boundary, older], {
+      scope: "hub",
+      messageId: "m_old",
+      peerBotId: "hub-atlas",
+    });
+    expect(opened?.messages.map((turn) => turn.text)).toEqual(["older outbound"]);
+    expect(
+      peerTranscriptForChip([smoke, boundary, older], {
+        scope: "hub",
+        messageId: "missing",
+        peerBotId: "hub-atlas",
+      }),
+    ).toBeNull();
   });
 
   it("reads both directions out of the thread", () => {
