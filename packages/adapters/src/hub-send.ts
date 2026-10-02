@@ -17,7 +17,8 @@ import type { PrismaClient } from "@rakazo/db";
  * `done`. The tool does not write a user message and does not require `TO_HUB:`.
  * On success the caller records a `hub_message_sent` echo in the sending thread.
  * The thread shows the same Hub chip as an inbound receipt. The payload is read
- * in that member's view-only transcript, next to inbound turns for the same id.
+ * in the view-only topic that contains that chip. Several members addressed
+ * before the bot writes a reply share that topic.
  */
 
 const HUB_THREAD_KEY_MAX = 200;
