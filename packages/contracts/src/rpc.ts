@@ -351,24 +351,38 @@ export const appContract = {
       }),
     ),
     /**
-     * Deliver a Hub agent's message into a bot thread as a peer receipt.
+     * Deliver a Hub agent's message as a peer receipt.
+     * Exactly one of botId (that bot's thread) or groupId (the ChatGroup thread).
      * Does not require another bot to call message_bot.
      */
     receiveHub: oc
       .input(
-        z.object({
-          botId: Id,
-          hubAgentId: z.string().trim().min(1).max(200),
-          hubAgentName: z.string().trim().min(1).max(BOT_NAME_MAX_LENGTH),
-          text: z.string().trim().min(1).max(8_000),
-          intent: BotMessageIntent.optional(),
-          clientNonce: z.string().min(1).max(200).optional(),
-          /**
-           * Same value on each bot joins one burst. Omit it and each bot keeps
-           * its own topic. This is not clientNonce.
-           */
-          spaceTopicKey: SpaceTopicKeySchema.optional(),
-        }),
+        z
+          .object({
+            botId: Id.optional(),
+            groupId: Id.optional(),
+            hubAgentId: z.string().trim().min(1).max(200),
+            hubAgentName: z.string().trim().min(1).max(BOT_NAME_MAX_LENGTH),
+            text: z.string().trim().min(1).max(8_000),
+            intent: BotMessageIntent.optional(),
+            clientNonce: z.string().min(1).max(200).optional(),
+            /**
+             * Same value on each bot joins one burst. Omit it and each bot keeps
+             * its own topic. This is not clientNonce, and it is not threadKey.
+             */
+            spaceTopicKey: SpaceTopicKeySchema.optional(),
+          })
+          .superRefine((input, ctx) => {
+            const hasBot = Boolean(input.botId);
+            const hasGroup = Boolean(input.groupId);
+            if (hasBot === hasGroup) {
+              ctx.addIssue({
+                code: "custom",
+                message: "Provide exactly one of botId or groupId",
+                path: ["botId"],
+              });
+            }
+          }),
       )
       .output(
         z.object({

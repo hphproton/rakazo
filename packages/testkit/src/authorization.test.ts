@@ -107,6 +107,10 @@ describeWithDatabase("API authorization and resource isolation", () => {
         "threads/receiveHub",
         { botId: "missing-bot", hubAgentId: "hub-atlas", hubAgentName: "Atlas", text: "Nope" },
       ],
+      [
+        "threads/receiveHub",
+        { groupId: "missing-group", hubAgentId: "hub-atlas", hubAgentName: "Atlas", text: "Nope" },
+      ],
       ["threads/stop", { botId: "missing-bot" }],
       ["threads/clear", { botId: "missing-bot" }],
       ["threads/followUp", { botId: "missing-bot", text: "Nope" }],
@@ -411,6 +415,15 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["threads/messages", { groupId: ownerGroup.id, before: 1 }],
       ["threads/subscribe", { groupId: ownerGroup.id, cursor: -1 }],
       ["threads/send", { groupId: ownerGroup.id, text: "intruder group message" }],
+      [
+        "threads/receiveHub",
+        {
+          groupId: ownerGroup.id,
+          hubAgentId: "hub-atlas",
+          hubAgentName: "Atlas",
+          text: "intruder hub message",
+        },
+      ],
       ["threads/stop", { groupId: ownerGroup.id }],
       ["threads/followUp", { groupId: ownerGroup.id, text: "intruder follow-up" }],
       ["threads/markRead", { groupId: ownerGroup.id }],

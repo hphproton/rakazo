@@ -26,6 +26,7 @@ function harness(
     existing?: Record<string, unknown> | null;
     uniqueOnCreate?: boolean;
     messages?: unknown[];
+    groupId?: string | null;
   } = {},
 ) {
   const create = vi.fn(async (args: { data: Record<string, unknown> }) => {
@@ -37,6 +38,9 @@ function harness(
   const messageCreate = vi.fn();
   const prisma = {
     bot: { findMany: vi.fn(async () => options.bots ?? [principal]) },
+    thread: {
+      findFirst: vi.fn(async () => ({ groupId: options.groupId ?? null })),
+    },
     run: {
       findFirst: vi.fn(async () => (options.running === false ? null : { id: "run-1" })),
     },
@@ -121,6 +125,7 @@ describe("sendHubMessage", () => {
       intent: "request",
       hubAgentId: "f4adcc55-1111-4111-8111-111111111111",
       idempotencyKey: "hub-send:space-1:user-1:effect-1",
+      threadKey: null,
     });
     expect(messageCreate).not.toHaveBeenCalled();
   });
@@ -213,6 +218,78 @@ describe("sendHubMessage", () => {
     );
     expect(echo.mock.calls[0]?.[0].block).not.toHaveProperty("spaceTopicKey");
     expect(closed.create.mock.calls[0]?.[0].data.threadKey).toBe("burst-1");
+  });
+
+  it("stores the ChatGroup id in threadKey when the caller omits it", async () => {
+    const { prisma, create } = harness({ groupId: "cmurj44br000i139hmz577ken" });
+    const echo = vi.fn();
+    const sent = await sendHubMessage(
+      prisma,
+      run,
+      sender,
+      {
+        target: "Box Principal",
+        text: "From the group",
+      },
+      echo,
+    );
+    expect(sent).toMatchObject({ ok: true, deliveryId: "delivery-1" });
+    expect(create.mock.calls[0]?.[0].data).toMatchObject({
+      status: "wake",
+      threadKey: "cmurj44br000i139hmz577ken",
+      text: "From the group",
+    });
+    expect(echo.mock.calls[0]?.[0].block).not.toHaveProperty("spaceTopicKey");
+    expect(echo.mock.calls[0]?.[0].block).not.toHaveProperty("threadKey");
+  });
+
+  it("keeps a caller-supplied threadKey on a group thread", async () => {
+    const { prisma, create } = harness({ groupId: "cmurj44br000i139hmz577ken" });
+    await sendHubMessage(prisma, run, sender, {
+      target: "Box Principal",
+      text: "From the group",
+      threadKey: "follow-1",
+    });
+    expect(create.mock.calls[0]?.[0].data.threadKey).toBe("follow-1");
+  });
+
+  it("keeps the open topic key on the echo when threadKey is the group id", async () => {
+    const { prisma, create } = harness({
+      groupId: "cmurj44br000i139hmz577ken",
+      messages: [
+        {
+          id: "in-1",
+          threadId: "thread-1",
+          seq: 1,
+          role: "user",
+          createdAt: new Date("2026-10-02T10:00:00.000Z"),
+          blocks: [
+            {
+              kind: "bot_message_received",
+              fromBotId: "f4adcc55-1111-4111-8111-111111111111",
+              fromBotName: "Box Principal",
+              origin: "hub",
+              text: "ping",
+              spaceTopicKey: "burst-1",
+            },
+          ],
+        },
+      ],
+    });
+    const echo = vi.fn();
+    await sendHubMessage(
+      prisma,
+      run,
+      sender,
+      { target: "Box Principal", text: "from the group" },
+      echo,
+    );
+    expect(create.mock.calls[0]?.[0].data.threadKey).toBe("cmurj44br000i139hmz577ken");
+    expect(echo.mock.calls[0]?.[0].block).toMatchObject({
+      kind: "hub_message_sent",
+      spaceTopicKey: "burst-1",
+    });
+    expect(echo.mock.calls[0]?.[0].block).not.toHaveProperty("threadKey");
   });
 
   it("resolves a unique name", async () => {
