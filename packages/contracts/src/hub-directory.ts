@@ -52,3 +52,40 @@ export const HubSyncResultSchema = z.object({
   directory: HubDirectorySchema,
 });
 export type HubSyncResult = z.infer<typeof HubSyncResultSchema>;
+
+const HubInboxIntent = z.enum(["request", "result", "question", "status", "fyi"]);
+
+/** One Rakazo → Hub delivery waiting for the host mesh. */
+export const HubInboxItemSchema = z.object({
+  kind: z.literal("HUB-INBOX"),
+  deliveryId: z.string().min(1),
+  status: z.enum(["wake", "done"]),
+  hubAgentId: z.string().min(1),
+  name: z.string(),
+  title: z.string(),
+  text: z.string(),
+  intent: HubInboxIntent,
+  threadKey: z.string().min(1).optional(),
+  fromBotId: z.string().min(1),
+  fromBotName: z.string(),
+  spaceId: Id,
+  createdAt: z.string().min(1),
+  meshId: z.string().min(1).optional(),
+});
+export type HubInboxItem = z.infer<typeof HubInboxItemSchema>;
+
+export const HubOutboxResultSchema = z.object({
+  items: z.array(HubInboxItemSchema),
+});
+export type HubOutboxResult = z.infer<typeof HubOutboxResultSchema>;
+
+export const HubAckOutboundInput = z.object({
+  deliveryIds: z.array(z.string().trim().min(1).max(200)).max(100),
+});
+export type HubAckOutboundInput = z.infer<typeof HubAckOutboundInput>;
+
+export const HubAckOutboundResultSchema = z.object({
+  ok: z.literal(true),
+  acked: z.number().int().nonnegative(),
+});
+export type HubAckOutboundResult = z.infer<typeof HubAckOutboundResultSchema>;

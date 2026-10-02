@@ -70,4 +70,14 @@ Hub → Rakazo uses `POST /rpc/threads/receiveHub`. That stores a peer receipt a
 
 `threads/send` remains a person typing. A bot webhook whose JSON has `origin` `hub`, `event` `hub_message`, or both `hubAgentId` and `hubAgentName` responds `409` with `Hub inbound uses threads/receiveHub` and does not store a user message. Other webhook bodies are unchanged.
 
-Rakazo → Hub stays MCP. This bridge does not add a send path in that direction.
+## Rakazo to Hub
+
+A Rakazo bot delivers with the builtin tool `hub_send_message`. The user does not type `TO_HUB:`. Writing `TO_HUB:` in a reply does not send. The tool resolves a Hub member from the same directory rows as `hub/directory` (`spawnKey` `hub:<hubAgentId>`), by explicit id or by name and title. It does not require `hub/syncMembers` or a visible Hub sidebar section.
+
+The tool writes a `HUB-INBOX` row with status `wake`. That row is the first-party drain. This tip has no separate native outbound sender, so cutover still reports `rakazoToHub` `mcp`: a host-straight mesh reads the outbox instead of scraping a `TO_HUB:` user message.
+
+`POST /rpc/hub/outbox` lists pending rows for the signed-in space. `POST /rpc/hub/ackOutbound` with `{ "deliveryIds": ["..."] }` marks those ids `done`. Ids outside the caller's space stay untouched.
+
+## Hub skill to Rakazo
+
+Hub → Rakazo stays `threads/receiveHub`. A Hub skill named `message_rakazo_bot` (not a Rakazo builtin) can resolve `rakazoBots` from `hub/directory` and post `{ botId, hubAgentId, hubAgentName, text }`. This repository does not ship that Hub-side skill.

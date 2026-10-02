@@ -9,7 +9,10 @@ export const HUB_SPAWN_KEY_PREFIX = "hub:";
 /** Hub → Rakazo identity path. Prefer this over threads/send and bot webhooks. */
 export const HUB_INBOUND_PROCEDURE = "threads/receiveHub" as const;
 
-/** Rakazo → Hub stays host-straight MCP. This bridge does not add a send path that way. */
+/**
+ * Advertised R→H label on cutover responses. The builtin `hub_send_message`
+ * tool writes the first-party hub/outbox drain; a host mesh consumes that.
+ */
 export const RAKAZO_TO_HUB_PATH = "mcp" as const;
 
 export const HUB_INBOUND_CUTOVER_ERROR = "Hub inbound uses threads/receiveHub";

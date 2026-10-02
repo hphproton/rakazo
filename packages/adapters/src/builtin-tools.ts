@@ -66,6 +66,7 @@ export const DELEGATION_TOOL_NAMES = new Set([
   "delete_bot",
   "handoff_to_bot",
   "message_bot",
+  "hub_send_message",
 ]);
 
 const scheduleCreateProperties = {
@@ -959,6 +960,41 @@ export const builtinAgentTools: ConnectorTool[] = [
         },
       },
       required: ["message"],
+    },
+  },
+  {
+    name: "hub_send_message",
+    description:
+      "Send a useful update, question, handoff, or request to a Hub (Grok team) member. You must call this tool to deliver — writing TO_HUB: or [to Principal] in reply text does not send. Resolve the member from the Hub directory (name, title, or hubAgentId). Delivery is async and does not end your turn. Do not send ack-only messages. Not for ordinary user chat that stays in this thread.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description:
+            "Hub member name, title fragment, or hubAgentId (UUID). Prefer exact name or id when known.",
+        },
+        hubAgentId: {
+          type: "string",
+          description:
+            "Optional explicit Hub agent id. If set, overrides fuzzy name resolve on target.",
+        },
+        text: {
+          type: "string",
+          description: "Message body to deliver to the Hub member.",
+        },
+        intent: {
+          type: "string",
+          enum: ["request", "result", "question", "status", "fyi"],
+          description: "What the Hub recipient should do. Defaults to request.",
+        },
+        threadKey: {
+          type: "string",
+          description:
+            "Optional continuity key for follow-ups (opaque string; Hub drain may echo).",
+        },
+      },
+      required: ["text"],
     },
   },
   {

@@ -194,6 +194,7 @@ model Space {
   notificationPreferences     NotificationPreference[]
   computers                   Computer[]
   externalEffects             ExternalEffect[]
+  hubOutbounds                HubOutbound[]
   mcpServers                  McpServer[]
   mcpOAuthSessions            McpOAuthSession[]
   botMcpServers               BotMcpServer[]
@@ -698,6 +699,30 @@ model ExternalEffect {
   @@unique([idempotencyKey])
   @@index([runId, status])
   @@map("external_effects")
+}
+
+/// Rakazo → Hub drain. Status wake is waiting for the host mesh; done is acked.
+model HubOutbound {
+  id             String   @id @default(cuid())
+  spaceId        String
+  space          Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId         String
+  botId          String
+  fromBotName    String
+  hubAgentId     String
+  name           String
+  title          String   @default("")
+  text           String
+  intent         String
+  threadKey      String?
+  status         String   @default("wake")
+  idempotencyKey String?  @unique
+  meshId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([spaceId, userId, status, createdAt])
+  @@map("hub_outbound")
 }
 
 model Routine {
