@@ -76,7 +76,9 @@ A Rakazo bot delivers with the builtin tool `hub_send_message`. The user does no
 
 The tool writes a `HUB-INBOX` row with status `wake` and a `hub_message_sent` message in the sending bot's thread. That thread message shows the outbound text and a Hub destination marker. It does not open a chat with the Hub member. The outbox row is the first-party drain. This tip has no separate native outbound sender, so cutover still reports `rakazoToHub` `mcp`: a host-straight mesh reads the outbox instead of scraping a `TO_HUB:` user message.
 
-`POST /rpc/hub/outbox` lists pending rows for the signed-in space. `POST /rpc/hub/ackOutbound` with `{ "deliveryIds": ["..."] }` marks those ids `done`. Ids outside the caller's space stay untouched.
+The Hub directory prompt and the `message_bot` tool tell the model those names are not chats. `message_bot` refuses a Hub roster row and does not start a run.
+
+`POST /rpc/hub/outbox` lists pending rows for the signed-in space. `POST /rpc/hub/ackOutbound` with `{ "deliveryIds": ["..."] }` marks those ids `done`. An optional `meshId` on that call is stored on the rows it acks. Ids outside the caller's space stay untouched.
 
 ## Hub skill to Rakazo
 

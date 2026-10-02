@@ -121,6 +121,7 @@ describe("directory", () => {
     expect(directory).toContain("async");
     expect(directory).toContain("does not end your turn");
     expect(directory).toContain("Later updates only if they add something new");
+    expect(directory).toContain("Do not call message_bot for them; use hub_send_message.");
   });
 
   it("treats directory fields as untrusted prompt data", () => {

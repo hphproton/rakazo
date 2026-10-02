@@ -1826,7 +1826,7 @@ export function createRouter(deps: RouterDeps) {
       })),
       ackOutbound: authed.hub.ackOutbound.handler(async ({ context, input }) => ({
         ok: true as const,
-        acked: await ackHubInbox(deps.prisma, context.actor, input.deliveryIds),
+        acked: await ackHubInbox(deps.prisma, context.actor, input.deliveryIds, input.meshId),
       })),
     },
     threads: {

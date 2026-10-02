@@ -232,9 +232,11 @@ export async function ackHubInbox(
   prisma: PrismaClient,
   actor: { spaceId: string; userId: string },
   deliveryIds: readonly string[],
+  meshId?: string,
 ) {
   const ids = [...new Set(deliveryIds.map((id) => id.trim()).filter(Boolean))].slice(0, 100);
   if (ids.length === 0) return 0;
+  const mesh = meshId?.trim();
   const result = await prisma.hubOutbound.updateMany({
     where: {
       id: { in: ids },
@@ -242,7 +244,7 @@ export async function ackHubInbox(
       userId: actor.userId,
       status: "wake",
     },
-    data: { status: "done" },
+    data: { status: "done", ...(mesh ? { meshId: mesh } : {}) },
   });
   return result.count;
 }

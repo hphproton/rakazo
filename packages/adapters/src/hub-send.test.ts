@@ -71,6 +71,9 @@ describe("hub_send_message registration", () => {
     expect(DELEGATION_TOOL_NAMES.has("message_bot")).toBe(true);
     const names = builtinAgentTools.map((entry) => entry.name);
     expect(names.indexOf("hub_send_message")).toBe(names.indexOf("message_user") + 1);
+    const messageBot = builtinAgentTools.find((entry) => entry.name === "message_bot");
+    expect(messageBot?.description).toContain("hub_send_message");
+    expect(messageBot?.description.toLowerCase()).toContain("not teammates");
   });
 });
 
@@ -295,6 +298,17 @@ describe("hub outbox drain", () => {
         status: "wake",
       },
       data: { status: "done" },
+    });
+
+    await ackHubInbox(prisma, { spaceId: "space-1", userId: "user-1" }, ["delivery-1"], "mesh-1");
+    expect(raw.hubOutbound.updateMany).toHaveBeenLastCalledWith({
+      where: {
+        id: { in: ["delivery-1"] },
+        spaceId: "space-1",
+        userId: "user-1",
+        status: "wake",
+      },
+      data: { status: "done", meshId: "mesh-1" },
     });
   });
 });
