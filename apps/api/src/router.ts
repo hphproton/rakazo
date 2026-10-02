@@ -202,7 +202,8 @@ import {
   resolveBusyBotName,
   toComputerStatus,
 } from "./computer-status.js";
-import { receiveHubMessage } from "./hub-inbound.js";
+import { deliverHubInbound } from "./hub-cutover.js";
+import { HubRosterError, hubRosterStore, readHubDirectory, syncHubMembers } from "./hub-roster.js";
 import { searchIntegrationCatalog } from "./integration-catalog.js";
 import {
   dismissMcpServerApprovals,
@@ -550,6 +551,8 @@ export interface RouterDeps {
     webOrigin: string;
     privacyPolicyUrl?: string;
     screenProxySecret: string;
+    /** HMAC key for hub/directory. Empty leaves signature null; the call still requires auth. */
+    hubDirectorySigningKey?: string;
     sandboxProvider: string;
     gitSha?: string;
     updaterUrl?: string;
@@ -1856,6 +1859,31 @@ export function createRouter(deps: RouterDeps) {
         }
       }),
     },
+    hub: {
+      syncMembers: authed.hub.syncMembers.handler(async ({ context, input }) => {
+        try {
+          return await syncHubMembers(
+            hubRosterStore(deps.prisma, repos, context.actor),
+            input.members,
+            {
+              issuedAt: new Date(),
+              signingKey: deps.env.hubDirectorySigningKey,
+            },
+          );
+        } catch (error) {
+          if (error instanceof HubRosterError) {
+            throw new ORPCError("BAD_REQUEST", { message: error.message });
+          }
+          throw mapSpaceLifecycleError(error);
+        }
+      }),
+      directory: authed.hub.directory.handler(async ({ context }) =>
+        readHubDirectory(hubRosterStore(deps.prisma, repos, context.actor), {
+          issuedAt: new Date(),
+          signingKey: deps.env.hubDirectorySigningKey,
+        }),
+      ),
+    },
     threads: {
       head: authed.threads.head.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
@@ -1941,7 +1969,7 @@ export function createRouter(deps: RouterDeps) {
         });
         if (target.kind !== "bot") throw new IsolationError();
         await assertTeachingSendAllowed(deps.prisma, context.actor.spaceId, target.botId);
-        return receiveHubMessage(deps, context.actor, target, input);
+        return deliverHubInbound(deps, context.actor, target, input);
       }),
       react: authed.threads.react.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);

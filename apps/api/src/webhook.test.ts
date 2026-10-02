@@ -203,6 +203,31 @@ describe("inbound webhook HTTP route", () => {
     expect(deps.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("refuses a Hub-shaped payload so it does not land as a user message", async () => {
+    const deps = createDeps();
+    const app = mount(deps);
+    const res = await app.request("/api/v1/bots/bot-1/webhook", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${SECRET}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        origin: "hub",
+        hubAgentId: "hub-atlas",
+        hubAgentName: "Atlas",
+        text: "Deploy the staging build.",
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "Hub inbound uses threads/receiveHub",
+      procedure: "threads/receiveHub",
+      rakazoToHub: "mcp",
+    });
+    expect(deps.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("rejects the wrong bearer secret", async () => {
     const deps = createDeps();
     const app = mount(deps);

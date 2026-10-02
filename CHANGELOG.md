@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A signed-in caller can mirror Hub members onto the roster with `hub/syncMembers`. Members show up as bots in a section named Hub. `hub/directory` reads those members and the workspace bots, with a content epoch and an optional HMAC when `HUB_DIRECTORY_SIGNING_KEY` is set. Hub inbound prefers `threads/receiveHub`; a webhook shaped like a Hub delivery is refused. See [Hub bridge](docs/hub-bridge.md).
 - A signed-in caller can deliver a Hub agent's message into a bot thread with `threads/receiveHub`. The message is stored as a peer receipt from that Hub agent (a Hub marker in the thread) and wakes the bot. It does not appear as a message the person typed.
 - Voice mode: spoken replies, hold-to-talk dictation, and half-duplex calls with ElevenLabs, OpenAI, Cartesia, or Fish Audio.
 - Desktop owners using Docker can opt into running bot shell commands directly on their computer. This grants access under the owner's OS account; see [computer providers](docs/self-host.md#choosing-a-computer-provider).

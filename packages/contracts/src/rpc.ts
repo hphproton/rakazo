@@ -84,6 +84,7 @@ import {
   VoiceStatusSchema,
 } from "./domain.js";
 import { BotMessageIntent, ComputerCommandSchema, ProductEventSchema } from "./events.js";
+import { HubDirectorySchema, HubSyncMembersInput, HubSyncResultSchema } from "./hub-directory.js";
 import { Id, IsoDate } from "./ids.js";
 import {
   IntegrationProviderConfigSchema,
@@ -293,6 +294,12 @@ export const appContract = {
     update: oc
       .input(z.object({ sectionId: Id, name: z.string().trim().min(1).max(60) }))
       .output(BotSectionSchema),
+  },
+  hub: {
+    /** Replace the caller's Hub roster mirrors. Omitted members are archived. */
+    syncMembers: oc.input(HubSyncMembersInput).output(HubSyncResultSchema),
+    /** Signed-in read of Hub members and workspace bots, with a content epoch. */
+    directory: oc.output(HubDirectorySchema),
   },
   threads: {
     head: oc.input(threadTarget).output(

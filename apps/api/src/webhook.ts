@@ -2,6 +2,7 @@ import { hasValidBearerToken } from "@rakazo/core";
 import type { Hono } from "hono";
 import { mountGithubWebhookRoute } from "./github-webhook.js";
 import { readBoundedBody } from "./http-body.js";
+import { hubWebhookCutover } from "./hub-cutover.js";
 import {
   deliverWebhookEvent,
   formatWebhookPrompt,
@@ -49,6 +50,8 @@ export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
     }
 
     const payload = parseWebhookPayload(raw, c.req.header("content-type"));
+    const cutover = hubWebhookCutover(payload);
+    if (cutover) return c.json(cutover.body, cutover.status);
     const eventPrompt = formatWebhookPrompt(payload);
 
     const webhookRoutines = await deps.prisma.routine.findMany({
