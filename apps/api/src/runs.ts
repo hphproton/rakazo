@@ -15,11 +15,15 @@ export function activityPromptSnippet(
   input: { trigger: string; prompt: string; sourceBlocks?: unknown },
   max = 120,
 ): string {
-  if (input.trigger !== "bot_message") return promptSnippet(input.prompt, max);
+  if (input.trigger !== "bot_message" && input.trigger !== "hub_message") {
+    return promptSnippet(input.prompt, max);
+  }
   const parsed = MessageBlock.array().safeParse(input.sourceBlocks);
   const message = parsed.success ? botMessageContext(parsed.data) : undefined;
   if (!message) return "Message from another agent";
-  const name = message.fromBotName.trim() || "Another agent";
+  const rawName = message.fromBotName.trim() || "Another agent";
+  const name =
+    message.origin === "hub" || input.trigger === "hub_message" ? `Hub · ${rawName}` : rawName;
   const label =
     message.intent === "result" || message.intent === "status" || message.intent === "fyi"
       ? `Update from ${name}`

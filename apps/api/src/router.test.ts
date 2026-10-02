@@ -206,6 +206,25 @@ describe("model setup gate", () => {
     });
   });
 
+  it("refuses a Hub delivery when no model is configured", async () => {
+    const { actor, handler } = modelGateDeps({ agentRuntime: "pi" });
+
+    const response = await call(handler, actor, "threads/receiveHub", {
+      botId: "bot-1",
+      hubAgentId: "hub-atlas",
+      hubAgentName: "Atlas",
+      text: "Check the deploy.",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      json: expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: "Connect a model to start a run.",
+      }),
+    });
+  });
+
   it("does not require a model credential for the scripted test runtime", async () => {
     const { actor, handler } = modelGateDeps({ agentRuntime: "scripted" });
 

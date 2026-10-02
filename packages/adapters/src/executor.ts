@@ -1283,7 +1283,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }),
           deps.prisma.thread.findUniqueOrThrow({ where: { id: run.threadId } }),
           loadRunHistoryMessages(deps.prisma, run, LEGACY_HISTORY_WINDOW_SIZE, channelId),
-          run.trigger === "bot_message"
+          run.trigger === "bot_message" || run.trigger === "hub_message"
             ? loadBotMessageContext(deps.prisma, run.sourceMessageId)
             : Promise.resolve(undefined),
           deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
@@ -1435,7 +1435,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
             peerMessage.intent === "question" ||
             peerMessage.repliesToRequest
             ? `Update from ${peerMessage.fromBotName}: ${peerMessage.text}`
-            : "The delegated bot completed its turn without a written summary."
+            : peerMessage.origin === "hub"
+              ? `Message from Hub · ${peerMessage.fromBotName}: ${peerMessage.text}`
+              : "The delegated bot completed its turn without a written summary."
           : undefined;
         const recallPromise =
           threadContext.includeSemanticRecall &&

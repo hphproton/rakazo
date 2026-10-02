@@ -17,6 +17,26 @@ const plainText = message("m_3", "2026-08-25T10:02:00.000Z", [{ kind: "text", te
 describe("peer conversations", () => {
   const messages = [sentToAnalyst, replyFromAnalyst, plainText];
 
+  it("prefixes a Hub receipt so the peer view is not a teammate name alone", () => {
+    const hub = message("m_hub", "2026-08-25T10:03:00.000Z", [
+      {
+        kind: "bot_message_received",
+        fromBotId: "hub-atlas",
+        fromBotName: "Atlas",
+        origin: "hub",
+        text: "Check the deploy.",
+      },
+    ]);
+    expect(peerMessagesFrom([hub])).toEqual([
+      expect.objectContaining({
+        direction: "received",
+        peerBotId: "hub-atlas",
+        peerBotName: "Hub · Atlas",
+        text: "Check the deploy.",
+      }),
+    ]);
+  });
+
   it("reads both directions out of the thread", () => {
     expect(peerMessagesFrom(messages)).toEqual([
       expect.objectContaining({ direction: "sent", peerBotName: "Analyst", text: "chart q3" }),

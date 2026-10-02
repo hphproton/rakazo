@@ -336,6 +336,16 @@ describe("contracts", () => {
       }).success,
     ).toBe(true);
     expect(RunSchema.safeParse({ ...run, trigger: "webhook" }).success).toBe(true);
+    expect(RunSchema.safeParse({ ...run, trigger: "hub_message" }).success).toBe(true);
+    const hubBlock = MessageBlock.parse({
+      kind: "bot_message_received",
+      fromBotId: "hub-atlas",
+      fromBotName: "Atlas",
+      text: "Check the deploy.",
+      origin: "hub",
+      intent: "request",
+    });
+    expect(hubBlock.kind === "bot_message_received" && hubBlock.origin).toBe("hub");
   });
 
   it("caps remote MCP headers", () => {
