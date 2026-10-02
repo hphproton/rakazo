@@ -56,11 +56,27 @@ describe("peer conversations", () => {
         text: "Check the deploy.",
       },
     ]);
-    const atlas = peerConversations([inbound, outbound]).find(
-      (conversation) => conversation.peerBotId === "hub-atlas",
-    );
+    const other = message("m_other", "2026-08-25T10:06:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: "box-principal",
+        name: "Box Principal",
+        text: "other thread",
+      },
+    ]);
+    const conversations = peerConversations([inbound, outbound, other]);
+    const atlas = conversations.find((conversation) => conversation.peerBotId === "hub-atlas");
     expect(atlas?.peerBotName).toBe("Hub · Atlas");
-    expect(atlas?.messages.map((turn) => turn.direction)).toEqual(["sent", "received"]);
+    expect(atlas?.messages.map((turn) => [turn.direction, turn.text])).toEqual([
+      ["sent", "NATIVE_HUB_SEND_SMOKE"],
+      ["received", "Check the deploy."],
+    ]);
+    expect(
+      conversations.find((conversation) => conversation.peerBotId === "box-principal"),
+    ).toMatchObject({
+      peerBotName: "Hub · Box Principal",
+      lastText: "other thread",
+    });
   });
 
   it("reads both directions out of the thread", () => {

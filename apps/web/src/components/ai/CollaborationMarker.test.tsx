@@ -1,6 +1,6 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ActiveBotGlyph, CollaborationMarker, HubOutboundMessage } from "./CollaborationMarker";
+import { ActiveBotGlyph, CollaborationMarker } from "./CollaborationMarker";
 
 describe("collaboration transcript markers", () => {
   it("shows a left-aligned peer event with its avatar and full label", () => {
@@ -17,30 +17,31 @@ describe("collaboration transcript markers", () => {
     expect(html).toContain('data-testid="peer-receipt-chip"');
     expect(html).toContain('aria-label="Message from Research"');
     expect(html).toContain('class="flex justify-start"');
-    expect(html).toContain('class="inline-flex max-w-full');
+    expect(html).toContain("inline-flex max-w-full");
     expect(html).toContain('class="truncate"');
     expect(html).toContain("rakazo-bot-avatar");
     expect(html).toContain("Message from Research");
     expect(html).not.toContain("{peer}");
   });
 
-  it("shows the Hub payload and destination without a peer-chat control", () => {
+  it("styles an outbound Hub receipt as the same chip, without a payload bubble", () => {
     const html = renderToString(
-      <HubOutboundMessage
-        label="To Hub · Box Principal"
-        text="NATIVE_HUB_SEND_SMOKE"
-        hubAgentId="box-principal"
+      <CollaborationMarker
+        ariaLabel="To Hub · Box Principal"
         color="#85858A"
+        identity="box-principal"
+        label="To Hub · Box Principal"
+        onClick={() => undefined}
       />,
     );
 
-    expect(html).toContain('data-testid="hub-outbound"');
-    expect(html).toContain('data-testid="hub-outbound-chip"');
+    expect(html).toContain('data-testid="peer-receipt-chip"');
+    expect(html).toContain('aria-label="To Hub · Box Principal"');
     expect(html).toContain("To Hub · Box Principal");
-    expect(html).toContain('data-testid="hub-outbound-text"');
-    expect(html).toContain("NATIVE_HUB_SEND_SMOKE");
-    expect(html).not.toContain('data-testid="peer-receipt-chip"');
-    expect(html).not.toContain("<button");
+    expect(html).toContain("<button");
+    expect(html).not.toContain('data-testid="hub-outbound"');
+    expect(html).not.toContain('data-testid="hub-outbound-text"');
+    expect(html).not.toContain("NATIVE_HUB_SEND_SMOKE");
   });
 
   it("animates the active bot glyph from its run status", () => {
