@@ -192,6 +192,8 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["voice/setVoice", { voiceId: "missing-voice" }],
       ["voice/voices", {}],
       ["voice/prepare", { text: "Nope" }],
+      ["hub/directory", {}],
+      ["hub/syncMembers", { members: [{ hubAgentId: "hub-atlas", name: "Atlas" }] }],
     ]);
 
     const results = await Promise.all(
@@ -373,6 +375,26 @@ describeWithDatabase("API authorization and resource isolation", () => {
     await Promise.all(
       botIdCalls.map(([procedure, input]) => expectDenied(app, intruder, procedure, input)),
     );
+
+    const intruderDirectory = await rpc<{
+      spaceId: string;
+      rakazoBots: Array<{ id: string }>;
+      hubMembers: Array<{ hubAgentId: string }>;
+    }>(app, intruder, "hub/directory");
+    expect(intruderDirectory.spaceId).toBe(intruderActor.spaceId);
+    expect(intruderDirectory.rakazoBots.map((bot) => bot.id)).not.toContain(ownerBot.id);
+    await rpc(app, owner, "hub/syncMembers", {
+      members: [{ hubAgentId: "hub-atlas", name: "Atlas" }],
+    });
+    const intruderAfterSync = await rpc<{ hubMembers: Array<{ hubAgentId: string }> }>(
+      app,
+      intruder,
+      "hub/directory",
+    );
+    expect(intruderAfterSync.hubMembers).toEqual([]);
+    expect(
+      (await rpc<Array<{ id: string }>>(app, owner, "bots/list")).map((bot) => bot.id),
+    ).toContain(ownerBot.id);
 
     const ownerBot2 = await rpc<Bot>(app, owner, "bots/create", botInput("Owner Bot Two"));
     const ownerGroup = await rpc<{ id: string }>(app, owner, "groups/create", {
