@@ -35,6 +35,14 @@ describe("loadEnv", () => {
     expect(env.wakeupDriver).toBe("memory");
   });
 
+  it("loads an optional hub directory signing key", () => {
+    expect(loadEnv(base).hubDirectorySigningKey).toBeUndefined();
+    expect(
+      loadEnv({ ...base, HUB_DIRECTORY_SIGNING_KEY: "  test-directory-key  " })
+        .hubDirectorySigningKey,
+    ).toBe("test-directory-key");
+  });
+
   it("loads an optional integrations catalog mirror", () => {
     expect(loadEnv(base).integrationsCatalogUrl).toBeUndefined();
     expect(

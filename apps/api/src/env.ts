@@ -32,6 +32,8 @@ export interface AppEnv {
   sandboxSupervisorUrl: string;
   sandboxSupervisorToken: string | undefined;
   screenProxySecret: string;
+  /** Optional HMAC key for hub/directory. Unset leaves the signature null. */
+  hubDirectorySigningKey: string | undefined;
   sandboxProvider: string;
   cloudAgentProvider: string;
   cloudAgentSpaceId: string | undefined;
@@ -122,6 +124,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     sandboxSupervisorToken:
       sandboxProvider === "docker" ? resolveSupervisorToken(source) : undefined,
     screenProxySecret: resolveScreenProxySecret(source),
+    hubDirectorySigningKey: optional(source.HUB_DIRECTORY_SIGNING_KEY),
     sandboxProvider,
     cloudAgentProvider,
     cloudAgentSpaceId: optional(source.CLOUD_AGENT_SPACE_ID),
