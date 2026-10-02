@@ -5,14 +5,22 @@ test("opens one Hub topic for two members and both replies", async ({ page }, te
   await page.setViewportSize({ width: 980, height: 720 });
   await page.goto("/e2e/fixtures/hub-topic.html");
   const transcript = page.getByTestId("transcript");
-  await expect(transcript.getByRole("button", { name: "To Hub · Box Principal" })).toBeVisible();
-  await expect(transcript.getByRole("button", { name: "To Hub · OSS Local Lab" })).toBeVisible();
+  await expect(transcript.getByTestId("peer-receipt-chip")).toHaveCount(2);
   await expect(
-    transcript.getByRole("button", { name: "Message from Hub · Box Principal" }),
+    transcript.getByRole("button", { name: "To Hub · Box Principal, OSS Local Lab", exact: true }),
   ).toBeVisible();
   await expect(
-    transcript.getByRole("button", { name: "Message from Hub · OSS Local Lab" }),
+    transcript.getByRole("button", {
+      name: "Message from Hub · Box Principal, OSS Local Lab",
+      exact: true,
+    }),
   ).toBeVisible();
+  await expect(
+    transcript.getByRole("button", { name: "To Hub · Box Principal", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    transcript.getByRole("button", { name: "To Hub · OSS Local Lab", exact: true }),
+  ).toHaveCount(0);
   await expect(transcript.getByText("Principal ready.")).toHaveCount(0);
   await expect(transcript.getByText("Lab ready.")).toHaveCount(0);
 

@@ -1,6 +1,13 @@
 import type { ThreadMessage } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { peerConversations, peerMessagesFrom, peerTranscriptForChip } from "./peer-messages.js";
+import {
+  hubChipBlockKey,
+  hubExchangeForAnchor,
+  hubTopicChipPlan,
+  peerConversations,
+  peerMessagesFrom,
+  peerTranscriptForChip,
+} from "./peer-messages.js";
 
 function message(id: string, createdAt: string, blocks: ThreadMessage["blocks"]): ThreadMessage {
   return { id, threadId: "t_1", seq: 1, role: "bot", blocks, createdAt };
@@ -131,5 +138,66 @@ describe("peer conversations", () => {
 
   it("finds nothing in a thread with no peer traffic", () => {
     expect(peerConversations([plainText])).toEqual([]);
+  });
+
+  it("collapses a multi-party Hub burst to two direction chips that open one topic", () => {
+    const principal = "box-principal";
+    const lab = "oss-local-lab";
+    const thread = [
+      message("to-principal", "2026-10-02T10:01:00.000Z", [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: principal,
+          name: "Box Principal",
+          text: "Check the deploy.",
+        },
+      ]),
+      message("to-lab", "2026-10-02T10:01:01.000Z", [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: lab,
+          name: "OSS Local Lab",
+          text: "Check the lab.",
+        },
+      ]),
+      message("from-principal", "2026-10-02T10:02:00.000Z", [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ]),
+      message("from-lab", "2026-10-02T10:03:00.000Z", [
+        {
+          kind: "bot_message_received",
+          fromBotId: lab,
+          fromBotName: "OSS Local Lab",
+          origin: "hub",
+          text: "Lab ready.",
+        },
+      ]),
+    ];
+    for (const [index, row] of thread.entries()) row.seq = index + 1;
+    const plan = hubTopicChipPlan(thread);
+    const outbound = plan.families.get(hubChipBlockKey("to-principal", principal, "sent"));
+    const inbound = plan.families.get(hubChipBlockKey("from-principal", principal, "received"));
+    expect(plan.families.size).toBe(2);
+    expect(plan.hiddenMessageIds).toEqual(new Set(["to-lab", "from-lab"]));
+    expect(outbound?.names).toEqual(["Box Principal", "OSS Local Lab"]);
+    expect(inbound?.names).toEqual(["Box Principal", "OSS Local Lab"]);
+    const openedFromSend = hubExchangeForAnchor(thread, {
+      messageId: outbound!.messageId,
+      peerBotId: outbound!.peerBotId,
+    });
+    const openedFromReply = hubExchangeForAnchor(thread, {
+      messageId: inbound!.messageId,
+      peerBotId: inbound!.peerBotId,
+    });
+    expect(openedFromReply?.messages.map((turn) => turn.text)).toEqual(
+      openedFromSend?.messages.map((turn) => turn.text),
+    );
+    expect(openedFromSend?.messages).toHaveLength(4);
   });
 });

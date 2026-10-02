@@ -166,6 +166,116 @@ export function hubExchangeForAnchor(
   return match ?? null;
 }
 
+/** One collapsed direction chip on a multi-member Hub topic. */
+export type HubFamilyChip = {
+  direction: "sent" | "received";
+  messageId: string;
+  peerBotId: string;
+  /** Anchor turn's member label, including the Hub prefix. */
+  peerBotName: string;
+  /** Member names in first-appearance order, without a Hub prefix. */
+  names: readonly string[];
+};
+
+/**
+ * Display plan for Hub chips on the loaded thread.
+ * Topics with one member keep a chip per stored block. A topic with more than
+ * one Hub member draws at most one chip per direction, on the first turn of
+ * that direction, when that direction has more than one turn. The other turns
+ * stay stored. `families` is keyed by `hubChipBlockKey` of the anchor turn.
+ */
+export type HubTopicChipPlan = {
+  families: ReadonlyMap<string, HubFamilyChip>;
+  omittedBlockKeys: ReadonlySet<string>;
+  hiddenMessageIds: ReadonlySet<string>;
+};
+
+export function hubChipBlockKey(
+  messageId: string,
+  peerBotId: string,
+  direction: "sent" | "received",
+): string {
+  return `${messageId}\0${peerBotId}\0${direction}`;
+}
+
+/**
+ * Collapse multi-member Hub topics to one outbound chip and one inbound chip.
+ * A direction with a single turn keeps today's leg chip. Single-member topics
+ * are unchanged, including a send and its reply. Both family chips use an
+ * anchor `hubExchangeForAnchor` can resolve to the same topic. Topics stay on
+ * one bot thread, so two Rakazo bots do not share a chip.
+ */
+export function hubTopicChipPlan(messages: readonly PeerTranscriptMessage[]): HubTopicChipPlan {
+  const families = new Map<string, HubFamilyChip>();
+  const omittedBlockKeys = new Set<string>();
+  const omittedMessageIds = new Set<string>();
+  const keptMessageIds = new Set<string>();
+
+  for (const topic of hubTopics(messages)) {
+    const memberCount = new Set(topic.messages.map((turn) => turn.peerBotId)).size;
+    if (memberCount < 2) {
+      for (const turn of topic.messages) keptMessageIds.add(turn.messageId);
+      continue;
+    }
+    for (const direction of ["sent", "received"] as const) {
+      const turns = topic.messages.filter((turn) => turn.direction === direction);
+      const anchor = turns[0];
+      if (!anchor) continue;
+      if (turns.length < 2) {
+        keptMessageIds.add(anchor.messageId);
+        continue;
+      }
+      const names: string[] = [];
+      const seen = new Set<string>();
+      for (const turn of turns) {
+        if (seen.has(turn.peerBotId)) continue;
+        seen.add(turn.peerBotId);
+        names.push(hubShortName(turn.peerBotName));
+      }
+      const anchorKey = hubChipBlockKey(anchor.messageId, anchor.peerBotId, direction);
+      families.set(anchorKey, {
+        direction,
+        messageId: anchor.messageId,
+        peerBotId: anchor.peerBotId,
+        peerBotName: anchor.peerBotName,
+        names,
+      });
+      keptMessageIds.add(anchor.messageId);
+      for (const turn of turns.slice(1)) {
+        const key = hubChipBlockKey(turn.messageId, turn.peerBotId, direction);
+        if (key !== anchorKey) omittedBlockKeys.add(key);
+        omittedMessageIds.add(turn.messageId);
+      }
+    }
+  }
+
+  const hiddenMessageIds = new Set<string>();
+  for (const messageId of omittedMessageIds) {
+    if (!keptMessageIds.has(messageId)) hiddenMessageIds.add(messageId);
+  }
+  return { families, omittedBlockKeys, hiddenMessageIds };
+}
+
+/** A row whose only blocks are Hub chips. Teammate receipts are not included. */
+export function isHubOnlyReceipt(blocks: readonly MessageBlock[]): boolean {
+  return (
+    blocks.length > 0 &&
+    blocks.every(
+      (block) =>
+        block.kind === "hub_message_sent" ||
+        (block.kind === "bot_message_received" && block.origin === "hub"),
+    )
+  );
+}
+
+/** True when a Hub-only row was folded into another direction chip. */
+export function hubReceiptRowHidden(
+  plan: HubTopicChipPlan,
+  message: { id: string; blocks: readonly MessageBlock[] },
+): boolean {
+  return plan.hiddenMessageIds.has(message.id) && isHubOnlyReceipt(message.blocks);
+}
+
 /**
  * Speaker line for one turn.
  * On a multi-party Hub topic an outbound names the Hub member it addressed.
@@ -310,16 +420,16 @@ function toConversation(topic: OpenHubTopic): PeerConversation {
   };
 }
 
+function hubShortName(peerBotName: string): string {
+  const prefixed = peerBotName.startsWith("Hub · ");
+  const name = prefixed ? peerBotName.slice("Hub · ".length) : peerBotName;
+  return name || "Hub";
+}
+
 function hubTopicLabel(participants: readonly PeerParticipant[]): string {
   const first = participants[0]?.peerBotName ?? "Hub";
   if (participants.length <= 1) return first;
-  const names = participants.map((participant) => {
-    const prefixed = participant.peerBotName.startsWith("Hub · ");
-    const name = prefixed
-      ? participant.peerBotName.slice("Hub · ".length)
-      : participant.peerBotName;
-    return name || "Hub";
-  });
+  const names = participants.map((participant) => hubShortName(participant.peerBotName));
   return `Hub · ${names.join(", ")}`;
 }
 

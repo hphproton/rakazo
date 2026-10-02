@@ -1,5 +1,11 @@
 export {
+  type HubFamilyChip,
+  type HubTopicChipPlan,
+  hubChipBlockKey,
   hubExchangeForAnchor,
+  hubReceiptRowHidden,
+  hubTopicChipPlan,
+  isHubOnlyReceipt,
   isPeerBlock,
   type PeerConversation,
   type PeerMessage,

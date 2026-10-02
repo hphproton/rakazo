@@ -11,7 +11,7 @@ import {
   MESSAGE_REACTIONS,
   type MessageReaction,
 } from "@rakazo/contracts";
-import type { ThreadItem } from "@rakazo/core";
+import type { HubFamilyChip, HubTopicChipPlan, ThreadItem } from "@rakazo/core";
 import {
   abortableDelay,
   attachmentsForThread,
@@ -19,8 +19,12 @@ import {
   type ComposerMention,
   cloudAgentHttpsUrl,
   groupVoiceChats,
+  hubChipBlockKey,
   hubMemberLabel,
+  hubReceiptRowHidden,
+  hubTopicChipPlan,
   isApprovalAskBlock,
+  isHubOnlyReceipt,
   isRunTerminalEvent,
   isSecretAskBlock,
   latestAnswerableAskMessageId,
@@ -386,7 +390,15 @@ function Thread() {
     [snap?.messages],
   );
   const visibleMessages = reactionView.visibleMessages;
-  const latestMessageId = visibleMessages.at(-1)?.id ?? null;
+  const hubChipPlan = useMemo(
+    () => hubTopicChipPlan(snap?.messages ?? visibleMessages),
+    [snap?.messages, visibleMessages],
+  );
+  const shownMessages = useMemo(
+    () => visibleMessages.filter((message) => !hubReceiptRowHidden(hubChipPlan, message)),
+    [hubChipPlan, visibleMessages],
+  );
+  const latestMessageId = shownMessages.at(-1)?.id ?? null;
   const activePendingAttachments = attachmentsForThread(pendingAttachments, threadKey);
   const composerMentionTargets = useMemo(
     () =>
@@ -1419,7 +1431,7 @@ function Thread() {
   const answerableAskMessageId = latestAnswerableAskMessageId(snap);
   const runError = snap?.run?.status === "failed" ? (snap.run.error ?? null) : null;
   // Group calls in reading order, then reverse for the inverted list.
-  const liveItems = useMemo(() => groupVoiceChats(visibleMessages).reverse(), [visibleMessages]);
+  const liveItems = useMemo(() => groupVoiceChats(shownMessages).reverse(), [shownMessages]);
   const messagesById = useMemo(
     () => new Map((snap?.messages ?? []).map((message) => [message.id, message])),
     [snap?.messages],
@@ -1609,6 +1621,7 @@ function Thread() {
               onOpenBot={openBot}
               onPreviewMarkdown={setMarkdownPreview}
               onOpenHubConversation={setHubConversation}
+              hubChipPlan={hubChipPlan}
               actionProps={actionProps}
             />
           </Pressable>
@@ -1736,7 +1749,7 @@ function Thread() {
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           >
             {loadEarlierControl}
-            {visibleMessages.map((message) => renderMessageRow(message, { enableJump: true }))}
+            {shownMessages.map((message) => renderMessageRow(message, { enableJump: true }))}
             {workingFooter}
           </ScrollView>
         ) : (
@@ -2647,6 +2660,7 @@ const MessageBubble = memo(function MessageBubble({
   onAnswer,
   onOpenBot,
   onOpenHubConversation,
+  hubChipPlan,
   onPreviewMarkdown,
   actionProps,
 }: {
@@ -2665,6 +2679,7 @@ const MessageBubble = memo(function MessageBubble({
     peerBotName: string;
     messageId: string;
   }) => void;
+  hubChipPlan: HubTopicChipPlan;
   onPreviewMarkdown: (target: MarkdownArtifactPreviewTarget) => void;
   actionProps: MessageActionProps;
 }) {
@@ -2731,29 +2746,64 @@ const MessageBubble = memo(function MessageBubble({
       />
     );
   }
+  const hubFamilyChip = (family: HubFamilyChip) => {
+    const summary = family.names.join(", ");
+    const label =
+      family.direction === "sent"
+        ? t("To Hub · {name}", { name: summary })
+        : t("Message from {peer}", { peer: hubMemberLabel(summary) });
+    const peerColor =
+      family.direction === "sent"
+        ? tokens.mutedForeground
+        : (bots.find((bot) => bot.id === family.peerBotId)?.color ??
+          members?.find((member) => member.botId === family.peerBotId)?.color ??
+          tokens.mutedForeground);
+    return (
+      <HubReceiptChip
+        actionProps={actionProps}
+        color={peerColor}
+        identity={family.peerBotId}
+        label={label}
+        textColor={tokens.mutedForeground}
+        onPress={() =>
+          onOpenHubConversation({
+            peerBotId: family.peerBotId,
+            peerBotName: family.peerBotName,
+            messageId: family.messageId,
+          })
+        }
+      />
+    );
+  };
   const hubOutbound = message.blocks.find(
     (block): block is Extract<MessageBlock, { kind: "hub_message_sent" }> =>
       block.kind === "hub_message_sent",
   );
   if (hubOutbound) {
-    const name = hubOutbound.name;
-    const label = t("To Hub · {name}", { name });
-    return (
-      <HubReceiptChip
-        actionProps={actionProps}
-        color={tokens.mutedForeground}
-        identity={hubOutbound.hubAgentId}
-        label={label}
-        textColor={tokens.mutedForeground}
-        onPress={() =>
-          onOpenHubConversation({
-            peerBotId: hubOutbound.hubAgentId,
-            peerBotName: hubMemberLabel(name),
-            messageId: message.id,
-          })
-        }
-      />
-    );
+    const blockKey = hubChipBlockKey(message.id, hubOutbound.hubAgentId, "sent");
+    const family = hubChipPlan.families.get(blockKey);
+    if (family) return hubFamilyChip(family);
+    if (!hubChipPlan.omittedBlockKeys.has(blockKey)) {
+      const name = hubOutbound.name;
+      const label = t("To Hub · {name}", { name });
+      return (
+        <HubReceiptChip
+          actionProps={actionProps}
+          color={tokens.mutedForeground}
+          identity={hubOutbound.hubAgentId}
+          label={label}
+          textColor={tokens.mutedForeground}
+          onPress={() =>
+            onOpenHubConversation({
+              peerBotId: hubOutbound.hubAgentId,
+              peerBotName: hubMemberLabel(name),
+              messageId: message.id,
+            })
+          }
+        />
+      );
+    }
+    if (isHubOnlyReceipt(message.blocks)) return null;
   }
   const peerMessage = message.blocks.find(
     (
@@ -2765,35 +2815,56 @@ const MessageBubble = memo(function MessageBubble({
     const sent = peerMessage.kind === "bot_message_sent";
     const peer = peerReceiptDisplayName(peerMessage);
     const peerBotId = sent ? peerMessage.toBotId : peerMessage.fromBotId;
-    const label = sent
-      ? t("Messaged {peer}", { peer: peer ?? t("Bot") })
-      : t("Message from {peer}", { peer: peer ?? t("Bot") });
-    const peerColor =
-      bots.find((bot) => bot.id === peerBotId)?.color ??
-      members?.find((member) => member.botId === peerBotId)?.color ??
-      tokens.mutedForeground;
-    // Compact receipt only: peer bodies stay out of the human thread.
-    // Teammate chips stay closed. A Hub receipt opens the same view-only transcript as outbound.
     const hubPeer = !sent && peerMessage.origin === "hub";
-    return (
-      <HubReceiptChip
-        actionProps={actionProps}
-        color={peerColor}
-        identity={peerBotId}
-        label={label}
-        textColor={tokens.mutedForeground}
-        onPress={
-          hubPeer
-            ? () =>
-                onOpenHubConversation({
-                  peerBotId,
-                  peerBotName: peer,
-                  messageId: message.id,
-                })
-            : undefined
-        }
-      />
-    );
+    if (hubPeer) {
+      const blockKey = hubChipBlockKey(message.id, peerBotId, "received");
+      const family = hubChipPlan.families.get(blockKey);
+      if (family) return hubFamilyChip(family);
+      if (hubChipPlan.omittedBlockKeys.has(blockKey)) {
+        if (isHubOnlyReceipt(message.blocks)) return null;
+      } else {
+        const label = t("Message from {peer}", { peer: peer ?? t("Bot") });
+        const peerColor =
+          bots.find((bot) => bot.id === peerBotId)?.color ??
+          members?.find((member) => member.botId === peerBotId)?.color ??
+          tokens.mutedForeground;
+        return (
+          <HubReceiptChip
+            actionProps={actionProps}
+            color={peerColor}
+            identity={peerBotId}
+            label={label}
+            textColor={tokens.mutedForeground}
+            onPress={() =>
+              onOpenHubConversation({
+                peerBotId,
+                peerBotName: peer,
+                messageId: message.id,
+              })
+            }
+          />
+        );
+      }
+    } else {
+      const label = sent
+        ? t("Messaged {peer}", { peer: peer ?? t("Bot") })
+        : t("Message from {peer}", { peer: peer ?? t("Bot") });
+      const peerColor =
+        bots.find((bot) => bot.id === peerBotId)?.color ??
+        members?.find((member) => member.botId === peerBotId)?.color ??
+        tokens.mutedForeground;
+      // Compact receipt only: peer bodies stay out of the human thread.
+      // Teammate chips stay closed. A Hub receipt opens the same view-only transcript as outbound.
+      return (
+        <HubReceiptChip
+          actionProps={actionProps}
+          color={peerColor}
+          identity={peerBotId}
+          label={label}
+          textColor={tokens.mutedForeground}
+        />
+      );
+    }
   }
   const channelMessage = message.blocks.find(
     (block): block is Extract<MessageBlock, { kind: "channel_message" }> =>
