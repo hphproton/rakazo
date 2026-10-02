@@ -1,5 +1,10 @@
 import type { ThreadMessage } from "@rakazo/contracts";
-import { hubExchangeForAnchor } from "@rakazo/core";
+import {
+  hubChipBlockKey,
+  hubExchangeForAnchor,
+  hubMemberLabel,
+  hubTopicChipPlan,
+} from "@rakazo/core";
 import { BotAvatar } from "@rakazo/ui-web";
 import { createRoot } from "react-dom/client";
 import { CollaborationMarker } from "../../src/components/ai/CollaborationMarker";
@@ -71,39 +76,71 @@ const thread = [
   ),
 ];
 
-const conversation = hubExchangeForAnchor(thread, { messageId: "from-lab", peerBotId: LAB });
+const plan = hubTopicChipPlan(thread);
+const outbound = plan.families.get(hubChipBlockKey("to-principal", PRINCIPAL, "sent"));
+const conversation = outbound
+  ? hubExchangeForAnchor(thread, {
+      messageId: outbound.messageId,
+      peerBotId: outbound.peerBotId,
+    })
+  : null;
+
+function familyLabel(direction: "sent" | "received", names: readonly string[]): string {
+  const summary = names.join(", ");
+  return direction === "sent" ? `To Hub · ${summary}` : `Message from ${hubMemberLabel(summary)}`;
+}
 
 function ChiefThread() {
+  const chips: Array<{ key: string; identity: string; label: string }> = [];
+  for (const entry of thread) {
+    for (const block of entry.blocks) {
+      if (block.kind === "hub_message_sent") {
+        const key = hubChipBlockKey(entry.id, block.hubAgentId, "sent");
+        const family = plan.families.get(key);
+        if (family) {
+          chips.push({
+            key,
+            identity: family.peerBotId,
+            label: familyLabel(family.direction, family.names),
+          });
+          continue;
+        }
+        if (plan.omittedBlockKeys.has(key)) continue;
+        chips.push({ key, identity: block.hubAgentId, label: `To Hub · ${block.name}` });
+        continue;
+      }
+      if (block.kind === "bot_message_received" && block.origin === "hub") {
+        const key = hubChipBlockKey(entry.id, block.fromBotId, "received");
+        const family = plan.families.get(key);
+        if (family) {
+          chips.push({
+            key,
+            identity: family.peerBotId,
+            label: familyLabel(family.direction, family.names),
+          });
+          continue;
+        }
+        if (plan.omittedBlockKeys.has(key)) continue;
+        chips.push({
+          key,
+          identity: block.fromBotId,
+          label: `Message from ${hubMemberLabel(block.fromBotName)}`,
+        });
+      }
+    }
+  }
   return (
     <section data-testid="transcript" className="flex flex-col gap-2 bg-background px-4 py-5">
-      <CollaborationMarker
-        ariaLabel="To Hub · Box Principal"
-        color={COLOR}
-        identity={PRINCIPAL}
-        label="To Hub · Box Principal"
-        onClick={() => undefined}
-      />
-      <CollaborationMarker
-        ariaLabel="To Hub · OSS Local Lab"
-        color={COLOR}
-        identity={LAB}
-        label="To Hub · OSS Local Lab"
-        onClick={() => undefined}
-      />
-      <CollaborationMarker
-        ariaLabel="Message from Hub · Box Principal"
-        color={COLOR}
-        identity={PRINCIPAL}
-        label="Message from Hub · Box Principal"
-        onClick={() => undefined}
-      />
-      <CollaborationMarker
-        ariaLabel="Message from Hub · OSS Local Lab"
-        color={COLOR}
-        identity={LAB}
-        label="Message from Hub · OSS Local Lab"
-        onClick={() => undefined}
-      />
+      {chips.map((chip) => (
+        <CollaborationMarker
+          key={chip.key}
+          ariaLabel={chip.label}
+          color={COLOR}
+          identity={chip.identity}
+          label={chip.label}
+          onClick={() => undefined}
+        />
+      ))}
     </section>
   );
 }
