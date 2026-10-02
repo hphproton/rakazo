@@ -75,11 +75,7 @@ function HubTranscript() {
         </div>
         <h1 className="truncate text-[15.5px] font-medium">Chief · Hub · Box Principal</h1>
       </div>
-      <PeerConversationTranscript
-        botName="Chief"
-        peerBotName={conversation.peerBotName}
-        messages={conversation.messages}
-      />
+      <PeerConversationTranscript botName="Chief" messages={conversation.messages} />
       <p className="border-t border-sidebar-border px-[18px] py-3.5 text-[13.5px] text-muted-foreground/80">
         This chat is view-only
       </p>

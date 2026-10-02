@@ -4,19 +4,19 @@ import type { ThreadMessage } from "@rakazo/contracts";
 import { BotAvatar, Button, Dialog, DialogClose, DialogContent, DialogTitle } from "@rakazo/ui-web";
 import { useEffect, useMemo, useState } from "react";
 import { loadPeerHistory } from "../lib/peer-history";
-import type { PeerMessage, PeerTranscriptChip } from "../lib/peer-messages";
-import { peerTranscriptForChip } from "../lib/peer-messages";
+import type { PeerMessage, PeerParticipant, PeerTranscriptChip } from "../lib/peer-messages";
+import { peerTranscriptForChip, peerTurnSpeaker } from "../lib/peer-messages";
 import { rpc } from "../lib/rpc";
 
-/** Bubbles for one view-only exchange. Sent is the Rakazo bot; received is the other side. */
+/** Bubbles for one view-only topic. Sent is the Rakazo bot; received is a Hub member or teammate. */
 export function PeerConversationTranscript({
   botName,
-  peerBotName,
   messages,
+  participantCount = 1,
 }: {
   botName: string;
-  peerBotName: string;
   messages: readonly PeerMessage[];
+  participantCount?: number;
 }) {
   return (
     <div
@@ -36,7 +36,7 @@ export function PeerConversationTranscript({
               className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${sent ? "bg-accent" : "bg-muted"}`}
             >
               <div className="mb-1 text-[12px] text-muted-foreground/70" dir="auto">
-                {sent ? botName : peerBotName}
+                {peerTurnSpeaker(peerMessage, botName, participantCount)}
               </div>
               <div className="text-[14.5px] leading-[1.5] text-foreground/90" dir="auto">
                 <ChatMarkdown>{peerMessage.text}</ChatMarkdown>
@@ -51,10 +51,10 @@ export function PeerConversationTranscript({
 
 /**
  * Full-screen view-only transcript opened from one chip.
- * A Hub chip opens the exchange that contains that chip's message, not every
- * turn with that Hub member and not the latest exchange. A teammate chip
- * stays one conversation per bot. There is no composer: delivery stays on
- * hub_send_message, and Hub members are not sidebar seats.
+ * A Hub chip opens the topic that contains that chip. One burst can include
+ * several Hub members; a 1:1 chip still opens only that exchange. A teammate
+ * chip stays one conversation per bot. There is no composer: delivery stays
+ * on hub_send_message, and Hub members are not sidebar seats.
  */
 export function PeerMessagesOverlay({
   botId,
@@ -87,6 +87,8 @@ export function PeerMessagesOverlay({
     return peerTranscriptForChip(messages, { scope: transcriptScope, messageId, peerBotId });
   }, [historyReady, messageId, messages, peerBotId, transcriptScope]);
   const peerBotName = conversation?.peerBotName ?? initialPeerBotName;
+  const participants: readonly PeerParticipant[] = conversation?.participants ?? [];
+  const participantCount = participants.length > 1 ? participants.length : 1;
 
   useEffect(() => {
     const abort = new AbortController();
@@ -131,7 +133,18 @@ export function PeerMessagesOverlay({
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="flex items-center -space-x-2">
               <BotAvatar color={botColor} identity={botId} size={28} />
-              <BotAvatar color={peerBotColor} identity={peerBotId} size={28} />
+              {participants.length > 1 ? (
+                participants.map((participant) => (
+                  <BotAvatar
+                    key={participant.peerBotId}
+                    color={peerBotColor}
+                    identity={participant.peerBotId}
+                    size={28}
+                  />
+                ))
+              ) : (
+                <BotAvatar color={peerBotColor} identity={peerBotId} size={28} />
+              )}
             </div>
             <DialogTitle className="truncate text-[15.5px] font-medium text-foreground" dir="auto">
               {title}
@@ -166,8 +179,8 @@ export function PeerMessagesOverlay({
         ) : (
           <PeerConversationTranscript
             botName={botName}
-            peerBotName={peerBotName}
             messages={conversation.messages}
+            participantCount={participantCount}
           />
         )}
 

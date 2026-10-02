@@ -1,6 +1,6 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
 import type { PeerMessage } from "@rakazo/core";
-import { hubExchangeForAnchor } from "@rakazo/core";
+import { hubExchangeForAnchor, peerTurnSpeaker } from "@rakazo/core";
 import { useEffect, useState } from "react";
 import { Modal, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import { type MobileMessage, type MobileMessagePage, rpc } from "../lib/api";
@@ -9,9 +9,9 @@ import { useI18n } from "../lib/i18n";
 import { useResolvedAppearance } from "../lib/native";
 
 /**
- * View-only Hub transcript for the exchange that contains the opened chip.
- * Not every turn with that member, and not the latest exchange. Not a sidebar
- * seat and not a composer.
+ * View-only Hub topic for the chip that was opened. One burst can include
+ * several Hub members. A 1:1 chip still opens only that exchange. Not a
+ * sidebar seat and not a composer.
  */
 export function HubConversationSheet({
   botId,
@@ -32,6 +32,7 @@ export function HubConversationSheet({
   const colorScheme = useResolvedAppearance();
   const tokens = mobileTokens();
   const [turns, setTurns] = useState<PeerMessage[] | null>(null);
+  const [participantCount, setParticipantCount] = useState(1);
   const [peerBotName, setPeerBotName] = useState(initialPeerBotName);
   const [failed, setFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -40,12 +41,14 @@ export function HubConversationSheet({
     const abort = new AbortController();
     setTurns(null);
     setFailed(false);
+    setParticipantCount(1);
     setPeerBotName(initialPeerBotName);
     void loadBotThread(botId, abort.signal)
       .then((messages) => {
         if (abort.signal.aborted) return;
         const conversation = hubExchangeForAnchor(messages, { messageId, peerBotId });
         setPeerBotName(conversation?.peerBotName ?? initialPeerBotName);
+        setParticipantCount(conversation?.participants?.length ?? 1);
         setTurns(conversation?.messages ?? []);
       })
       .catch(() => {
@@ -119,7 +122,7 @@ export function HubConversationSheet({
                     }}
                   >
                     <Text style={{ color: tokens.mutedForeground, fontSize: 12, marginBottom: 4 }}>
-                      {sent ? botName : peerBotName}
+                      {peerTurnSpeaker(turn, botName, participantCount)}
                     </Text>
                     <ChatMarkdown palette={tokens} colorScheme={colorScheme}>
                       {turn.text}
