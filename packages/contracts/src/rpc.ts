@@ -82,7 +82,12 @@ import {
   VoiceInfoSchema,
   VoiceStatusSchema,
 } from "./domain.js";
-import { BotMessageIntent, ComputerCommandSchema, ProductEventSchema } from "./events.js";
+import {
+  BotMessageIntent,
+  ComputerCommandSchema,
+  ProductEventSchema,
+  SpaceTopicKeySchema,
+} from "./events.js";
 import {
   HubAckOutboundInput,
   HubAckOutboundResultSchema,
@@ -358,6 +363,11 @@ export const appContract = {
           text: z.string().trim().min(1).max(8_000),
           intent: BotMessageIntent.optional(),
           clientNonce: z.string().min(1).max(200).optional(),
+          /**
+           * Same value on each bot joins one burst. Omit it and each bot keeps
+           * its own topic. This is not clientNonce.
+           */
+          spaceTopicKey: SpaceTopicKeySchema.optional(),
         }),
       )
       .output(

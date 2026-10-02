@@ -1,10 +1,11 @@
 import type { BotMessageIntent, MessageBlock } from "@rakazo/contracts";
-import { HubInboxItemSchema } from "@rakazo/contracts";
+import { HubInboxItemSchema, normalizeSpaceTopicKey } from "@rakazo/contracts";
 import {
   BOT_MESSAGE_MAX_LENGTH,
   HUB_SPAWN_KEY_PREFIX,
   hubAgentIdFromSpawnKey,
   resolveHubMember,
+  spaceTopicKeyForHubSend,
 } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 
@@ -18,7 +19,8 @@ import type { PrismaClient } from "@rakazo/db";
  * On success the caller records a `hub_message_sent` echo in the sending thread.
  * The thread shows the same Hub chip as an inbound receipt. The payload is read
  * in the view-only topic that contains that chip. Several members addressed
- * before the bot writes a reply share that topic.
+ * before the bot writes a reply share that topic. The echo copies `spaceTopicKey`
+ * only when that open topic already has one. `threadKey` stays on the outbox row.
  */
 
 const HUB_THREAD_KEY_MAX = 200;
@@ -64,13 +66,16 @@ export function hubOutboundEchoBlock(input: {
   name: string;
   text: string;
   intent: BotMessageIntent;
+  spaceTopicKey?: string;
 }): Extract<MessageBlock, { kind: "hub_message_sent" }> {
+  const spaceTopicKey = normalizeSpaceTopicKey(input.spaceTopicKey);
   return {
     kind: "hub_message_sent",
     hubAgentId: input.hubAgentId,
     name: input.name,
     text: input.text,
     intent: input.intent,
+    ...(spaceTopicKey ? { spaceTopicKey } : {}),
   };
 }
 
@@ -105,7 +110,7 @@ export async function sendHubMessage(
   if (idempotencyKey) {
     const prior = await readReplay(prisma, run, idempotencyKey);
     if (prior) {
-      await emitHubOutboundEcho(echo, prior);
+      await echoOpenTopic(prisma, run, echo, prior);
       return prior;
     }
   }
@@ -187,13 +192,13 @@ export async function sendHubMessage(
       intent,
       note: `Queued for ${resolved.member.name}. Delivery is async and does not end your turn.`,
     };
-    await emitHubOutboundEcho(echo, sent);
+    await echoOpenTopic(prisma, run, echo, sent);
     return sent;
   } catch (error) {
     if (idempotencyKey && isUniqueConstraint(error)) {
       const prior = await readReplay(prisma, run, idempotencyKey);
       if (prior) {
-        await emitHubOutboundEcho(echo, prior);
+        await echoOpenTopic(prisma, run, echo, prior);
         return prior;
       }
     }
@@ -300,9 +305,52 @@ async function readReplay(
   };
 }
 
+async function echoOpenTopic(
+  prisma: PrismaClient,
+  run: HubSendRun,
+  echo: ((outbound: HubOutboundEcho) => Promise<void>) | undefined,
+  sent: Extract<HubSendResult, { ok: true }>,
+) {
+  const spaceTopicKey = await openTopicSpaceKey(prisma, run.threadId, sent.hubAgentId);
+  await emitHubOutboundEcho(echo, sent, spaceTopicKey);
+}
+
+/** Key already on this thread's open Hub topic. A closed topic and threadKey do not count. */
+async function openTopicSpaceKey(
+  prisma: PrismaClient,
+  threadId: string,
+  hubAgentId: string,
+): Promise<string | undefined> {
+  const rows = await prisma.message.findMany({
+    where: { threadId },
+    orderBy: { seq: "asc" },
+    select: { id: true, threadId: true, seq: true, role: true, blocks: true, createdAt: true },
+  });
+  return spaceTopicKeyForHubSend(
+    rows.map((row) => ({
+      id: row.id,
+      threadId: row.threadId,
+      seq: row.seq,
+      role: row.role,
+      blocks: asMessageBlocks(row.blocks),
+      createdAt: row.createdAt.toISOString(),
+    })),
+    threadId,
+    hubAgentId,
+  );
+}
+
+function asMessageBlocks(value: unknown): MessageBlock[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((block) =>
+    block && typeof block === "object" && "kind" in block ? [block as MessageBlock] : [],
+  );
+}
+
 async function emitHubOutboundEcho(
   echo: ((outbound: HubOutboundEcho) => Promise<void>) | undefined,
   sent: Extract<HubSendResult, { ok: true }>,
+  spaceTopicKey?: string,
 ) {
   if (!echo) return;
   await echo({
@@ -311,6 +359,7 @@ async function emitHubOutboundEcho(
       name: sent.name,
       text: sent.text,
       intent: sent.intent,
+      spaceTopicKey,
     }),
     nonce: hubOutboundEchoNonce(sent.deliveryId),
   });

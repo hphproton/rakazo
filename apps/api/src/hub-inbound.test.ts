@@ -129,6 +129,31 @@ describe("receiveHubMessage", () => {
     expect(notify).toHaveBeenCalledWith("thread-1", 8);
   });
 
+  it("stores a space topic key on the Hub receipt and ignores a blank one", async () => {
+    const keyed = transactionClient();
+    await receiveHubMessage(deps(keyed.prisma).deps, actor, target, {
+      ...deliveryInput(),
+      spaceTopicKey: " burst-1 ",
+    });
+    expect(keyed.tx.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          blocks: [expect.objectContaining({ origin: "hub", spaceTopicKey: "burst-1" })],
+        }),
+      }),
+    );
+
+    const blank = transactionClient();
+    await receiveHubMessage(deps(blank.prisma).deps, actor, target, {
+      ...deliveryInput({ clientNonce: "hub-nonce-2" }),
+      spaceTopicKey: "   ",
+    });
+    const blocks = blank.tx.message.create.mock.calls[0]?.[0].data.blocks as Array<
+      Record<string, unknown>
+    >;
+    expect(blocks[0]).not.toHaveProperty("spaceTopicKey");
+  });
+
   it("replays a delivery with the same client nonce", async () => {
     const { prisma } = transactionClient();
     prisma.message.findUnique = vi.fn().mockResolvedValue({

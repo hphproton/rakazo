@@ -1,12 +1,16 @@
 export {
   type HubFamilyChip,
   type HubTopicChipPlan,
+  type HubTranscriptBot,
   hubChipBlockKey,
   hubExchangeForAnchor,
   hubReceiptRowHidden,
   hubTopicChipPlan,
+  hubTranscriptTitle,
   isHubOnlyReceipt,
   isPeerBlock,
+  messageHasSpaceTopicKey,
+  messagesForHubTranscript,
   type PeerConversation,
   type PeerMessage,
   type PeerParticipant,
@@ -15,4 +19,5 @@ export {
   peerMessagesFrom,
   peerTranscriptForChip,
   peerTurnSpeaker,
+  spaceTopicKeyOnAnchor,
 } from "@rakazo/core";

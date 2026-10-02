@@ -107,6 +107,8 @@ export type HubInboundDelivery = {
   text: string;
   intent?: "request" | "question" | "result" | "status" | "fyi";
   clientNonce?: string;
+  /** Same key on each bot joins one burst. Omit it for today's per-thread topic. */
+  spaceTopicKey?: string;
 };
 
 export function hubSpawnKey(hubAgentId: string): string {

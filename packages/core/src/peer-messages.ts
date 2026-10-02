@@ -1,4 +1,5 @@
 import type { MessageBlock } from "@rakazo/contracts";
+import { normalizeSpaceTopicKey } from "@rakazo/contracts";
 import { hubMemberLabel, peerReceiptDisplayName } from "./bot-messages.js";
 
 export interface PeerMessage {
@@ -8,6 +9,17 @@ export interface PeerMessage {
   peerBotName: string;
   text: string;
   createdAt: string;
+  /** Set when this Hub turn carries a space join key. */
+  spaceTopicKey?: string;
+  /** Rakazo bot whose thread stored this turn. */
+  botId?: string;
+  botName?: string;
+}
+
+/** Rakazo bot named in a space-wide transcript, first appearance order. */
+export interface HubTranscriptBot {
+  botId: string;
+  botName: string;
 }
 
 export interface PeerParticipant {
@@ -26,6 +38,11 @@ export interface PeerConversation {
    * Absent when the transcript is one peer.
    */
   participants?: PeerParticipant[];
+  /**
+   * Rakazo bots that share one spaceTopicKey, first appearance order.
+   * Absent when the transcript stays on one bot thread.
+   */
+  rakazoBots?: readonly HubTranscriptBot[];
 }
 
 type PeerTranscriptMessage = {
@@ -35,6 +52,8 @@ type PeerTranscriptMessage = {
   role?: string;
   threadId?: string;
   seq?: number;
+  botId?: string;
+  botName?: string;
 };
 
 type PeerBlock = Extract<MessageBlock, { kind: "bot_message_sent" | "bot_message_received" }>;
@@ -55,35 +74,46 @@ export function peerMessagesFrom(messages: readonly PeerTranscriptMessage[]): Pe
   for (const message of messages) {
     for (const block of message.blocks) {
       if (block.kind === "hub_message_sent") {
+        collected.push(
+          withThreadSpeaker(
+            {
+              messageId: message.id,
+              direction: "sent",
+              peerBotId: block.hubAgentId,
+              peerBotName: hubMemberLabel(block.name),
+              text: block.text,
+              createdAt: message.createdAt ?? "",
+            },
+            message,
+            block.spaceTopicKey,
+          ),
+        );
+        continue;
+      }
+      if (!isPeerBlock(block)) continue;
+      if (block.kind === "bot_message_sent") {
         collected.push({
           messageId: message.id,
           direction: "sent",
-          peerBotId: block.hubAgentId,
-          peerBotName: hubMemberLabel(block.name),
+          peerBotId: block.toBotId,
+          peerBotName: block.toBotName,
           text: block.text,
           createdAt: message.createdAt ?? "",
         });
         continue;
       }
-      if (!isPeerBlock(block)) continue;
+      const received: PeerMessage = {
+        messageId: message.id,
+        direction: "received",
+        peerBotId: block.fromBotId,
+        peerBotName: peerReceiptDisplayName(block),
+        text: block.text,
+        createdAt: message.createdAt ?? "",
+      };
       collected.push(
-        block.kind === "bot_message_sent"
-          ? {
-              messageId: message.id,
-              direction: "sent",
-              peerBotId: block.toBotId,
-              peerBotName: block.toBotName,
-              text: block.text,
-              createdAt: message.createdAt ?? "",
-            }
-          : {
-              messageId: message.id,
-              direction: "received",
-              peerBotId: block.fromBotId,
-              peerBotName: peerReceiptDisplayName(block),
-              text: block.text,
-              createdAt: message.createdAt ?? "",
-            },
+        block.origin === "hub"
+          ? withThreadSpeaker(received, message, block.spaceTopicKey)
+          : received,
       );
     }
   }
@@ -141,8 +171,9 @@ export type PeerTranscriptChip = {
  * joins after that reply. A new Hub member after the bot has replied starts
  * their own topic, so sequential 1:1s stay apart. The result is the topic
  * that contains `messageId` for that `peerBotId`. A miss returns null and
- * does not substitute the latest topic. Two Rakazo bots stay apart because
- * their messages carry different `threadId`s. Teammate scope stays one
+ * does not substitute the latest topic. Two Rakazo bots stay apart unless the
+ * anchor block has a spaceTopicKey that the other bot's Hub turns also carry.
+ * Two Hub members do not require one shared page. Teammate scope stays one
  * conversation per bot id.
  */
 export function peerTranscriptForChip(
@@ -153,7 +184,12 @@ export function peerTranscriptForChip(
   return peerConversations(messages).find((entry) => entry.peerBotId === chip.peerBotId) ?? null;
 }
 
-/** Hub topic that contains this chip's message. Null when that message is absent. */
+/**
+ * Hub topic that contains this chip's message. Null when that message is absent.
+ * A spaceTopicKey on the anchor includes every loaded Hub turn with that key,
+ * including the other bot. No key keeps today's per-thread topic. Text and
+ * timestamps do not join, and two Hub members stay on the topics they already have.
+ */
 export function hubExchangeForAnchor(
   messages: readonly PeerTranscriptMessage[],
   anchor: { messageId: string; peerBotId: string },
@@ -163,7 +199,84 @@ export function hubExchangeForAnchor(
       (turn) => turn.messageId === anchor.messageId && turn.peerBotId === anchor.peerBotId,
     ),
   );
-  return match ?? null;
+  if (!match) return null;
+  const anchorTurn = match.messages.find(
+    (turn) => turn.messageId === anchor.messageId && turn.peerBotId === anchor.peerBotId,
+  );
+  const key = anchorTurn?.spaceTopicKey;
+  if (!key) return match;
+  const turns = hubTurnsWithSpaceTopicKey(messages, key);
+  if (turns.length === 0) return match;
+  return toSpaceConversation(turns);
+}
+
+/** Own thread, plus other threads' messages that carry the anchor's spaceTopicKey. */
+export function messagesForHubTranscript<T extends PeerTranscriptMessage>(
+  ownThread: readonly T[],
+  siblings: readonly T[],
+  anchor: { messageId: string; peerBotId: string },
+): T[] {
+  const key = spaceTopicKeyOnAnchor(ownThread, anchor);
+  if (!key) return [...ownThread];
+  const ownThreadId = ownThread.find((message) => message.id === anchor.messageId)?.threadId;
+  const related = siblings.filter((message) => {
+    if (ownThreadId && message.threadId === ownThreadId) return false;
+    return messageHasSpaceTopicKey(message, key);
+  });
+  return [...ownThread, ...related];
+}
+
+/** Key on the anchor Hub block. Missing, blank, and non-hub blocks are absent. */
+export function spaceTopicKeyOnAnchor(
+  messages: readonly { id: string; blocks: readonly MessageBlock[] }[],
+  anchor: { messageId: string; peerBotId: string },
+): string | undefined {
+  const message = messages.find((entry) => entry.id === anchor.messageId);
+  if (!message) return undefined;
+  for (const block of message.blocks) {
+    if (!blockMatchesAnchor(block, anchor.peerBotId)) continue;
+    return blockSpaceTopicKey(block);
+  }
+  return undefined;
+}
+
+export function messageHasSpaceTopicKey(
+  message: { blocks: readonly MessageBlock[] },
+  key: string,
+): boolean {
+  return message.blocks.some((block) => blockSpaceTopicKey(block) === key);
+}
+
+/**
+ * Title for the existing view-only transcript.
+ * Names every Rakazo bot only when one spaceTopicKey joined more than one.
+ */
+export function hubTranscriptTitle(
+  botName: string,
+  conversation: Pick<PeerConversation, "peerBotName" | "rakazoBots">,
+): string {
+  const names = (conversation.rakazoBots ?? [])
+    .map((bot) => bot.botName.trim())
+    .filter((name) => name.length > 0);
+  const speakers = names.length > 1 ? names.join(", ") : botName;
+  return `${speakers} · ${conversation.peerBotName}`;
+}
+
+/**
+ * Key to copy onto a hub_send_message echo.
+ * The open topic on this thread must already have one. A person message on
+ * this thread clears it. Another bot's thread is left alone. This does not
+ * invent a key, and threadKey is not consulted.
+ */
+export function spaceTopicKeyForHubSend(
+  messages: readonly PeerTranscriptMessage[],
+  threadId: string,
+  hubAgentId: string,
+): string | undefined {
+  const { openByThread } = walkHubTopics(messages);
+  const topic = topicJoinedBySend(openByThread.get(threadId) ?? [], hubAgentId);
+  if (!topic || topic.spaceTopicKeyConflict) return undefined;
+  return topic.spaceTopicKey;
 }
 
 /** One collapsed direction chip on a multi-member Hub topic. */
@@ -282,13 +395,14 @@ export function hubReceiptRowHidden(
  * A single peer keeps the Rakazo bot's name on sent turns.
  */
 export function peerTurnSpeaker(
-  turn: Pick<PeerMessage, "direction" | "peerBotName">,
+  turn: Pick<PeerMessage, "direction" | "peerBotName" | "botName">,
   botName: string,
   participantCount: number,
 ): string {
+  const speaker = turn.botName?.trim() || botName;
   if (turn.direction === "received") return turn.peerBotName;
-  if (participantCount > 1) return `${botName} · ${turn.peerBotName}`;
-  return botName;
+  if (participantCount > 1) return `${speaker} · ${turn.peerBotName}`;
+  return speaker;
 }
 
 type HubMemberState = {
@@ -305,9 +419,14 @@ type OpenHubTopic = {
   order: string[];
   participants: Map<string, HubMemberState>;
   turns: PeerMessage[];
+  spaceTopicKey?: string;
+  spaceTopicKeyConflict?: boolean;
 };
 
-function hubTopics(messages: readonly PeerTranscriptMessage[]): PeerConversation[] {
+function walkHubTopics(messages: readonly PeerTranscriptMessage[]): {
+  done: OpenHubTopic[];
+  openByThread: Map<string, OpenHubTopic[]>;
+} {
   const ordered = messages
     .map((message, index) => ({ message, index }))
     .sort((a, b) => compareTranscriptOrder(a.message, a.index, b.message, b.index));
@@ -333,8 +452,14 @@ function hubTopics(messages: readonly PeerTranscriptMessage[]): PeerConversation
     if (isBotReplyText(message)) noteBotReply(openByThread.get(threadId));
   }
 
-  for (const open of openByThread.values()) done.push(...open);
-  return done.filter((topic) => topic.turns.length > 0).map(toConversation);
+  return { done, openByThread };
+}
+
+function hubTopics(messages: readonly PeerTranscriptMessage[]): PeerConversation[] {
+  const { done, openByThread } = walkHubTopics(messages);
+  const finished = [...done];
+  for (const open of openByThread.values()) finished.push(...open);
+  return finished.filter((topic) => topic.turns.length > 0).map(toConversation);
 }
 
 function openTopics(openByThread: Map<string, OpenHubTopic[]>, threadId: string): OpenHubTopic[] {
@@ -360,6 +485,7 @@ function placeHubTurn(open: OpenHubTopic[], turn: PeerMessage) {
     member.peerBotName = turn.peerBotName;
     topic.botTextSince = false;
     topic.turns.push(turn);
+    noteSpaceTopicKey(topic, turn.spaceTopicKey);
     return;
   }
   for (let index = open.length - 1; index >= 0; index -= 1) {
@@ -392,6 +518,7 @@ function addHubParticipant(topic: OpenHubTopic, turn: PeerMessage) {
   });
   topic.botTextSince = false;
   topic.turns.push(turn);
+  noteSpaceTopicKey(topic, turn.spaceTopicKey);
 }
 
 function emptyTopic(): OpenHubTopic {
@@ -482,4 +609,140 @@ function hubTurnsFrom(message: PeerTranscriptMessage): PeerMessage[] {
           block.fromBotId === turn.peerBotId),
     ),
   );
+}
+
+function withThreadSpeaker(
+  turn: PeerMessage,
+  message: PeerTranscriptMessage,
+  spaceTopicKey: string | undefined,
+): PeerMessage {
+  const key = normalizeSpaceTopicKey(spaceTopicKey);
+  return {
+    ...turn,
+    ...(key ? { spaceTopicKey: key } : {}),
+    ...(message.botId ? { botId: message.botId } : {}),
+    ...(message.botName ? { botName: message.botName } : {}),
+  };
+}
+
+function noteSpaceTopicKey(topic: OpenHubTopic, key: string | undefined) {
+  if (!key || topic.spaceTopicKeyConflict) return;
+  if (!topic.spaceTopicKey) {
+    topic.spaceTopicKey = key;
+    return;
+  }
+  if (topic.spaceTopicKey !== key) {
+    topic.spaceTopicKeyConflict = true;
+    topic.spaceTopicKey = undefined;
+  }
+}
+
+function topicJoinedBySend(
+  open: readonly OpenHubTopic[],
+  hubAgentId: string,
+): OpenHubTopic | undefined {
+  const preview: PeerMessage = {
+    messageId: "",
+    direction: "sent",
+    peerBotId: hubAgentId,
+    peerBotName: "",
+    text: "",
+    createdAt: "",
+  };
+  for (let index = open.length - 1; index >= 0; index -= 1) {
+    const topic = open[index];
+    if (!topic) continue;
+    const member = topic.participants.get(hubAgentId);
+    if (!member || member.closed) continue;
+    if (splitsHubMember(topic, member, preview)) break;
+    return topic;
+  }
+  for (let index = open.length - 1; index >= 0; index -= 1) {
+    const topic = open[index];
+    if (!topic || topic.spoke) continue;
+    return topic;
+  }
+  return undefined;
+}
+
+function hubTurnsWithSpaceTopicKey(
+  messages: readonly PeerTranscriptMessage[],
+  key: string,
+): PeerMessage[] {
+  const ordered = messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => compareSpaceTranscriptOrder(a.message, a.index, b.message, b.index));
+  const turns: PeerMessage[] = [];
+  for (const { message } of ordered) {
+    for (const turn of hubTurnsFrom(message)) {
+      if (turn.spaceTopicKey === key) turns.push(turn);
+    }
+  }
+  return turns;
+}
+
+function compareSpaceTranscriptOrder(
+  a: PeerTranscriptMessage,
+  aIndex: number,
+  b: PeerTranscriptMessage,
+  bIndex: number,
+): number {
+  const time = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+  if (time !== 0) return time;
+  const thread = (a.threadId ?? "").localeCompare(b.threadId ?? "");
+  if (thread !== 0) return thread;
+  if (a.seq != null && b.seq != null && a.seq !== b.seq) return a.seq - b.seq;
+  return aIndex - bIndex;
+}
+
+function toSpaceConversation(turns: PeerMessage[]): PeerConversation {
+  const order: string[] = [];
+  const names = new Map<string, string>();
+  for (const turn of turns) {
+    if (!names.has(turn.peerBotId)) order.push(turn.peerBotId);
+    names.set(turn.peerBotId, turn.peerBotName);
+  }
+  const participants = order.map((id) => ({
+    peerBotId: id,
+    peerBotName: names.get(id) ?? "Hub",
+  }));
+  const last = turns.at(-1);
+  const rakazoBots = rakazoBotsFrom(turns);
+  return {
+    peerBotId: participants[0]?.peerBotId ?? last?.peerBotId ?? "",
+    peerBotName: hubTopicLabel(participants),
+    messages: turns,
+    lastText: last?.text ?? "",
+    lastAt: last?.createdAt ?? "",
+    ...(participants.length > 1 ? { participants } : {}),
+    ...(rakazoBots.length > 1 ? { rakazoBots } : {}),
+  };
+}
+
+function rakazoBotsFrom(turns: readonly PeerMessage[]): HubTranscriptBot[] {
+  const bots: HubTranscriptBot[] = [];
+  const seen = new Set<string>();
+  for (const turn of turns) {
+    const botId = turn.botId;
+    const botName = turn.botName?.trim();
+    if (!botId || !botName || seen.has(botId)) continue;
+    seen.add(botId);
+    bots.push({ botId, botName });
+  }
+  return bots;
+}
+
+function blockMatchesAnchor(block: MessageBlock, peerBotId: string): boolean {
+  if (block.kind === "hub_message_sent") return block.hubAgentId === peerBotId;
+  return (
+    block.kind === "bot_message_received" && block.origin === "hub" && block.fromBotId === peerBotId
+  );
+}
+
+function blockSpaceTopicKey(block: MessageBlock): string | undefined {
+  if (block.kind === "hub_message_sent") return normalizeSpaceTopicKey(block.spaceTopicKey);
+  if (block.kind === "bot_message_received" && block.origin === "hub") {
+    return normalizeSpaceTopicKey(block.spaceTopicKey);
+  }
+  return undefined;
 }
