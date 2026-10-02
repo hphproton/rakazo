@@ -11,6 +11,19 @@ const target = {
   botId: "bot-1",
   threadId: "thread-1",
 } as Extract<ThreadTarget, { kind: "bot" }>;
+const groupTarget = {
+  kind: "group",
+  groupId: "group-1",
+  threadId: "thread-g",
+  groupName: "Team B",
+  members: [],
+  memberBotIds: ["bot-chief", "bot-deputy"],
+} as Extract<ThreadTarget, { kind: "group" }>;
+
+const groupMembers = [
+  { bot: { id: "bot-chief", name: "Chief" } },
+  { bot: { id: "bot-deputy", name: "Deputy" } },
+];
 
 function deliveryInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -52,6 +65,62 @@ function transactionClient(activeRuns: Array<Record<string, unknown>> = []) {
     },
     steeringMessage: { create: vi.fn() },
     event: { create: vi.fn().mockResolvedValue({ seq: 8, threadId: "thread-1" }) },
+  };
+  const prisma = {
+    message: { findUnique: vi.fn().mockResolvedValue(null) },
+    run: { findUnique: vi.fn() },
+    event: { findFirst: vi.fn() },
+    $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+  } as unknown as PrismaClient;
+  return { tx, prisma };
+}
+
+function groupTransaction(activeRuns: Array<Record<string, unknown>> = []) {
+  let created = 0;
+  const tx = {
+    $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }]),
+    chatGroup: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: "group-1",
+        members: groupMembers,
+      }),
+      update: vi.fn(),
+    },
+    thread: {
+      update: vi.fn(async ({ data }: { data: { nextMessageSeq?: unknown } }) =>
+        data.nextMessageSeq ? { nextMessageSeq: 4 } : { nextEventSeq: 9 },
+      ),
+    },
+    message: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({
+        id: "msg-hub",
+        seq: 3,
+        threadId: "thread-g",
+        role: "user",
+      }),
+      update: vi.fn(),
+    },
+    run: {
+      findMany: vi.fn().mockResolvedValue(activeRuns),
+      findUnique: vi.fn().mockResolvedValue({ status: "queued", startedAt: null }),
+      create: vi.fn(async (args: { data: { botId: string } }) => {
+        created += 1;
+        return {
+          id: `run-${created}`,
+          taskId: `task-${created}`,
+          status: "queued",
+          botId: args.data.botId,
+        };
+      }),
+      updateMany: vi.fn(),
+    },
+    task: {
+      create: vi.fn(async () => ({ id: `task-${created + 1}` })),
+      updateMany: vi.fn(),
+    },
+    steeringMessage: { create: vi.fn() },
+    event: { create: vi.fn().mockResolvedValue({ seq: 8, threadId: "thread-g" }) },
   };
   const prisma = {
     message: { findUnique: vi.fn().mockResolvedValue(null) },
@@ -237,6 +306,136 @@ describe("receiveHubMessage", () => {
         }),
       }),
     );
+  });
+
+  it("stores a space topic key on the group receipt and ignores a blank one", async () => {
+    const keyed = groupTransaction();
+    await deliverHubInbound(deps(keyed.prisma).deps, actor, groupTarget, {
+      ...deliveryInput(),
+      spaceTopicKey: " burst-1 ",
+    });
+    expect(keyed.tx.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          threadId: "thread-g",
+          blocks: [expect.objectContaining({ origin: "hub", spaceTopicKey: "burst-1" })],
+        }),
+      }),
+    );
+
+    const blank = groupTransaction();
+    await receiveHubMessage(deps(blank.prisma).deps, actor, groupTarget, {
+      ...deliveryInput({ clientNonce: "hub-nonce-2" }),
+      spaceTopicKey: "   ",
+    });
+    const blocks = blank.tx.message.create.mock.calls[0]?.[0].data.blocks as Array<
+      Record<string, unknown>
+    >;
+    expect(blocks[0]).not.toHaveProperty("spaceTopicKey");
+
+    const tooLong = groupTransaction();
+    await receiveHubMessage(deps(tooLong.prisma).deps, actor, groupTarget, {
+      ...deliveryInput({ clientNonce: "hub-nonce-3" }),
+      spaceTopicKey: "a".repeat(201),
+    });
+    const longBlocks = tooLong.tx.message.create.mock.calls[0]?.[0].data.blocks as Array<
+      Record<string, unknown>
+    >;
+    expect(longBlocks[0]).not.toHaveProperty("spaceTopicKey");
+  });
+
+  it("lands a Hub receipt on the group thread and wakes the first member", async () => {
+    const { tx, prisma } = groupTransaction();
+    const { deps: deliveryDeps, notify, enqueue } = deps(prisma);
+
+    const result = await receiveHubMessage(deliveryDeps, actor, groupTarget, deliveryInput());
+
+    expect(result).toEqual({
+      taskId: "task-1",
+      runId: "run-1",
+      seq: 3,
+      runIds: ["run-1"],
+    });
+    expect(tx.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          threadId: "thread-g",
+          blocks: [expect.objectContaining({ origin: "hub", fromBotId: "hub-atlas" })],
+        }),
+      }),
+    );
+    expect(tx.run.create).toHaveBeenCalledTimes(1);
+    expect(tx.run.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          botId: "bot-chief",
+          threadId: "thread-g",
+          trigger: "hub_message",
+          clientNonce: "hub:msg-hub:bot-chief",
+        }),
+      }),
+    );
+    expect(tx.chatGroup.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "group-1" } }),
+    );
+    expect(notify).toHaveBeenCalledWith("thread-g", 8);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "run.continue", payload: { runId: "run-1" } }),
+    );
+  });
+
+  it("wakes only the named group member", async () => {
+    const { tx, prisma } = groupTransaction();
+    const { deps: deliveryDeps } = deps(prisma);
+
+    await receiveHubMessage(
+      deliveryDeps,
+      actor,
+      groupTarget,
+      deliveryInput({ text: "@Deputy check the deploy" }),
+    );
+
+    expect(tx.run.create).toHaveBeenCalledTimes(1);
+    expect(tx.run.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ botId: "bot-deputy" }),
+      }),
+    );
+  });
+
+  it("wakes every member for @everyone with distinct run nonces", async () => {
+    const { tx, prisma } = groupTransaction();
+    const { deps: deliveryDeps } = deps(prisma);
+
+    const result = await receiveHubMessage(
+      deliveryDeps,
+      actor,
+      groupTarget,
+      deliveryInput({ text: "@everyone check the deploy" }),
+    );
+
+    expect(result.runIds).toEqual(["run-1", "run-2"]);
+    const nonces = tx.run.create.mock.calls.map((call) => call[0].data.clientNonce as string);
+    expect(nonces).toEqual(["hub:msg-hub:bot-chief", "hub:msg-hub:bot-deputy"]);
+    expect(new Set(nonces).size).toBe(2);
+  });
+
+  it("does not answer a pending ask on the group thread", async () => {
+    const { tx, prisma } = groupTransaction([
+      {
+        id: "run-ask",
+        taskId: "task-ask",
+        botId: "bot-chief",
+        status: "waiting_input",
+        trigger: "user",
+      },
+    ]);
+    const { deps: deliveryDeps } = deps(prisma);
+
+    await expect(
+      receiveHubMessage(deliveryDeps, actor, groupTarget, deliveryInput()),
+    ).rejects.toMatchObject({ code: "CONFLICT", message: "Answer the pending ask first." });
+    expect(tx.message.create).not.toHaveBeenCalled();
   });
 
   it("rejects a Hub id that is the target bot", async () => {

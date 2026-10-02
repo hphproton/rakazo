@@ -1911,9 +1911,11 @@ export function createRouter(deps: RouterDeps) {
         }
         const target = await resolveThreadTarget(deps.prisma, context.actor, {
           botId: input.botId,
+          groupId: input.groupId,
         });
-        if (target.kind !== "bot") throw new IsolationError();
-        await assertTeachingSendAllowed(deps.prisma, context.actor.spaceId, target.botId);
+        if (target.kind === "bot") {
+          await assertTeachingSendAllowed(deps.prisma, context.actor.spaceId, target.botId);
+        }
         return deliverHubInbound(deps, context.actor, target, input);
       }),
       react: authed.threads.react.handler(async ({ context, input }) => {

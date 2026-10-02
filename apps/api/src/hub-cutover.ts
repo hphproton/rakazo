@@ -14,7 +14,8 @@ import type { ThreadTarget } from "./thread-target.js";
 
 /**
  * The only Hub → Rakazo entry the router should call. It always lands on
- * threads/receiveHub. Rakazo → Hub stays MCP and is not invoked here.
+ * threads/receiveHub, on a bot thread or a ChatGroup thread. Rakazo → Hub
+ * stays MCP and is not invoked here.
  */
 export async function deliverHubInbound(
   deps: {
@@ -23,7 +24,7 @@ export async function deliverHubInbound(
     jobs: Pick<JobPublisher, "enqueue">;
   },
   actor: Actor,
-  target: Extract<ThreadTarget, { kind: "bot" }>,
+  target: ThreadTarget,
   input: {
     hubAgentId: string;
     hubAgentName: string;
@@ -33,6 +34,9 @@ export async function deliverHubInbound(
     spaceTopicKey?: string;
   },
 ) {
+  if (target.kind === "group") {
+    return receiveHubMessage(deps, actor, target, input);
+  }
   const route = hubInboundCall({
     botId: target.botId,
     hubAgentId: input.hubAgentId,
