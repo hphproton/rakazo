@@ -149,10 +149,17 @@ type PeerReceiptBlock = Extract<
   { kind: "bot_message_sent" | "bot_message_received" }
 >;
 
+/** Stable Hub member label. Inbound and outbound turns for one agent share it. */
+export function hubMemberLabel(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "Hub";
+  return trimmed.startsWith("Hub · ") ? trimmed : `Hub · ${trimmed}`;
+}
+
 /** Name shown on the peer chip. Hub deliveries stay on the same receipt, prefixed so they are not a teammate. */
 export function peerReceiptDisplayName(block: PeerReceiptBlock): string {
   if (block.kind === "bot_message_sent") return block.toBotName;
-  if (block.origin === "hub") return `Hub · ${block.fromBotName}`;
+  if (block.origin === "hub") return hubMemberLabel(block.fromBotName);
   return block.fromBotName;
 }
 

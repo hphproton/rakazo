@@ -15,8 +15,9 @@ import type { PrismaClient } from "@rakazo/db";
  * `hub_send_message` resolves a directory member and inserts a HUB-INBOX row
  * with status `wake`. A host-straight mesh lists `hub/outbox` and acks ids
  * `done`. The tool does not write a user message and does not require `TO_HUB:`.
- * On success the caller records a `hub_message_sent` echo in the sending thread
- * so the person sees the payload that left.
+ * On success the caller records a `hub_message_sent` echo in the sending thread.
+ * The thread shows the same Hub chip as an inbound receipt. The payload is read
+ * in that member's view-only transcript, next to inbound turns for the same id.
  */
 
 const HUB_THREAD_KEY_MAX = 200;

@@ -137,6 +137,7 @@ export const DE_MESSAGES: Record<string, string> = {
   "Message from {peer}": "Nachricht von {peer}",
   "Message {name}": "{name} schreiben",
   "Messaged {peer}": "Nachricht an {peer} gesendet",
+  "This chat is view-only": "Dieser Chat ist schreibgeschützt",
   "To Hub · {name}": "An Hub · {name}",
   "Message…": "Nachricht…",
   "No longer active": "Nicht mehr aktiv",
@@ -247,6 +248,7 @@ export const DE_MESSAGES: Record<string, string> = {
   // app/computer.tsx
   "Booting {label}": "{label} wird gestartet",
   Bot: "Bot",
+  Close: "Schließen",
   "Close computer": "Computer schließen",
   "Could not continue": "Fortfahren fehlgeschlagen",
   "Could not load the desktop. This device cannot reach the screen URL.":

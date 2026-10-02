@@ -1,6 +1,10 @@
 import type { ThreadMessage } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { isTrivialHubAckText, userVisibleMessages } from "./message-visibility.js";
+import {
+  isCompactCollaborationReceipt,
+  isTrivialHubAckText,
+  userVisibleMessages,
+} from "./message-visibility.js";
 
 function message(id: string, runId: string, blocks: ThreadMessage["blocks"]): ThreadMessage {
   return {
@@ -221,6 +225,41 @@ describe("user-visible messages", () => {
     expect(
       userVisibleMessages(messages, { knownPeerRunIds: ["run-peer"] }).map((item) => item.id),
     ).toEqual(["ask", "reply", "answer"]);
+  });
+
+  it("treats a Hub outbound echo as the same compact receipt row as an inbound chip", () => {
+    expect(
+      isCompactCollaborationReceipt([
+        {
+          kind: "hub_message_sent",
+          hubAgentId: "pi-ops",
+          name: "Pi Ops",
+          text: "NATIVE_HUB_SEND_SMOKE",
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      isCompactCollaborationReceipt([
+        {
+          kind: "bot_message_received",
+          fromBotId: "hub-atlas",
+          fromBotName: "Atlas",
+          origin: "hub",
+          text: "Check the deploy.",
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      isCompactCollaborationReceipt([
+        {
+          kind: "hub_message_sent",
+          hubAgentId: "pi-ops",
+          name: "Pi Ops",
+          text: "NATIVE_HUB_SEND_SMOKE",
+        },
+        { kind: "text", text: "Queued." },
+      ]),
+    ).toBe(false);
   });
 
   it("keeps a Hub outbound echo and its payload on a peer run", () => {
