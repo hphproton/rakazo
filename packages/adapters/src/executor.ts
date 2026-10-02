@@ -1427,6 +1427,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const allowSilentPeerMessage = botMessageAllowsSilence(
           peerMessage?.intent,
           peerMessage?.repliesToRequest,
+          peerMessage?.origin,
         );
         const allowSilentEmptyRun =
           allowSilentPeerMessage || messagingChannelRun || runAllowsSilentEmpty(run.trigger);

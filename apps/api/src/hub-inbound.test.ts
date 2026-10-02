@@ -119,6 +119,9 @@ describe("receiveHubMessage", () => {
     const prompt = tx.task.create.mock.calls[0]?.[0].data.prompt as string;
     expect(prompt).toContain("not the user typing");
     expect(prompt).toContain("Hub agent");
+    expect(prompt).toContain("Hub chip already records");
+    expect(prompt).toContain('"OK."');
+    expect(prompt).not.toContain("Your written reply in this thread is the response");
     expect(prompt).not.toContain("message_bot with bot_id");
     expect(enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ name: "run.continue", payload: { runId: "run-hub" } }),
