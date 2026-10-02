@@ -2136,6 +2136,37 @@ describe("sendThreadMessage", () => {
     expect(tx.run.create).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
   });
+  it("refuses a send aimed at a Hub roster mirror", async () => {
+    const prisma = {
+      message: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(),
+    } as unknown as PrismaClient;
+    const actor = { spaceId: "workspace-1", userId: "user-1" } as Actor;
+    const target = {
+      kind: "bot",
+      botId: "bot-hub",
+      threadId: "thread-hub",
+      bot: { spawnKey: "hub:box-principal" },
+    } as ThreadTarget;
+
+    await expect(
+      sendThreadMessage(
+        {
+          prisma,
+          events: { notify: vi.fn() } as never,
+          jobs: { enqueue: vi.fn() } as never,
+        },
+        actor,
+        target,
+        { text: "hello", clientNonce: "nonce-hub-seat" },
+      ),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Hub members are not chats. Use hub_send_message.",
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it("rejects a quote excerpt without a reply target", async () => {
     const prisma = {
       message: { findUnique: vi.fn().mockResolvedValue(null) },

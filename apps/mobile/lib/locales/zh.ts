@@ -555,6 +555,7 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Message from {peer}": "来自 {peer} 的消息",
   subagent: "子智能体",
   "Messaged {peer}": "已给 {peer} 发消息",
+  "To Hub · {name}": "发往 Hub · {name}",
   "No authentication": "无认证",
   "No connection record found for {name}.": "未找到 {name} 的连接记录。",
   "Not in the plugin catalog": "不在插件目录中",

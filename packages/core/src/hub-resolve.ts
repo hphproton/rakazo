@@ -83,7 +83,7 @@ export function renderHubDirectory(members: readonly HubResolveMember[]): string
     .slice(0, HUB_DIRECTORY_PROMPT_LIMIT);
   if (active.length === 0) return undefined;
   return [
-    "Hub directory for hub_send_message. Writing TO_HUB: in your reply does not send.",
+    "Hub directory for hub_send_message. These names are not chats. Do not call message_bot for them. Writing TO_HUB: in your reply does not send.",
     "<hub_directory>",
     ...active.map((member) => {
       const name = escapeDirectoryField(member.name);

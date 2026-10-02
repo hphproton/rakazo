@@ -134,5 +134,16 @@ describe("peer message history", () => {
         { kind: "bot_message_sent", toBotId: "b_2", toBotName: "Analyst", text: "chart it" },
       ]),
     ).toBe("[to Analyst] chart it");
+    expect(
+      blocksToAgentHistoryText([
+        {
+          kind: "hub_message_sent",
+          hubAgentId: "pi-ops",
+          name: "Pi Ops",
+          text: "Ship the notes",
+          intent: "request",
+        },
+      ]),
+    ).toBe("[to Hub · Pi Ops] Ship the notes");
   });
 });

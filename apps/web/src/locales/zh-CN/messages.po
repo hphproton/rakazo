@@ -3806,6 +3806,10 @@ msgstr "标题"
 msgid "To:"
 msgstr "至:"
 
+#: src/pages/Shell.tsx
+msgid "To Hub · {name}"
+msgstr "发往 Hub · {name}"
+
 #: src/pages/Artifacts.tsx
 msgid "Today"
 msgstr ""

@@ -222,4 +222,26 @@ describe("user-visible messages", () => {
       userVisibleMessages(messages, { knownPeerRunIds: ["run-peer"] }).map((item) => item.id),
     ).toEqual(["ask", "reply", "answer"]);
   });
+
+  it("keeps a Hub outbound echo and its payload on a peer run", () => {
+    const messages = [
+      message("echo", "run-peer", [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: "pi-ops",
+          name: "Pi Ops",
+          text: "NATIVE_HUB_SEND_SMOKE",
+          intent: "request",
+        },
+      ]),
+      message("activity", "run-peer", [{ kind: "steps", steps: [{ label: "Work", count: 1 }] }]),
+    ];
+    expect(
+      userVisibleMessages(messages, { knownPeerRunIds: ["run-peer"] }).map((item) => item.id),
+    ).toEqual(["echo"]);
+    expect(userVisibleMessages(messages)[0]?.blocks[0]).toMatchObject({
+      kind: "hub_message_sent",
+      text: "NATIVE_HUB_SEND_SMOKE",
+    });
+  });
 });

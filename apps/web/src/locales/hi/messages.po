@@ -3806,6 +3806,10 @@ msgstr "शीर्षक"
 msgid "To:"
 msgstr "प्रति:"
 
+#: src/pages/Shell.tsx
+msgid "To Hub · {name}"
+msgstr "Hub · {name} को"
+
 #: src/pages/Artifacts.tsx
 msgid "Today"
 msgstr ""

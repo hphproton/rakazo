@@ -346,6 +346,14 @@ describe("contracts", () => {
       intent: "request",
     });
     expect(hubBlock.kind === "bot_message_received" && hubBlock.origin).toBe("hub");
+    const hubOutbound = MessageBlock.parse({
+      kind: "hub_message_sent",
+      hubAgentId: "hub-atlas",
+      name: "Atlas",
+      text: "Ship the notes",
+      intent: "request",
+    });
+    expect(hubOutbound.kind === "hub_message_sent" && hubOutbound.text).toBe("Ship the notes");
   });
 
   it("caps remote MCP headers", () => {

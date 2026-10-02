@@ -360,6 +360,42 @@ export const builtinAgentTools: ConnectorTool[] = [
       required: ["message"],
     },
   },
+  // Beside message_user so a truncated tool list still includes Hub delivery.
+  {
+    name: "hub_send_message",
+    description:
+      "Send a useful update, question, handoff, or request to a Hub (Grok team) member. You must call this tool to deliver — writing TO_HUB: or [to Principal] in reply text does not send. Resolve the member from the Hub directory (name, title, or hubAgentId). Delivery is async and does not end your turn. Do not send ack-only messages. Not for ordinary user chat that stays in this thread.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description:
+            "Hub member name, title fragment, or hubAgentId (UUID). Prefer exact name or id when known.",
+        },
+        hubAgentId: {
+          type: "string",
+          description:
+            "Optional explicit Hub agent id. If set, overrides fuzzy name resolve on target.",
+        },
+        text: {
+          type: "string",
+          description: "Message body to deliver to the Hub member.",
+        },
+        intent: {
+          type: "string",
+          enum: ["request", "result", "question", "status", "fyi"],
+          description: "What the Hub recipient should do. Defaults to request.",
+        },
+        threadKey: {
+          type: "string",
+          description:
+            "Optional continuity key for follow-ups (opaque string; Hub drain may echo).",
+        },
+      },
+      required: ["text"],
+    },
+  },
   {
     name: "request_secret",
     get description() {
@@ -943,7 +979,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "message_bot",
     description:
-      'Send a useful update, question, or result to another of the user\'s bots. You must call this tool to actually deliver it — writing the message in your own reply text (e.g. "[to Comms] ...") does not send anything and the recipient never sees it. Delivery is async and does not end your turn. Continue independent work; do not poll or send ack-only messages. Later updates only if they add something new.',
+      'Send a useful update, question, or result to another of the user\'s bots. You must call this tool to actually deliver it — writing the message in your own reply text (e.g. "[to Comms] ...") does not send anything and the recipient never sees it. Delivery is async and does not end your turn. Continue independent work; do not poll or send ack-only messages. Later updates only if they add something new. Hub directory names are not teammates. Do not use this tool to reach Hub; call hub_send_message.',
     inputSchema: {
       type: "object",
       properties: {
@@ -960,41 +996,6 @@ export const builtinAgentTools: ConnectorTool[] = [
         },
       },
       required: ["message"],
-    },
-  },
-  {
-    name: "hub_send_message",
-    description:
-      "Send a useful update, question, handoff, or request to a Hub (Grok team) member. You must call this tool to deliver — writing TO_HUB: or [to Principal] in reply text does not send. Resolve the member from the Hub directory (name, title, or hubAgentId). Delivery is async and does not end your turn. Do not send ack-only messages. Not for ordinary user chat that stays in this thread.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        target: {
-          type: "string",
-          description:
-            "Hub member name, title fragment, or hubAgentId (UUID). Prefer exact name or id when known.",
-        },
-        hubAgentId: {
-          type: "string",
-          description:
-            "Optional explicit Hub agent id. If set, overrides fuzzy name resolve on target.",
-        },
-        text: {
-          type: "string",
-          description: "Message body to deliver to the Hub member.",
-        },
-        intent: {
-          type: "string",
-          enum: ["request", "result", "question", "status", "fyi"],
-          description: "What the Hub recipient should do. Defaults to request.",
-        },
-        threadKey: {
-          type: "string",
-          description:
-            "Optional continuity key for follow-ups (opaque string; Hub drain may echo).",
-        },
-      },
-      required: ["text"],
     },
   },
   {

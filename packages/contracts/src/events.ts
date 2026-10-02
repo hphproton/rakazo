@@ -272,6 +272,17 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     intent: BotMessageIntent.optional(),
   }),
   z.object({
+    /**
+     * Rakazo → Hub delivery echoed in the sending bot's thread.
+     * The text is the payload that left. This is not a teammate DM.
+     */
+    kind: z.literal("hub_message_sent"),
+    hubAgentId: z.string().min(1),
+    name: z.string(),
+    text: z.string(),
+    intent: BotMessageIntent.optional(),
+  }),
+  z.object({
     /** Delivered into the receiving bot's own chat as the prompt that woke it. */
     kind: z.literal("bot_message_received"),
     fromBotId: Id,
