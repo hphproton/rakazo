@@ -282,6 +282,11 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     returnToMessageId: Id.optional(),
     /** Links in a bot-started chain; absent when a person started it. */
     hop: z.number().int().nonnegative().optional(),
+    /**
+     * Hub delivery. The row stays `role: "user"` like a teammate receipt, and
+     * the transcript shows a Hub marker instead of a human bubble.
+     */
+    origin: z.literal("hub").optional(),
   }),
 ]);
 export type MessageBlock = z.infer<typeof MessageBlock>;

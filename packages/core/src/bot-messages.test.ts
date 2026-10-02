@@ -7,9 +7,12 @@ import {
   botMessageAllowsSilence,
   botMessageHopExhausted,
   buildBotMessageWakePrompt,
+  buildHubMessageWakePrompt,
   clampBotMessage,
   formatBotRosterLines,
+  hubInboundBlock,
   nextBotMessageHop,
+  peerReceiptDisplayName,
   renderBotDirectory,
   renderGroupMembersContext,
   resolveBotAddress,
@@ -388,5 +391,38 @@ describe("inbound wake prompt", () => {
   it("continues independent work after sending useful updates", () => {
     expect(prompt).toContain("Sending does not end your turn");
     expect(prompt).toContain("continue independent work");
+  });
+});
+
+describe("hub inbound", () => {
+  it("reuses the peer receipt and marks the speaker as Hub", () => {
+    const block = hubInboundBlock({
+      fromBotId: "hub-atlas",
+      fromBotName: "Atlas",
+      text: "Check the deploy.",
+    });
+    expect(block).toEqual({
+      kind: "bot_message_received",
+      fromBotId: "hub-atlas",
+      fromBotName: "Atlas",
+      text: "Check the deploy.",
+      origin: "hub",
+      intent: "request",
+    });
+    expect(peerReceiptDisplayName(block)).toBe("Hub · Atlas");
+  });
+
+  it("wakes the bot as a Hub agent and does not tell it to message_bot that id", () => {
+    const prompt = buildHubMessageWakePrompt({
+      from: { id: "hub-atlas", name: "Atlas" },
+      text: "Check <the> deploy.",
+    });
+    expect(prompt).toContain("Hub agent");
+    expect(prompt).toContain("not the user typing");
+    expect(prompt).toContain("hub-atlas");
+    expect(prompt).toContain("&lt;the&gt;");
+    expect(prompt).toContain("Do not use message_bot to answer this Hub agent");
+    expect(prompt).not.toContain("message_bot with bot_id");
+    expect(prompt).toContain("write the result in this thread");
   });
 });

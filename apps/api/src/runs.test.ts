@@ -20,6 +20,25 @@ describe("run activity copy", () => {
     ).toBe("Maya asked: Please check the release workflow.");
   });
 
+  it("labels a Hub delivery with the Hub agent instead of the wake prompt", () => {
+    expect(
+      activityPromptSnippet({
+        trigger: "hub_message",
+        prompt: "[hub] internal wake prompt with routing data",
+        sourceBlocks: [
+          {
+            kind: "bot_message_received",
+            fromBotId: "hub-atlas",
+            fromBotName: "Atlas",
+            origin: "hub",
+            text: "Check the deploy.",
+            intent: "request",
+          },
+        ],
+      }),
+    ).toBe("Hub · Atlas asked: Check the deploy.");
+  });
+
   it("fails closed when an agent message has no valid structured source", () => {
     expect(
       activityPromptSnippet({
