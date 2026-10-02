@@ -1,5 +1,5 @@
 import type { ThreadMessage } from "@rakazo/contracts";
-import { peerConversations } from "@rakazo/core";
+import { hubExchangeForAnchor } from "@rakazo/core";
 import { BotAvatar } from "@rakazo/ui-web";
 import { createRoot } from "react-dom/client";
 import { CollaborationMarker } from "../../src/components/ai/CollaborationMarker";
@@ -14,20 +14,23 @@ function message(id: string, createdAt: string, blocks: ThreadMessage["blocks"])
   return { id, threadId: "thread-1", seq: 1, role: "bot", blocks, createdAt };
 }
 
-const conversation = peerConversations([
-  message("in", "2026-10-02T15:00:00.000Z", [
-    {
-      kind: "bot_message_received",
-      fromBotId: HUB,
-      fromBotName: "Box Principal",
-      origin: "hub",
-      text: inbound,
-    },
-  ]),
-  message("out", "2026-10-02T15:05:00.000Z", [
-    { kind: "hub_message_sent", hubAgentId: HUB, name: "Box Principal", text: outbound },
-  ]),
-])[0];
+const conversation = hubExchangeForAnchor(
+  [
+    message("in", "2026-10-02T15:00:00.000Z", [
+      {
+        kind: "bot_message_received",
+        fromBotId: HUB,
+        fromBotName: "Box Principal",
+        origin: "hub",
+        text: inbound,
+      },
+    ]),
+    message("out", "2026-10-02T15:05:00.000Z", [
+      { kind: "hub_message_sent", hubAgentId: HUB, name: "Box Principal", text: outbound },
+    ]),
+  ],
+  { messageId: "out", peerBotId: HUB },
+);
 
 function ChiefThread() {
   return (
