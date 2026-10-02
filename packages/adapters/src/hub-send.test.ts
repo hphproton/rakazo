@@ -25,6 +25,7 @@ function harness(
     running?: boolean;
     existing?: Record<string, unknown> | null;
     uniqueOnCreate?: boolean;
+    messages?: unknown[];
   } = {},
 ) {
   const create = vi.fn(async (args: { data: Record<string, unknown> }) => {
@@ -45,7 +46,10 @@ function harness(
       create,
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
-    message: { create: messageCreate },
+    message: {
+      create: messageCreate,
+      findMany: vi.fn(async () => options.messages ?? []),
+    },
   };
   return { prisma: prisma as unknown as PrismaClient, create, messageCreate, raw: prisma };
 }
@@ -119,6 +123,96 @@ describe("sendHubMessage", () => {
       idempotencyKey: "hub-send:space-1:user-1:effect-1",
     });
     expect(messageCreate).not.toHaveBeenCalled();
+  });
+
+  it("copies the open topic key onto the echo and leaves threadKey on the outbox row", async () => {
+    const { prisma, create } = harness({
+      messages: [
+        {
+          id: "in-1",
+          threadId: "thread-1",
+          seq: 1,
+          role: "user",
+          createdAt: new Date("2026-10-02T10:00:00.000Z"),
+          blocks: [
+            {
+              kind: "bot_message_received",
+              fromBotId: "f4adcc55-1111-4111-8111-111111111111",
+              fromBotName: "Box Principal",
+              origin: "hub",
+              text: "ping",
+              spaceTopicKey: "burst-1",
+            },
+          ],
+        },
+      ],
+    });
+    const echo = vi.fn();
+    await sendHubMessage(
+      prisma,
+      run,
+      sender,
+      {
+        target: "Box Principal",
+        text: "ack the burst",
+        threadKey: "not-the-join-key",
+      },
+      echo,
+    );
+    expect(create.mock.calls[0]?.[0].data.threadKey).toBe("not-the-join-key");
+    expect(echo).toHaveBeenCalledWith({
+      nonce: hubOutboundEchoNonce("delivery-1"),
+      block: {
+        kind: "hub_message_sent",
+        hubAgentId: "f4adcc55-1111-4111-8111-111111111111",
+        name: "Box Principal",
+        text: "ack the burst",
+        intent: "request",
+        spaceTopicKey: "burst-1",
+      },
+    });
+  });
+
+  it("does not invent a key from threadKey or a topic a person message already closed", async () => {
+    const closed = harness({
+      messages: [
+        {
+          id: "in-1",
+          threadId: "thread-1",
+          seq: 1,
+          role: "user",
+          createdAt: new Date("2026-10-02T10:00:00.000Z"),
+          blocks: [
+            {
+              kind: "bot_message_received",
+              fromBotId: "f4adcc55-1111-4111-8111-111111111111",
+              fromBotName: "Box Principal",
+              origin: "hub",
+              text: "ping",
+              spaceTopicKey: "burst-1",
+            },
+          ],
+        },
+        {
+          id: "person",
+          threadId: "thread-1",
+          seq: 2,
+          role: "user",
+          createdAt: new Date("2026-10-02T10:05:00.000Z"),
+          blocks: [{ kind: "text", text: "a different request" }],
+        },
+      ],
+    });
+    const echo = vi.fn();
+    await sendHubMessage(
+      closed.prisma,
+      run,
+      sender,
+      { target: "Box Principal", text: "later", threadKey: "burst-1" },
+      echo,
+    );
+    expect(echo.mock.calls[0]?.[0].block).not.toHaveProperty("spaceTopicKey");
+    expect(closed.create.mock.calls[0]?.[0].data.threadKey).toBe("burst-1");
   });
 
   it("resolves a unique name", async () => {

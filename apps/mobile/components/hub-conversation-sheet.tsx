@@ -1,17 +1,24 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
-import type { PeerMessage } from "@rakazo/core";
-import { hubExchangeForAnchor, peerTurnSpeaker } from "@rakazo/core";
+import type { HubTranscriptBot, PeerMessage } from "@rakazo/core";
+import {
+  hubExchangeForAnchor,
+  hubTranscriptTitle,
+  messagesForHubTranscript,
+  peerTurnSpeaker,
+  spaceTopicKeyOnAnchor,
+} from "@rakazo/core";
 import { useEffect, useState } from "react";
 import { Modal, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
-import { type MobileMessage, type MobileMessagePage, rpc } from "../lib/api";
+import { type MobileBot, type MobileMessage, type MobileMessagePage, rpc } from "../lib/api";
 import { mobileTokens } from "../lib/appearance";
 import { useI18n } from "../lib/i18n";
 import { useResolvedAppearance } from "../lib/native";
 
 /**
  * View-only Hub topic for the chip that was opened. One burst can include
- * several Hub members. A 1:1 chip still opens only that exchange. Not a
- * sidebar seat and not a composer.
+ * several Hub members. A 1:1 chip still opens only that exchange. A shared
+ * spaceTopicKey also includes the other Rakazo bot. Not a sidebar seat and
+ * not a composer.
  */
 export function HubConversationSheet({
   botId,
@@ -34,6 +41,7 @@ export function HubConversationSheet({
   const [turns, setTurns] = useState<PeerMessage[] | null>(null);
   const [participantCount, setParticipantCount] = useState(1);
   const [peerBotName, setPeerBotName] = useState(initialPeerBotName);
+  const [rakazoBots, setRakazoBots] = useState<readonly HubTranscriptBot[]>([]);
   const [failed, setFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -43,12 +51,14 @@ export function HubConversationSheet({
     setFailed(false);
     setParticipantCount(1);
     setPeerBotName(initialPeerBotName);
-    void loadBotThread(botId, abort.signal)
+    setRakazoBots([]);
+    void loadSpaceTopic(botId, botName, messageId, peerBotId, abort.signal)
       .then((messages) => {
         if (abort.signal.aborted) return;
         const conversation = hubExchangeForAnchor(messages, { messageId, peerBotId });
         setPeerBotName(conversation?.peerBotName ?? initialPeerBotName);
         setParticipantCount(conversation?.participants?.length ?? 1);
+        setRakazoBots(conversation?.rakazoBots ?? []);
         setTurns(conversation?.messages ?? []);
       })
       .catch(() => {
@@ -59,9 +69,9 @@ export function HubConversationSheet({
     return () => {
       abort.abort();
     };
-  }, [botId, initialPeerBotName, messageId, peerBotId, reloadKey]);
+  }, [botId, botName, initialPeerBotName, messageId, peerBotId, reloadKey]);
 
-  const title = `${botName} · ${peerBotName}`;
+  const title = hubTranscriptTitle(botName, { peerBotName, rakazoBots });
 
   return (
     <Modal animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -148,6 +158,41 @@ export function HubConversationSheet({
       </SafeAreaView>
     </Modal>
   );
+}
+
+async function loadSpaceTopic(
+  botId: string,
+  botName: string,
+  messageId: string,
+  peerBotId: string,
+  signal: AbortSignal,
+): Promise<Array<MobileMessage & { botName?: string }>> {
+  const own = (await loadBotThread(botId, signal)).map((message) => ({
+    ...message,
+    botId,
+    botName,
+  }));
+  const anchor = { messageId, peerBotId };
+  if (!spaceTopicKeyOnAnchor(own, anchor)) return own;
+  try {
+    const bots = await rpc<MobileBot[]>("bots/list", {}, { signal });
+    if (signal.aborted) return own;
+    const settled = await Promise.allSettled(
+      bots
+        .filter((bot) => bot.id !== botId)
+        .map(async (bot) => {
+          const page = await loadBotThread(bot.id, signal);
+          return page.map((message) => ({ ...message, botId: bot.id, botName: bot.name }));
+        }),
+    );
+    if (signal.aborted) return own;
+    const siblings = settled.flatMap((result) =>
+      result.status === "fulfilled" ? result.value : [],
+    );
+    return messagesForHubTranscript(own, siblings, anchor);
+  } catch {
+    return own;
+  }
 }
 
 async function loadBotThread(botId: string, signal: AbortSignal): Promise<MobileMessage[]> {

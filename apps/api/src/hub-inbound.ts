@@ -49,6 +49,7 @@ export async function receiveHubMessage(
     text: string;
     intent?: BotMessageIntent;
     clientNonce?: string;
+    spaceTopicKey?: string;
   },
 ) {
   const hubAgentId = input.hubAgentId.trim();
@@ -76,6 +77,7 @@ export async function receiveHubMessage(
     fromBotName: hubAgentName,
     text,
     intent: input.intent,
+    spaceTopicKey: input.spaceTopicKey,
   });
   const prompt = buildHubMessageWakePrompt({
     from: { id: hubAgentId, name: hubAgentName },

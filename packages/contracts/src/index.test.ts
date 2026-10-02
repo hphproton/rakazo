@@ -13,6 +13,7 @@ import {
   ModelConnectInputSchema,
   ModelOAuthBeginSchema,
   normalizeCreateBotProfile,
+  normalizeSpaceTopicKey,
   ProductEventType,
   parseModelContextWindow,
   parseModelMaxImagesPerPrompt,
@@ -20,6 +21,7 @@ import {
   ReorderBotsInput,
   RunActivityRowSchema,
   RunSchema,
+  SpaceTopicKeySchema,
   UpdateBotInput,
   UpdateGroupInput,
   usableModelId,
@@ -354,6 +356,47 @@ describe("contracts", () => {
       intent: "request",
     });
     expect(hubOutbound.kind === "hub_message_sent" && hubOutbound.text).toBe("Ship the notes");
+    expect(
+      MessageBlock.parse({
+        kind: "hub_message_sent",
+        hubAgentId: "hub-atlas",
+        name: "Atlas",
+        text: "Ship the notes",
+        intent: "request",
+        spaceTopicKey: "  burst-1  ",
+        clientNonce: "not-the-key",
+      }),
+    ).toEqual({
+      kind: "hub_message_sent",
+      hubAgentId: "hub-atlas",
+      name: "Atlas",
+      text: "Ship the notes",
+      intent: "request",
+      spaceTopicKey: "burst-1",
+    });
+    expect(
+      MessageBlock.parse({
+        kind: "bot_message_received",
+        fromBotId: "hub-atlas",
+        fromBotName: "Atlas",
+        text: "Check the deploy.",
+        origin: "hub",
+        spaceTopicKey: "burst-1",
+        threadKey: "not-copied",
+      }),
+    ).toEqual({
+      kind: "bot_message_received",
+      fromBotId: "hub-atlas",
+      fromBotName: "Atlas",
+      text: "Check the deploy.",
+      origin: "hub",
+      spaceTopicKey: "burst-1",
+    });
+    expect(SpaceTopicKeySchema.safeParse("a".repeat(200)).success).toBe(true);
+    expect(SpaceTopicKeySchema.safeParse("a".repeat(201)).success).toBe(false);
+    expect(SpaceTopicKeySchema.safeParse("   ").success).toBe(false);
+    expect(normalizeSpaceTopicKey("  burst-1 ")).toBe("burst-1");
+    expect(normalizeSpaceTopicKey("a".repeat(201))).toBeUndefined();
   });
 
   it("caps remote MCP headers", () => {

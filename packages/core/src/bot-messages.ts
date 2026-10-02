@@ -1,8 +1,5 @@
-import {
-  BOT_DESCRIPTION_MAX_LENGTH,
-  type BotMessageIntent,
-  type MessageBlock,
-} from "@rakazo/contracts";
+import type { BotMessageIntent, MessageBlock } from "@rakazo/contracts";
+import { BOT_DESCRIPTION_MAX_LENGTH, normalizeSpaceTopicKey } from "@rakazo/contracts";
 
 export const BOT_MESSAGE_MAX_LENGTH = 8_000;
 
@@ -169,7 +166,9 @@ export function hubInboundBlock(input: {
   fromBotName: string;
   text: string;
   intent?: BotMessageIntent;
+  spaceTopicKey?: string;
 }): Extract<MessageBlock, { kind: "bot_message_received" }> {
+  const spaceTopicKey = normalizeSpaceTopicKey(input.spaceTopicKey);
   return {
     kind: "bot_message_received",
     fromBotId: input.fromBotId,
@@ -177,6 +176,7 @@ export function hubInboundBlock(input: {
     text: input.text,
     origin: "hub",
     intent: input.intent ?? "request",
+    ...(spaceTopicKey ? { spaceTopicKey } : {}),
   };
 }
 

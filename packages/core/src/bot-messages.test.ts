@@ -423,6 +423,25 @@ describe("hub inbound", () => {
     expect(peerReceiptDisplayName(block)).toBe("Hub · Atlas");
   });
 
+  it("copies a space topic key and drops a blank one", () => {
+    expect(
+      hubInboundBlock({
+        fromBotId: "hub-atlas",
+        fromBotName: "Atlas",
+        text: "Check the deploy.",
+        spaceTopicKey: " burst-1 ",
+      }).spaceTopicKey,
+    ).toBe("burst-1");
+    expect(
+      hubInboundBlock({
+        fromBotId: "hub-atlas",
+        fromBotName: "Atlas",
+        text: "Check the deploy.",
+        spaceTopicKey: "   ",
+      }),
+    ).not.toHaveProperty("spaceTopicKey");
+  });
+
   it("wakes the bot as a Hub agent and does not tell it to message_bot that id", () => {
     const prompt = buildHubMessageWakePrompt({
       from: { id: "hub-atlas", name: "Atlas" },

@@ -5,10 +5,14 @@ import {
   hubExchangeForAnchor,
   hubReceiptRowHidden,
   hubTopicChipPlan,
+  hubTranscriptTitle,
+  messagesForHubTranscript,
   peerConversations,
   peerMessagesFrom,
   peerTranscriptForChip,
   peerTurnSpeaker,
+  spaceTopicKeyForHubSend,
+  spaceTopicKeyOnAnchor,
 } from "./peer-messages.js";
 
 function message(id: string, createdAt: string, blocks: ThreadMessage["blocks"]): ThreadMessage {
@@ -809,5 +813,349 @@ describe("hub topic chip collapse", () => {
     expect(plan.families.size).toBe(1);
     expect(plan.families.has(hubChipBlockKey("from-principal", principal, "received"))).toBe(false);
     expect(plan.hiddenMessageIds.has("from-principal")).toBe(false);
+  });
+});
+
+describe("space-wide hub topic", () => {
+  const principal = "box-principal";
+  const lab = "oss-local-lab";
+  const key = "burst-1";
+  const chief = { id: "bot-chief", name: "Chief" };
+  const deputy = { id: "bot-deputy", name: "Deputy" };
+
+  type Row = ThreadMessage & { botName?: string };
+
+  function burst(
+    threadId: string,
+    prefix: string,
+    bot: { id: string; name: string },
+    spaceTopicKey?: string,
+  ): Row[] {
+    const row = (
+      id: string,
+      seq: number,
+      createdAt: string,
+      blocks: ThreadMessage["blocks"],
+      role: ThreadMessage["role"] = "bot",
+    ): Row => ({
+      id: `${prefix}-${id}`,
+      threadId,
+      seq,
+      role,
+      blocks: spaceTopicKey
+        ? blocks.map((block) => ({ ...block, spaceTopicKey }) as ThreadMessage["blocks"][number])
+        : blocks,
+      createdAt,
+      botId: bot.id,
+      botName: bot.name,
+    });
+    return [
+      row("out-p", 1, "2026-10-02T10:00:00.000Z", [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: principal,
+          name: "Box Principal",
+          text: "Check the deploy.",
+        },
+      ]),
+      row("out-l", 2, "2026-10-02T10:01:00.000Z", [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: lab,
+          name: "OSS Local Lab",
+          text: "Check the lab.",
+        },
+      ]),
+      row(
+        "in-p",
+        3,
+        "2026-10-02T10:02:00.000Z",
+        [
+          {
+            kind: "bot_message_received",
+            fromBotId: principal,
+            fromBotName: "Box Principal",
+            origin: "hub",
+            text: "Principal ready.",
+          },
+        ],
+        "user",
+      ),
+      row(
+        "in-l",
+        4,
+        "2026-10-02T10:03:00.000Z",
+        [
+          {
+            kind: "bot_message_received",
+            fromBotId: lab,
+            fromBotName: "OSS Local Lab",
+            origin: "hub",
+            text: "Lab ready.",
+          },
+        ],
+        "user",
+      ),
+    ];
+  }
+
+  function ids(opened: { messages: Array<{ messageId: string }> } | null): string[] {
+    return opened?.messages.map((turn) => turn.messageId) ?? [];
+  }
+
+  it("keeps identical bursts disjoint when no spaceTopicKey is set", () => {
+    const chiefThread = burst("thread-chief", "c", chief);
+    const deputyThread = burst("thread-deputy", "d", deputy);
+    const both = [...chiefThread, ...deputyThread];
+    const chiefPlan = hubTopicChipPlan(chiefThread);
+    const deputyPlan = hubTopicChipPlan(deputyThread);
+    const combined = hubTopicChipPlan(both);
+
+    expect(chiefPlan.families.size).toBeLessThanOrEqual(2);
+    expect(deputyPlan.families.size).toBeLessThanOrEqual(2);
+    expect(chiefPlan.families.size).toBe(2);
+    expect(deputyPlan.families.size).toBe(2);
+    expect(combined.families.size).toBe(4);
+
+    const chiefOpened = hubExchangeForAnchor(both, { messageId: "c-out-p", peerBotId: principal });
+    const deputyOpened = hubExchangeForAnchor(both, { messageId: "d-out-p", peerBotId: principal });
+    const chiefIds = ids(chiefOpened);
+    const deputyIds = ids(deputyOpened);
+    expect(chiefIds).toEqual(["c-out-p", "c-out-l", "c-in-p", "c-in-l"]);
+    expect(deputyIds.filter((id) => chiefIds.includes(id))).toEqual([]);
+    expect(chiefOpened?.rakazoBots).toBeUndefined();
+  });
+
+  it("joins Chief and Deputy only when both bursts carry the same key", () => {
+    const chiefThread = burst("thread-chief", "c", chief, key);
+    const deputyThread = burst("thread-deputy", "d", deputy, key);
+    const both = [...chiefThread, ...deputyThread];
+    expect(hubTopicChipPlan(chiefThread).families.size).toBe(2);
+    expect(hubTopicChipPlan(deputyThread).families.size).toBe(2);
+    expect(hubTopicChipPlan(both).families.size).toBe(4);
+
+    const fromChief = hubExchangeForAnchor(both, { messageId: "c-out-p", peerBotId: principal });
+    const fromDeputy = hubExchangeForAnchor(both, { messageId: "d-in-l", peerBotId: lab });
+    const shared = [
+      "c-out-p",
+      "d-out-p",
+      "c-out-l",
+      "d-out-l",
+      "c-in-p",
+      "d-in-p",
+      "c-in-l",
+      "d-in-l",
+    ];
+    expect(ids(fromChief)).toEqual(shared);
+    expect(ids(fromDeputy)).toEqual(shared);
+    expect(fromChief?.rakazoBots).toEqual([
+      { botId: chief.id, botName: "Chief" },
+      { botId: deputy.id, botName: "Deputy" },
+    ]);
+    expect(hubTranscriptTitle("Chief", fromChief!)).toBe(
+      "Chief, Deputy · Hub · Box Principal, OSS Local Lab",
+    );
+    expect(peerTurnSpeaker(fromChief!.messages[0]!, "Chief", 2)).toBe(
+      "Chief · Hub · Box Principal",
+    );
+    expect(peerTurnSpeaker(fromChief!.messages[1]!, "Chief", 2)).toBe(
+      "Deputy · Hub · Box Principal",
+    );
+    expect(fromDeputy?.messages[4]?.peerBotName).toBe("Hub · Box Principal");
+  });
+
+  it("does not merge separate 1:1 topics unless callers pass the same key", () => {
+    const chiefOnly: Row = {
+      id: "c-only",
+      threadId: "thread-chief",
+      seq: 1,
+      role: "bot",
+      botId: chief.id,
+      botName: chief.name,
+      createdAt: "2026-10-02T10:00:00.000Z",
+      blocks: [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: principal,
+          name: "Box Principal",
+          text: "Check the deploy.",
+        },
+      ],
+    };
+    const deputyOnly: Row = {
+      id: "d-only",
+      threadId: "thread-deputy",
+      seq: 1,
+      role: "bot",
+      botId: deputy.id,
+      botName: deputy.name,
+      createdAt: "2026-10-02T10:00:00.000Z",
+      blocks: [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: lab,
+          name: "OSS Local Lab",
+          text: "Check the lab.",
+        },
+      ],
+    };
+    const apart = hubExchangeForAnchor([chiefOnly, deputyOnly], {
+      messageId: "c-only",
+      peerBotId: principal,
+    });
+    expect(ids(apart)).toEqual(["c-only"]);
+    expect(hubTopicChipPlan([chiefOnly, deputyOnly]).families.size).toBe(0);
+
+    const keyedChief: Row = {
+      ...chiefOnly,
+      blocks: [{ ...chiefOnly.blocks[0]!, spaceTopicKey: key } as ThreadMessage["blocks"][number]],
+    };
+    const keyedDeputy: Row = {
+      ...deputyOnly,
+      blocks: [{ ...deputyOnly.blocks[0]!, spaceTopicKey: key } as ThreadMessage["blocks"][number]],
+    };
+    const joined = hubExchangeForAnchor([keyedChief, keyedDeputy], {
+      messageId: "c-only",
+      peerBotId: principal,
+    });
+    expect(ids(joined)).toEqual(["c-only", "d-only"]);
+    expect(hubTopicChipPlan([keyedChief, keyedDeputy]).families.size).toBe(0);
+    expect(hubTranscriptTitle("Chief", joined!)).toBe(
+      "Chief, Deputy · Hub · Box Principal, OSS Local Lab",
+    );
+  });
+
+  it("does not join a different key, shared text, or an over-long key", () => {
+    const chiefThread = burst("thread-chief", "c", chief, key);
+    const other = burst("thread-deputy", "d", deputy, "burst-2");
+    const opened = hubExchangeForAnchor([...chiefThread, ...other], {
+      messageId: "c-out-p",
+      peerBotId: principal,
+    });
+    expect(ids(opened).some((id) => id.startsWith("d-"))).toBe(false);
+
+    const tooLong = "a".repeat(201);
+    const noisy = burst("thread-deputy", "d", deputy, tooLong);
+    expect(
+      spaceTopicKeyOnAnchor(noisy, { messageId: "d-out-p", peerBotId: principal }),
+    ).toBeUndefined();
+    expect(
+      ids(
+        hubExchangeForAnchor([...chiefThread, ...noisy], {
+          messageId: "c-out-p",
+          peerBotId: principal,
+        }),
+      ).some((id) => id.startsWith("d-")),
+    ).toBe(false);
+    expect(
+      messagesForHubTranscript(chiefThread, other, { messageId: "c-in-p", peerBotId: principal }),
+    ).toEqual(chiefThread);
+  });
+
+  it("closes a topic on that bot's thread only", () => {
+    const chiefThread = burst("thread-chief", "c", chief, key);
+    const deputyThread = burst("thread-deputy", "d", deputy, key);
+    const person: Row = {
+      id: "c-person",
+      threadId: "thread-chief",
+      seq: 5,
+      role: "user",
+      botId: chief.id,
+      botName: chief.name,
+      createdAt: "2026-10-02T11:00:00.000Z",
+      blocks: [{ kind: "text", text: "next" }],
+    };
+    const later: Row = {
+      id: "c-later",
+      threadId: "thread-chief",
+      seq: 6,
+      role: "bot",
+      botId: chief.id,
+      botName: chief.name,
+      createdAt: "2026-10-02T11:01:00.000Z",
+      blocks: [
+        {
+          kind: "hub_message_sent",
+          hubAgentId: principal,
+          name: "Box Principal",
+          text: "a new 1:1",
+        },
+      ],
+    };
+    const messages = [...chiefThread, ...deputyThread, person, later];
+    expect(spaceTopicKeyForHubSend(messages, "thread-chief", principal)).toBeUndefined();
+    expect(spaceTopicKeyForHubSend(messages, "thread-deputy", lab)).toBe(key);
+    expect(spaceTopicKeyForHubSend(deputyThread, "thread-deputy", principal)).toBe(key);
+    const opened = hubExchangeForAnchor(messages, { messageId: "c-out-p", peerBotId: principal });
+    expect(ids(opened)).toContain("d-out-l");
+    expect(ids(opened)).not.toContain("c-later");
+    expect(
+      ids(hubExchangeForAnchor(messages, { messageId: "c-later", peerBotId: principal })),
+    ).toEqual(["c-later"]);
+    expect(hubTopicChipPlan(messages).families.size).toBe(4);
+    expect(hubTopicChipPlan(chiefThread).families.size).toBeLessThanOrEqual(2);
+  });
+
+  it("copies an open key for the answering send and does not invent one after the topic splits", () => {
+    const inbound: Row = {
+      id: "in",
+      threadId: "thread-chief",
+      seq: 1,
+      role: "user",
+      createdAt: "2026-10-02T10:00:00.000Z",
+      blocks: [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "ping",
+          spaceTopicKey: key,
+        },
+      ],
+    };
+    const reply: Row = {
+      id: "reply",
+      threadId: "thread-chief",
+      seq: 2,
+      role: "bot",
+      createdAt: "2026-10-02T10:01:00.000Z",
+      blocks: [{ kind: "text", text: "working" }],
+    };
+    expect(spaceTopicKeyForHubSend([inbound], "thread-chief", principal)).toBe(key);
+    expect(spaceTopicKeyForHubSend([inbound], "thread-chief", lab)).toBe(key);
+    expect(spaceTopicKeyForHubSend([inbound, reply], "thread-chief", principal)).toBe(key);
+    expect(spaceTopicKeyForHubSend([inbound, reply], "thread-chief", lab)).toBeUndefined();
+  });
+
+  it("loads sibling messages for the anchor key and leaves a missing key on one thread", () => {
+    const chiefThread = burst("thread-chief", "c", chief, key);
+    const deputyThread = burst("thread-deputy", "d", deputy, key);
+    const unrelated: Row = {
+      id: "d-other",
+      threadId: "thread-deputy",
+      seq: 9,
+      role: "bot",
+      botId: deputy.id,
+      botName: deputy.name,
+      createdAt: "2026-10-02T12:00:00.000Z",
+      blocks: [
+        { kind: "hub_message_sent", hubAgentId: lab, name: "OSS Local Lab", text: "later lab" },
+      ],
+    };
+    const loaded = messagesForHubTranscript(chiefThread, [...deputyThread, unrelated], {
+      messageId: "c-out-p",
+      peerBotId: principal,
+    });
+    expect(loaded.map((message) => message.id)).toEqual([
+      ...chiefThread.map((message) => message.id),
+      ...deputyThread.map((message) => message.id),
+    ]);
+    expect(
+      messagesForHubTranscript(burst("thread-chief", "c", chief), deputyThread, {
+        messageId: "c-out-p",
+        peerBotId: principal,
+      }).map((message) => message.id),
+    ).toEqual(["c-out-p", "c-out-l", "c-in-p", "c-in-l"]);
   });
 });

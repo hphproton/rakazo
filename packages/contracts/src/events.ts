@@ -92,6 +92,19 @@ const ChartBlock = z
 export const SecretAskPurpose = z.enum(["otp", "password", "api_key"]);
 export type SecretAskPurpose = z.infer<typeof SecretAskPurpose>;
 
+/** Join key for one Hub burst across Rakazo bots. Not a topic table and not clientNonce. */
+export const SPACE_TOPIC_KEY_MAX_LENGTH = 200;
+
+export const SpaceTopicKeySchema = z.string().trim().min(1).max(SPACE_TOPIC_KEY_MAX_LENGTH);
+
+/** Blank and over-long values are absent. Nothing here invents a key. */
+export function normalizeSpaceTopicKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const key = value.trim();
+  if (!key || key.length > SPACE_TOPIC_KEY_MAX_LENGTH) return undefined;
+  return key;
+}
+
 export const MessageBlock = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string() }),
   z.object({
@@ -281,6 +294,11 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     name: z.string(),
     text: z.string(),
     intent: BotMessageIntent.optional(),
+    /**
+     * Optional join across Rakazo bots in one space.
+     * Absent means this echo stays on the sending bot's thread.
+     */
+    spaceTopicKey: SpaceTopicKeySchema.optional(),
   }),
   z.object({
     /** Delivered into the receiving bot's own chat as the prompt that woke it. */
@@ -298,6 +316,11 @@ export const MessageBlock = z.discriminatedUnion("kind", [
      * the transcript shows a Hub marker instead of a human bubble.
      */
     origin: z.literal("hub").optional(),
+    /**
+     * Optional join across Rakazo bots. Read only when `origin` is `hub`.
+     * Absent means this receipt stays on this bot's thread.
+     */
+    spaceTopicKey: SpaceTopicKeySchema.optional(),
   }),
 ]);
 export type MessageBlock = z.infer<typeof MessageBlock>;
