@@ -3872,6 +3872,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   : undefined,
                 deliveryKey: effectKey,
               },
+              async ({ block, nonce }) => {
+                try {
+                  // false: the person is already in this turn; do not badge the thread unread.
+                  await publishMessage(deps, run, "bot", [block], false, nonce);
+                } catch (error) {
+                  if (!isUniqueViolation(error)) throw error;
+                }
+              },
             );
             return finish(sent);
           }
@@ -5383,7 +5391,11 @@ function redactBlocks(blocks: MessageBlock[], secrets: string[]): MessageBlock[]
     if (block.kind === "text") {
       return { kind: "text" as const, text: redactSecrets(block.text, secrets) };
     }
-    if (block.kind === "bot_message_sent" || block.kind === "bot_message_received") {
+    if (
+      block.kind === "bot_message_sent" ||
+      block.kind === "bot_message_received" ||
+      block.kind === "hub_message_sent"
+    ) {
       return { ...block, text: redactSecrets(block.text, secrets) };
     }
     return block;

@@ -5,18 +5,21 @@ import {
   buildHubDirectory,
   DEPRECATED_HUB_INBOUND_PROCEDURES,
   HUB_INBOUND_PROCEDURE,
+  HUB_MIRROR_NOT_A_CHAT,
   HUB_SECTION_NAME,
   HubRosterError,
   type HubRosterRecord,
   hubAgentIdFromSpawnKey,
   hubInboundCall,
   hubInboundCutover,
+  hubMirrorChatRefusal,
   hubRosterColor,
   hubRosterEpoch,
   hubSpawnKey,
   isHubInboundEnvelope,
   planHubRosterSync,
   RAKAZO_TO_HUB_PATH,
+  VISIBLE_ROSTER_BOT_WHERE,
 } from "./hub-directory.js";
 
 function bot(overrides: Partial<HubRosterRecord> & Pick<HubRosterRecord, "id">): HubRosterRecord {
@@ -43,6 +46,15 @@ describe("hub roster identity", () => {
   it("picks a color from the existing bot palette", () => {
     expect(BOT_COLORS).toContain(hubRosterColor("hub-atlas"));
     expect(hubRosterColor("hub-atlas")).toBe(hubRosterColor("hub-atlas"));
+  });
+
+  it("keeps Hub roster rows out of the member list without dropping other bots", () => {
+    expect(VISIBLE_ROSTER_BOT_WHERE).toEqual({
+      OR: [{ spawnKey: null }, { NOT: { spawnKey: { startsWith: "hub:" } } }],
+    });
+    expect(hubMirrorChatRefusal("hub:box-principal")).toBe(HUB_MIRROR_NOT_A_CHAT);
+    expect(hubMirrorChatRefusal("onboarding:first")).toBeUndefined();
+    expect(hubMirrorChatRefusal(null)).toBeUndefined();
   });
 });
 

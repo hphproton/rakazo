@@ -156,6 +156,29 @@ describe("messaging another bot", () => {
     expect(harness.enqueue).not.toHaveBeenCalled();
   });
 
+  it("refuses a Hub roster mirror without starting a run", async () => {
+    const harness = deps({
+      bots: [
+        {
+          id: "bot-hub",
+          name: "Box Principal",
+          title: "Principal",
+          spawnKey: "hub:box-principal",
+          thread: { id: "thread-hub" },
+        },
+      ],
+    });
+    const sent = await messageBot(harness.deps, run, sender, {
+      confirm_name: "Box Principal",
+      message: "hello",
+    });
+    expect(sent).toEqual({
+      ok: false,
+      error: "Hub members are not chats. Use hub_send_message.",
+    });
+    expect(harness.tx.run.create).not.toHaveBeenCalled();
+  });
+
   it("refuses an unknown target without starting a run", async () => {
     const harness = deps();
     const sent = await messageBot(harness.deps, run, sender, {

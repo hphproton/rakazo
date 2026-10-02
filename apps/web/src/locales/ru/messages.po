@@ -3806,6 +3806,10 @@ msgstr "Заголовок"
 msgid "To:"
 msgstr "К:"
 
+#: src/pages/Shell.tsx
+msgid "To Hub · {name}"
+msgstr "В Hub · {name}"
+
 #: src/pages/Artifacts.tsx
 msgid "Today"
 msgstr ""

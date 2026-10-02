@@ -14,6 +14,7 @@ import {
 import {
   ACTIVE_RUN_STATUSES,
   callIdFromClientNonce,
+  hubMirrorChatRefusal,
   isActive,
   isConversationalRun,
   projectMessages,
@@ -611,6 +612,10 @@ export async function sendThreadMessage(
 ) {
   const existing = await replayExistingSend(deps, target.threadId, input.clientNonce);
   if (existing) return existing;
+  if (target.kind === "bot") {
+    const mirror = hubMirrorChatRefusal(target.bot?.spawnKey);
+    if (mirror) throw new ORPCError("BAD_REQUEST", { message: mirror });
+  }
   // Live events carry the call id so a spoken turn joins the call card on first
   // paint; without it the bubble shows loose until a refetch reads the nonce.
   const callId = callIdFromClientNonce(input.clientNonce);

@@ -3806,6 +3806,10 @@ msgstr "역할"
 msgid "To:"
 msgstr "받는 사람:"
 
+#: src/pages/Shell.tsx
+msgid "To Hub · {name}"
+msgstr "Hub · {name}에게"
+
 #: src/pages/Artifacts.tsx
 msgid "Today"
 msgstr ""

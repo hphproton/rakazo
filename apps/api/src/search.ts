@@ -1,5 +1,10 @@
 import type { Actor, MessageBlock, SearchHit } from "@rakazo/contracts";
-import { extractLinksFromText, matchesSearchQuery, snippetAroundMatch } from "@rakazo/core";
+import {
+  extractLinksFromText,
+  matchesSearchQuery,
+  snippetAroundMatch,
+  VISIBLE_ROSTER_BOT_WHERE,
+} from "@rakazo/core";
 import { Prisma, type PrismaClient } from "@rakazo/db";
 
 const SEARCH_LIMIT = 25;
@@ -69,10 +74,15 @@ export async function querySpaceSearch(
       spaceId: actor.spaceId,
       userId: actor.userId,
       archivedAt: null,
-      OR: [
-        { name: { contains: query, mode: "insensitive" } },
-        { title: { contains: query, mode: "insensitive" } },
-        { description: { contains: query, mode: "insensitive" } },
+      AND: [
+        VISIBLE_ROSTER_BOT_WHERE,
+        {
+          OR: [
+            { name: { contains: query, mode: "insensitive" } },
+            { title: { contains: query, mode: "insensitive" } },
+            { description: { contains: query, mode: "insensitive" } },
+          ],
+        },
       ],
     },
     take: CONVERSATION_HIT_LIMIT,
@@ -239,6 +249,7 @@ export async function querySpaceSearch(
     WHERE t."spaceId" = ${actor.spaceId}
       AND t."userId" = ${actor.userId}
       AND b."archivedAt" IS NULL
+      AND (b."spawnKey" IS NULL OR b."spawnKey" NOT LIKE 'hub:%')
       AND m.blocks::text ILIKE ${pattern}
     ORDER BY m."createdAt" DESC
     LIMIT ${SEARCH_LIMIT}

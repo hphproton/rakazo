@@ -118,6 +118,7 @@ export function blocksToAgentHistoryText(blocks: MessageBlock[]): string {
         return `[from ${peerReceiptDisplayName(block)}] ${block.text}`;
       }
       if (block.kind === "bot_message_sent") return `[to ${block.toBotName}] ${block.text}`;
+      if (block.kind === "hub_message_sent") return `[to Hub · ${block.name}] ${block.text}`;
       if (block.kind === "handoff") {
         return `[handoff ${block.fromBotId} -> ${block.toBotId}] ${block.text}`;
       }
