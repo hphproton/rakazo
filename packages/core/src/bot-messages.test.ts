@@ -39,6 +39,16 @@ describe("bot message silence", () => {
   it("surfaces an FYI when it replies to a delegated request", () => {
     expect(botMessageAllowsSilence("fyi", true)).toBe(false);
     expect(botMessageAllowsSilence("fyi")).toBe(true);
+    expect(botMessageAllowsSilence("request")).toBe(false);
+  });
+
+  it("lets a Hub request or FYI finish quietly and still relays results", () => {
+    expect(botMessageAllowsSilence("request", false, "hub")).toBe(true);
+    expect(botMessageAllowsSilence("fyi", true, "hub")).toBe(true);
+    expect(botMessageAllowsSilence(undefined, false, "hub")).toBe(true);
+    expect(botMessageAllowsSilence("question", false, "hub")).toBe(false);
+    expect(botMessageAllowsSilence("result", false, "hub")).toBe(false);
+    expect(botMessageAllowsSilence("status", false, "hub")).toBe(false);
   });
 });
 
@@ -424,5 +434,28 @@ describe("hub inbound", () => {
     expect(prompt).toContain("Do not use message_bot to answer this Hub agent");
     expect(prompt).not.toContain("message_bot with bot_id");
     expect(prompt).toContain("write the result in this thread");
+    expect(prompt).not.toContain("Your written reply in this thread is the response");
+  });
+
+  it("treats the Hub chip as receipt and refuses a bare acknowledgement", () => {
+    const prompt = buildHubMessageWakePrompt({
+      from: { id: "hub-atlas", name: "Atlas" },
+      text: "Please ACK.",
+    });
+    expect(prompt).toContain("Hub chip already records");
+    expect(prompt).toContain('"OK."');
+    expect(prompt).toContain('"ACK"');
+    expect(prompt).toContain("If a bare acknowledgement is all you would add, stay silent");
+  });
+
+  it("still requires a Hub result to be relayed in substance", () => {
+    const prompt = buildHubMessageWakePrompt({
+      from: { id: "hub-atlas", name: "Atlas" },
+      text: "Deploy is green.",
+      intent: "result",
+    });
+    expect(prompt).toContain("actual substance");
+    expect(prompt).toContain("Do not stay silent");
+    expect(prompt).not.toContain("If a bare acknowledgement is all you would add, stay silent");
   });
 });
