@@ -379,7 +379,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "hub_send_message",
     description:
-      "Send a useful update, question, handoff, or request to a Hub (Grok team) member. You must call this tool to deliver — writing TO_HUB: or [to Principal] in reply text does not send. Resolve the member from the Hub directory (name, title, or hubAgentId). Delivery is async and does not end your turn. Do not send ack-only messages. Not for ordinary user chat that stays in this thread.",
+      "Send a useful update, question, handoff, or request to a Hub (Grok team) member. You must call this tool to deliver — writing TO_HUB: or [to Principal] in reply text does not send. Resolve the member from the Hub directory (name, title, or hubAgentId). Delivery is async and does not end your turn. Do not send ack-only messages. Not for ordinary user chat that stays in this thread. Calls for different Hub members before you write a reply share one topic.",
     inputSchema: {
       type: "object",
       properties: {

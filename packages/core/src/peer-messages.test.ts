@@ -5,6 +5,7 @@ import {
   peerConversations,
   peerMessagesFrom,
   peerTranscriptForChip,
+  peerTurnSpeaker,
 } from "./peer-messages.js";
 
 function message(id: string, createdAt: string, blocks: ThreadMessage["blocks"]): ThreadMessage {
@@ -227,23 +228,32 @@ describe("hub chip transcripts", () => {
     ).toBeNull();
   });
 
-  it("keeps distinct Hub members as distinct topics in one stretch", () => {
+  it("groups Hub members from one burst into one topic", () => {
     const quill = hubRow("quill", 5, "2026-10-02T12:00:00.000Z", [
       { kind: "hub_message_sent", hubAgentId: "hub-quill", name: "Quill", text: "quill only" },
     ]);
-    const atlas = hubExchangeForAnchor([...thread, quill], {
+    const fromAtlas = hubExchangeForAnchor([...thread, quill], {
       messageId: "out-smoke",
       peerBotId: HUB,
     });
-    const other = hubExchangeForAnchor([...thread, quill], {
+    const fromQuill = hubExchangeForAnchor([...thread, quill], {
       messageId: "quill",
       peerBotId: "hub-quill",
     });
-    expect(atlas?.messages.map((turn) => turn.text)).toEqual([
-      "smoke inbound",
-      "NATIVE_HUB_SEND_SMOKE",
+    const shared = ["quill only", "smoke inbound", "NATIVE_HUB_SEND_SMOKE"];
+    expect(fromAtlas?.messages.map((turn) => turn.text)).toEqual(shared);
+    expect(fromQuill?.messages.map((turn) => turn.text)).toEqual(shared);
+    expect(fromQuill?.peerBotName).toBe("Hub · Quill, Atlas");
+    expect(fromQuill?.participants?.map((participant) => participant.peerBotId)).toEqual([
+      "hub-quill",
+      HUB,
     ]);
-    expect(other?.messages.map((turn) => turn.text)).toEqual(["quill only"]);
+    const older = hubExchangeForAnchor([...thread, quill], {
+      messageId: "in-old",
+      peerBotId: HUB,
+    });
+    expect(older?.messages.map((turn) => turn.text)).toEqual(["older inbound", "older outbound"]);
+    expect(older?.participants).toBeUndefined();
   });
 
   it("keeps the answering outbound with its inbound across the bot reply", () => {
@@ -329,6 +339,236 @@ describe("hub chip transcripts", () => {
         (turn) => turn.text,
       ),
     ).toEqual(["from scout"]);
+  });
+
+  it("opens one topic for a fan-out and both Hub replies", () => {
+    const principal = "box-principal";
+    const lab = "oss-local-lab";
+    const prior = hubOutbound("prior", 1, "2026-10-02T09:00:00.000Z", "earlier 1:1");
+    const ask = person("ask", 2, "2026-10-02T10:00:00.000Z", "Ask Principal and Lab");
+    const toPrincipal = hubRow("to-principal", 3, "2026-10-02T10:01:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: principal,
+        name: "Box Principal",
+        text: "Check the deploy.",
+        intent: "request",
+      },
+    ]);
+    const toLab = hubRow("to-lab", 4, "2026-10-02T10:01:01.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: lab,
+        name: "OSS Local Lab",
+        text: "Check the lab.",
+        intent: "request",
+      },
+    ]);
+    const asked = hubRow("asked", 5, "2026-10-02T10:01:02.000Z", [
+      { kind: "text", text: "Asked both." },
+    ]);
+    const fromPrincipal = hubRow(
+      "from-principal",
+      6,
+      "2026-10-02T10:02:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const fromLab = hubRow(
+      "from-lab",
+      7,
+      "2026-10-02T10:03:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: lab,
+          fromBotName: "OSS Local Lab",
+          origin: "hub",
+          text: "Lab ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const thread = [fromLab, ask, toLab, prior, fromPrincipal, asked, toPrincipal];
+    const texts = ["Check the deploy.", "Check the lab.", "Principal ready.", "Lab ready."];
+    const fromSend = hubExchangeForAnchor(thread, {
+      messageId: "to-principal",
+      peerBotId: principal,
+    });
+    const fromReply = hubExchangeForAnchor(thread, {
+      messageId: "from-lab",
+      peerBotId: lab,
+    });
+    expect(fromSend?.messages.map((turn) => turn.text)).toEqual(texts);
+    expect(
+      fromReply?.messages.map((turn) => [turn.direction, turn.peerBotName, turn.text]),
+    ).toEqual([
+      ["sent", "Hub · Box Principal", "Check the deploy."],
+      ["sent", "Hub · OSS Local Lab", "Check the lab."],
+      ["received", "Hub · Box Principal", "Principal ready."],
+      ["received", "Hub · OSS Local Lab", "Lab ready."],
+    ]);
+    expect(fromReply?.messages.map((turn) => turn.text)).toEqual(
+      fromSend?.messages.map((t) => t.text),
+    );
+    expect(fromReply?.peerBotName).toBe("Hub · Box Principal, OSS Local Lab");
+    expect(fromReply?.participants?.map((participant) => participant.peerBotId)).toEqual([
+      principal,
+      lab,
+    ]);
+    expect(fromReply?.messages.map((turn) => turn.text)).not.toContain("Asked both.");
+    expect(
+      hubExchangeForAnchor(thread, { messageId: "prior", peerBotId: HUB })?.messages.map(
+        (turn) => turn.text,
+      ),
+    ).toEqual(["earlier 1:1"]);
+    expect(peerTurnSpeaker(fromReply!.messages[0]!, "Chief", 2)).toBe(
+      "Chief · Hub · Box Principal",
+    );
+    expect(peerTurnSpeaker(fromReply!.messages[2]!, "Chief", 2)).toBe("Hub · Box Principal");
+    expect(peerTurnSpeaker(fromReply!.messages[0]!, "Chief", 1)).toBe("Chief");
+  });
+
+  it("groups a burst of Hub replies that arrive before the bot writes back", () => {
+    const principal = "box-principal";
+    const lab = "oss-local-lab";
+    const fromPrincipal = hubRow(
+      "from-principal",
+      2,
+      "2026-10-02T10:02:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const fromLab = hubRow(
+      "from-lab",
+      3,
+      "2026-10-02T10:03:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: lab,
+          fromBotName: "OSS Local Lab",
+          origin: "hub",
+          text: "Lab ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const opened = hubExchangeForAnchor([fromLab, fromPrincipal], {
+      messageId: "from-principal",
+      peerBotId: principal,
+    });
+    expect(opened?.messages.map((turn) => turn.text)).toEqual(["Principal ready.", "Lab ready."]);
+    expect(opened?.participants).toHaveLength(2);
+  });
+
+  it("starts a fresh topic once a shared round is complete and the bot replies", () => {
+    const principal = "box-principal";
+    const lab = "oss-local-lab";
+    const toPrincipal = hubRow("to-principal", 2, "2026-10-02T10:01:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: principal,
+        name: "Box Principal",
+        text: "Check the deploy.",
+      },
+    ]);
+    const toLab = hubRow("to-lab", 3, "2026-10-02T10:01:01.000Z", [
+      { kind: "hub_message_sent", hubAgentId: lab, name: "OSS Local Lab", text: "Check the lab." },
+    ]);
+    const asked = hubRow("asked", 4, "2026-10-02T10:01:02.000Z", [
+      { kind: "text", text: "Asked both." },
+    ]);
+    const fromPrincipal = hubRow(
+      "from-principal",
+      5,
+      "2026-10-02T10:02:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const fromLab = hubRow(
+      "from-lab",
+      6,
+      "2026-10-02T10:03:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: lab,
+          fromBotName: "OSS Local Lab",
+          origin: "hub",
+          text: "Lab ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const done = hubRow("done", 7, "2026-10-02T10:04:00.000Z", [
+      { kind: "text", text: "Both answered." },
+    ]);
+    const later = hubRow("later", 8, "2026-10-02T10:05:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: principal,
+        name: "Box Principal",
+        text: "Follow up.",
+      },
+    ]);
+    const messages = [later, done, fromLab, toPrincipal, fromPrincipal, asked, toLab];
+    expect(
+      hubExchangeForAnchor(messages, { messageId: "from-lab", peerBotId: lab })?.messages.map(
+        (turn) => turn.text,
+      ),
+    ).toEqual(["Check the deploy.", "Check the lab.", "Principal ready.", "Lab ready."]);
+    expect(
+      hubExchangeForAnchor(messages, { messageId: "later", peerBotId: principal })?.messages.map(
+        (turn) => turn.text,
+      ),
+    ).toEqual(["Follow up."]);
+  });
+
+  it("keeps a Hub member who starts after the bot has replied on their own topic", () => {
+    const atlas = hubOutbound("atlas", 2, "2026-10-02T10:00:00.000Z", "ask atlas");
+    const reply = hubRow("reply", 3, "2026-10-02T10:01:00.000Z", [
+      { kind: "text", text: "Asked Atlas." },
+    ]);
+    const quill = hubRow("quill", 4, "2026-10-02T10:02:00.000Z", [
+      { kind: "hub_message_sent", hubAgentId: "hub-quill", name: "Quill", text: "ask quill" },
+    ]);
+    const atlasReply = hubInbound("atlas-in", 5, "2026-10-02T10:03:00.000Z", "atlas answer");
+    const opened = [quill, reply, atlasReply, atlas];
+    expect(
+      hubExchangeForAnchor(opened, { messageId: "atlas", peerBotId: HUB })?.messages.map(
+        (turn) => turn.text,
+      ),
+    ).toEqual(["ask atlas", "atlas answer"]);
+    expect(
+      hubExchangeForAnchor(opened, { messageId: "quill", peerBotId: "hub-quill" })?.messages.map(
+        (turn) => turn.text,
+      ),
+    ).toEqual(["ask quill"]);
   });
 
   it("keeps a teammate chip on one conversation per bot", () => {
