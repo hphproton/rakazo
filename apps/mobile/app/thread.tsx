@@ -306,6 +306,7 @@ function Thread() {
   const [hubConversation, setHubConversation] = useState<{
     peerBotId: string;
     peerBotName: string;
+    messageId: string;
   } | null>(null);
   const [threadScrollState, setThreadScrollState] = useState<ThreadScrollState>(() =>
     scrollBehavior.current.state(),
@@ -2296,6 +2297,7 @@ function Thread() {
           botName={displayName || t("Bot")}
           peerBotId={hubConversation.peerBotId}
           peerBotName={hubConversation.peerBotName}
+          messageId={hubConversation.messageId}
           onClose={() => setHubConversation(null)}
         />
       ) : null}
@@ -2639,7 +2641,11 @@ const MessageBubble = memo(function MessageBubble({
   canAnswer: boolean;
   onAnswer: (message: MobileMessage, answer: string, username?: string) => Promise<void>;
   onOpenBot: (botId: string, name: string) => void;
-  onOpenHubConversation: (peer: { peerBotId: string; peerBotName: string }) => void;
+  onOpenHubConversation: (peer: {
+    peerBotId: string;
+    peerBotName: string;
+    messageId: string;
+  }) => void;
   onPreviewMarkdown: (target: MarkdownArtifactPreviewTarget) => void;
   actionProps: MessageActionProps;
 }) {
@@ -2724,6 +2730,7 @@ const MessageBubble = memo(function MessageBubble({
           onOpenHubConversation({
             peerBotId: hubOutbound.hubAgentId,
             peerBotName: hubMemberLabel(name),
+            messageId: message.id,
           })
         }
       />
@@ -2762,6 +2769,7 @@ const MessageBubble = memo(function MessageBubble({
                 onOpenHubConversation({
                   peerBotId,
                   peerBotName: peer,
+                  messageId: message.id,
                 })
             : undefined
         }
