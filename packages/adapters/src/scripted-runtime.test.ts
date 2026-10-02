@@ -2,6 +2,50 @@ import type { AgentRuntimeEvent } from "@rakazo/adapter-kit";
 import { describe, expect, it } from "vitest";
 import { inferScript, ScriptedAgentRuntime } from "./scripted-runtime.js";
 
+describe("inferScript hub_send_message", () => {
+  it("messages a Hub member by name without a TO_HUB prefix", () => {
+    expect(inferScript("message the hub member named Principal saying ship-the-notes")).toEqual([
+      {
+        assistant: "messaging that Hub member now.",
+        toolCalls: [
+          {
+            name: "hub_send_message",
+            args: {
+              target: "Principal",
+              text: "ship-the-notes",
+              intent: "request",
+            },
+          },
+        ],
+        complete: true,
+      },
+    ]);
+    expect(inferScript('message the hub member named "Box Principal" saying handoff')).toEqual([
+      {
+        assistant: "messaging that Hub member now.",
+        toolCalls: [
+          {
+            name: "hub_send_message",
+            args: {
+              target: "Box Principal",
+              text: "handoff",
+              intent: "request",
+            },
+          },
+        ],
+        complete: true,
+      },
+    ]);
+  });
+
+  it("does not treat a TO_HUB prefix as the send path", () => {
+    const script = inferScript("TO_HUB: hello principal");
+    expect(
+      script?.some((turn) => turn.toolCalls?.some((call) => call.name === "hub_send_message")),
+    ).toBe(false);
+  });
+});
+
 describe("inferScript message_bot", () => {
   const messageBotScript = (confirmName: string, message: string) => [
     {

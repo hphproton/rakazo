@@ -60,6 +60,8 @@ import {
   expandSkillReferencesInPrompt,
   formatSkillRunPrompt,
   formatSkillsCatalogInstruction,
+  HUB_SPAWN_KEY_PREFIX,
+  hubAgentIdFromSpawnKey,
   humanizeToolName,
   inferAttachmentMimeType,
   isCallClientNonce,
@@ -75,6 +77,7 @@ import {
   promptInvokesSkill,
   redactSecrets,
   renderBotDirectory,
+  renderHubDirectory,
   resolveActionApprovalDetail,
   sandboxCommandTimeoutMs,
   type ToolCallStreak,
@@ -229,6 +232,7 @@ import {
   selectCompactedHistory,
   shouldEnqueueCompaction,
 } from "./history-compaction.js";
+import { sendHubMessage } from "./hub-send.js";
 import {
   assertConnectorToolArgs,
   CATALOG_EXECUTE,
@@ -3853,6 +3857,24 @@ export function createRunExecutor(deps: ExecutorDeps) {
             if (!sent.ok) return finish({ error: sent.error });
             return finish({ ok: true, botId: sent.botId, name: sent.name, note: sent.note });
           }
+          if (name === "hub_send_message") {
+            const sent = await sendHubMessage(
+              deps.prisma,
+              run,
+              { id: bot.id, name: bot.name },
+              {
+                hubAgentId: args.hubAgentId ? String(args.hubAgentId) : undefined,
+                target: args.target ? String(args.target) : undefined,
+                text: redactSecrets(String(args.text ?? ""), runSecrets),
+                intent: args.intent ? String(args.intent) : undefined,
+                threadKey: args.threadKey
+                  ? redactSecrets(String(args.threadKey), runSecrets)
+                  : undefined,
+                deliveryKey: effectKey,
+              },
+            );
+            return finish(sent);
+          }
           if (name === "connect_agent") {
             const result = await connectAgent(
               deps,
@@ -4047,29 +4069,60 @@ export function createRunExecutor(deps: ExecutorDeps) {
           : history;
         const runtimeHistory = [...historicalContext, ...historyWithImages];
         // Without a roster a bot only knows the bots it spawned itself.
+        // Hub mirrors (spawnKey hub:) are directory rows, not teammates.
+        // NOT LIKE drops SQL NULL, so null spawn keys are selected on their own branch.
+        const teammateBots = thread.groupId
+          ? []
+          : await deps.prisma.bot.findMany({
+              where: {
+                spaceId: run.spaceId,
+                userId: run.userId,
+                archivedAt: null,
+                id: { not: bot.id },
+                thread: { isNot: null },
+                OR: [
+                  { spawnKey: null },
+                  { NOT: { spawnKey: { startsWith: HUB_SPAWN_KEY_PREFIX } } },
+                ],
+              },
+              select: { id: true, name: true, title: true, description: true },
+              orderBy: { createdAt: "asc" },
+              take: BOT_DIRECTORY_LIMIT,
+            });
         const botDirectory = thread.groupId
           ? undefined
           : renderBotDirectory(
-              (
-                await deps.prisma.bot.findMany({
-                  where: {
-                    spaceId: run.spaceId,
-                    userId: run.userId,
-                    archivedAt: null,
-                    id: { not: bot.id },
-                    thread: { isNot: null },
-                  },
-                  select: { id: true, name: true, title: true, description: true },
-                  orderBy: { createdAt: "asc" },
-                  take: BOT_DIRECTORY_LIMIT,
-                })
-              ).map((peer) => ({
+              teammateBots.map((peer) => ({
                 id: peer.id,
                 name: peer.name,
                 title: peer.title,
                 description: peer.description,
               })),
             );
+        const hubRosterBots = await deps.prisma.bot.findMany({
+          where: {
+            spaceId: run.spaceId,
+            userId: run.userId,
+            spawnKey: { startsWith: HUB_SPAWN_KEY_PREFIX },
+          },
+          select: { name: true, title: true, archivedAt: true, spawnKey: true },
+          orderBy: { name: "asc" },
+          take: 200,
+        });
+        const hubDirectory = renderHubDirectory(
+          hubRosterBots.flatMap((row) => {
+            const hubAgentId = hubAgentIdFromSpawnKey(row.spawnKey);
+            if (!hubAgentId) return [];
+            return [
+              {
+                hubAgentId,
+                name: row.name,
+                title: row.title,
+                archived: row.archivedAt !== null,
+              },
+            ];
+          }),
+        );
 
         if (heldForTakeover) {
           const releasedCheckpoint = takeoverCheckpointOf(
@@ -4129,6 +4182,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 workspaceInstruction,
                 agentEnvironmentInstruction,
                 botDirectory,
+                hubDirectory,
                 pluginLine,
                 agentSkillsLine,
                 taughtSkillsLine,
@@ -5039,6 +5093,7 @@ export function userTurnInstructions(parts: {
   workspaceInstruction: string;
   agentEnvironmentInstruction: string | undefined;
   botDirectory: string | undefined;
+  hubDirectory?: string;
   pluginLine: string | undefined;
   agentSkillsLine: string | undefined;
   taughtSkillsLine: string | undefined;
@@ -5063,6 +5118,7 @@ export function userTurnInstructions(parts: {
     "update_bot updates this bot's own name (chat header / list label), title, description, avatar, and notifyOnFinish. When the user asks you to rename yourself, change your title or description, change your profile picture, or turn finish notifications on or off, call update_bot — do not claim you changed them without the tool. Pass color for a hex or encoded shape, artifact_id for an image in this space, or use_attached_image when they attached a picture on this message.",
     "run_subagent is a short helper inside this turn only. It is not a bot, has no thread, and does not show in the list. Use it for parallel work you will summarize here.",
     parts.botDirectory,
+    parts.hubDirectory,
     "archive_bot safely archives a bot this bot created, and only that bot. Use it when the user asks to remove that bot or when it is finished and unused. The user can restore it or permanently delete it later. confirm_name must exactly match its name.",
     parts.pluginLine,
     parts.agentSkillsLine,

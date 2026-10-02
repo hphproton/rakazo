@@ -83,7 +83,14 @@ import {
   VoiceStatusSchema,
 } from "./domain.js";
 import { BotMessageIntent, ComputerCommandSchema, ProductEventSchema } from "./events.js";
-import { HubDirectorySchema, HubSyncMembersInput, HubSyncResultSchema } from "./hub-directory.js";
+import {
+  HubAckOutboundInput,
+  HubAckOutboundResultSchema,
+  HubDirectorySchema,
+  HubOutboxResultSchema,
+  HubSyncMembersInput,
+  HubSyncResultSchema,
+} from "./hub-directory.js";
 import { Id, IsoDate } from "./ids.js";
 import {
   IntegrationProviderConfigSchema,
@@ -299,6 +306,10 @@ export const appContract = {
     syncMembers: oc.input(HubSyncMembersInput).output(HubSyncResultSchema),
     /** Signed-in read of Hub members and workspace bots, with a content epoch. */
     directory: oc.output(HubDirectorySchema),
+    /** Pending HUB-INBOX rows for the host mesh. Does not require TO_HUB:. */
+    outbox: oc.output(HubOutboxResultSchema),
+    /** Mark drained HUB-INBOX rows done. Ids outside this space are ignored. */
+    ackOutbound: oc.input(HubAckOutboundInput).output(HubAckOutboundResultSchema),
   },
   threads: {
     head: oc.input(threadTarget).output(
