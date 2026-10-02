@@ -32,6 +32,7 @@ import {
   type MessageReaction,
   normalizeCreateBotProfile,
 } from "@rakazo/contracts";
+import type { HubFamilyChip, HubTopicChipPlan } from "@rakazo/core";
 import {
   attachmentsForThread,
   buildComposerMentionOptions,
@@ -40,7 +41,10 @@ import {
   cronFromPreset,
   groupBotsForSidebar,
   groupVoiceChats,
+  hubChipBlockKey,
   hubMemberLabel,
+  hubReceiptRowHidden,
+  hubTopicChipPlan,
   inferAttachmentMimeType,
   isActive,
   isCompactCollaborationReceipt,
@@ -1811,6 +1815,10 @@ export function ShellPage() {
     () => userVisibleMessages(activeSnapshot?.messages ?? [], { includePeerReceipts: true }),
     [activeSnapshot?.messages],
   );
+  const hubChipPlan = useMemo(
+    () => hubTopicChipPlan(activeSnapshot?.messages ?? []),
+    [activeSnapshot?.messages],
+  );
   const transcriptArtifactTarget = useMemo<ArtifactTarget>(
     () => (inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }),
     [active?.id, groupId, inGroup],
@@ -3562,6 +3570,7 @@ export function ShellPage() {
             onScrollRequestHandled={clearScrollRequest}
             artifactTarget={transcriptArtifactTarget}
             messages={transcriptMessages}
+            hubChipPlan={hubChipPlan}
             showToolActivity={showToolActivity}
             olderCursor={activeSnapshot?.olderCursor ?? null}
             loadingOlder={loadingOlder}
@@ -4638,6 +4647,7 @@ const Transcript = memo(function Transcript({
   onScrollRequestHandled,
   artifactTarget,
   messages,
+  hubChipPlan,
   showToolActivity,
   olderCursor,
   loadingOlder,
@@ -4667,6 +4677,7 @@ const Transcript = memo(function Transcript({
   onScrollRequestHandled: () => void;
   artifactTarget: ArtifactTarget;
   messages: ThreadMessage[];
+  hubChipPlan: HubTopicChipPlan;
   showToolActivity: boolean;
   olderCursor: number | null;
   loadingOlder: boolean;
@@ -4959,6 +4970,7 @@ const Transcript = memo(function Transcript({
           }
           const message = item.message;
           if (!messageHasVisibleBlocks(message.blocks, showToolActivity)) return null;
+          if (hubReceiptRowHidden(hubChipPlan, message)) return null;
           const peerReceipt = isCompactCollaborationReceipt(message.blocks);
           const messageReactions = reactionView.reactions.get(message.id);
           return (
@@ -5004,6 +5016,7 @@ const Transcript = memo(function Transcript({
                   <MessageView
                     artifactTarget={artifactTarget}
                     message={message}
+                    hubChipPlan={hubChipPlan}
                     canAnswer={message.id === answerableAskMessageId}
                     onOpenBot={onOpenBot}
                     onOpenPeerMessages={onOpenPeerMessages}
@@ -6165,6 +6178,7 @@ const MessageView = memo(function MessageView({
   artifactTarget,
   canAnswer,
   message,
+  hubChipPlan,
   onAnswer,
   onOpenBot,
   onOpenPeerMessages,
@@ -6186,6 +6200,7 @@ const MessageView = memo(function MessageView({
   artifactTarget: ArtifactTarget;
   canAnswer: boolean;
   message: ThreadMessage;
+  hubChipPlan: HubTopicChipPlan;
   onAnswer: (message: ThreadMessage, text: string, username?: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
   onOpenPeerMessages: (peer: OpenPeerTranscript) => void;
@@ -6325,6 +6340,33 @@ const MessageView = memo(function MessageView({
       </>
     );
   }
+  const drawnHubFamilies = new Set<string>();
+  const hubFamilyMarker = (family: HubFamilyChip, index: number) => {
+    const markerKey = hubChipBlockKey(family.messageId, family.peerBotId, family.direction);
+    if (drawnHubFamilies.has(markerKey)) return null;
+    drawnHubFamilies.add(markerKey);
+    const summary = family.names.join(", ");
+    const name = summary;
+    const peer = hubMemberLabel(summary);
+    const label = family.direction === "sent" ? t`To Hub · ${name}` : t`Message from ${peer}`;
+    return (
+      <CollaborationMarker
+        key={index}
+        ariaLabel={label}
+        color={peerBot(family.peerBotId)?.color ?? FALLBACK_BOT_COLOR}
+        identity={family.peerBotId}
+        label={label}
+        onClick={() =>
+          onOpenPeerMessages({
+            peerBotId: family.peerBotId,
+            peerBotName: family.peerBotName,
+            messageId: family.messageId,
+            transcriptScope: "hub",
+          })
+        }
+      />
+    );
+  };
   return (
     <>
       {messageContext}
@@ -6357,6 +6399,10 @@ const MessageView = memo(function MessageView({
           );
         }
         if (block.kind === "hub_message_sent") {
+          const blockKey = hubChipBlockKey(message.id, block.hubAgentId, "sent");
+          const family = hubChipPlan.families.get(blockKey);
+          if (family) return hubFamilyMarker(family, i);
+          if (hubChipPlan.omittedBlockKeys.has(blockKey)) return null;
           const name = block.name;
           const label = t`To Hub · ${name}`;
           return (
@@ -6381,8 +6427,14 @@ const MessageView = memo(function MessageView({
           const sent = block.kind === "bot_message_sent";
           const peer = peerReceiptDisplayName(block);
           const peerBotId = sent ? block.toBotId : block.fromBotId;
-          const label = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
           const hubPeer = block.kind === "bot_message_received" && block.origin === "hub";
+          if (hubPeer) {
+            const blockKey = hubChipBlockKey(message.id, peerBotId, "received");
+            const family = hubChipPlan.families.get(blockKey);
+            if (family) return hubFamilyMarker(family, i);
+            if (hubChipPlan.omittedBlockKeys.has(blockKey)) return null;
+          }
+          const label = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
           return (
             <CollaborationMarker
               key={i}

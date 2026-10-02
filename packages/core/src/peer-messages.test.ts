@@ -1,7 +1,10 @@
 import type { ThreadMessage } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  hubChipBlockKey,
   hubExchangeForAnchor,
+  hubReceiptRowHidden,
+  hubTopicChipPlan,
   peerConversations,
   peerMessagesFrom,
   peerTranscriptForChip,
@@ -577,5 +580,234 @@ describe("hub chip transcripts", () => {
       { scope: "peer", messageId: "m_1", peerBotId: "b_2" },
     );
     expect(opened?.messages.map((turn) => turn.text)).toEqual(["chart q3", "done"]);
+  });
+});
+
+describe("hub topic chip collapse", () => {
+  const principal = "box-principal";
+  const lab = "oss-local-lab";
+
+  function multiPartyThread() {
+    const prior = hubOutbound("prior", 1, "2026-10-02T09:00:00.000Z", "earlier 1:1");
+    const priorReply = hubInbound("prior-reply", 2, "2026-10-02T09:01:00.000Z", "earlier reply");
+    const ask = person("ask", 3, "2026-10-02T10:00:00.000Z", "Ask Principal and Lab");
+    const toPrincipal = hubRow("to-principal", 4, "2026-10-02T10:01:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: principal,
+        name: "Box Principal",
+        text: "Check the deploy.",
+      },
+    ]);
+    const toLab = hubRow("to-lab", 5, "2026-10-02T10:01:01.000Z", [
+      { kind: "hub_message_sent", hubAgentId: lab, name: "OSS Local Lab", text: "Check the lab." },
+    ]);
+    const asked = hubRow("asked", 6, "2026-10-02T10:01:02.000Z", [
+      { kind: "text", text: "Asked both." },
+    ]);
+    const fromPrincipal = hubRow(
+      "from-principal",
+      7,
+      "2026-10-02T10:02:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const fromLab = hubRow(
+      "from-lab",
+      8,
+      "2026-10-02T10:03:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: lab,
+          fromBotName: "OSS Local Lab",
+          origin: "hub",
+          text: "Lab ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    return [prior, priorReply, ask, toPrincipal, toLab, asked, fromPrincipal, fromLab];
+  }
+
+  it("collapses a multi-party burst to one outbound chip and one inbound chip", () => {
+    const thread = multiPartyThread();
+    const plan = hubTopicChipPlan(thread);
+    const outbound = plan.families.get(hubChipBlockKey("to-principal", principal, "sent"));
+    const inbound = plan.families.get(hubChipBlockKey("from-principal", principal, "received"));
+
+    expect(plan.families.size).toBe(2);
+    expect(outbound).toMatchObject({
+      direction: "sent",
+      messageId: "to-principal",
+      peerBotId: principal,
+      peerBotName: "Hub · Box Principal",
+      names: ["Box Principal", "OSS Local Lab"],
+    });
+    expect(inbound).toMatchObject({
+      direction: "received",
+      messageId: "from-principal",
+      peerBotId: principal,
+      peerBotName: "Hub · Box Principal",
+      names: ["Box Principal", "OSS Local Lab"],
+    });
+    expect(plan.omittedBlockKeys.has(hubChipBlockKey("to-lab", lab, "sent"))).toBe(true);
+    expect(plan.omittedBlockKeys.has(hubChipBlockKey("from-lab", lab, "received"))).toBe(true);
+    expect(plan.hiddenMessageIds).toEqual(new Set(["to-lab", "from-lab"]));
+    expect(hubReceiptRowHidden(plan, thread.find((message) => message.id === "to-lab")!)).toBe(
+      true,
+    );
+    expect(hubReceiptRowHidden(plan, thread.find((message) => message.id === "asked")!)).toBe(
+      false,
+    );
+
+    const fromSend = hubExchangeForAnchor(thread, {
+      messageId: outbound!.messageId,
+      peerBotId: outbound!.peerBotId,
+    });
+    const fromReply = hubExchangeForAnchor(thread, {
+      messageId: inbound!.messageId,
+      peerBotId: inbound!.peerBotId,
+    });
+    expect(fromSend?.messages.map((turn) => turn.text)).toEqual([
+      "Check the deploy.",
+      "Check the lab.",
+      "Principal ready.",
+      "Lab ready.",
+    ]);
+    expect(fromReply?.messages.map((turn) => turn.text)).toEqual(
+      fromSend?.messages.map((turn) => turn.text),
+    );
+  });
+
+  it("leaves a closed 1:1 on its own chips", () => {
+    const thread = multiPartyThread();
+    const plan = hubTopicChipPlan(thread);
+    expect(plan.families.has(hubChipBlockKey("prior", HUB, "sent"))).toBe(false);
+    expect(plan.families.has(hubChipBlockKey("prior-reply", HUB, "received"))).toBe(false);
+    expect(plan.hiddenMessageIds.has("prior")).toBe(false);
+    expect(plan.hiddenMessageIds.has("prior-reply")).toBe(false);
+    expect(
+      hubExchangeForAnchor(thread, { messageId: "prior", peerBotId: HUB })?.messages.map(
+        (turn) => turn.text,
+      ),
+    ).toEqual(["earlier 1:1", "earlier reply"]);
+  });
+
+  it("does not collapse a single-member send and reply", () => {
+    const outbound = hubOutbound("out", 1, "2026-10-02T10:00:00.000Z", "ask atlas");
+    const inbound = hubInbound("in", 2, "2026-10-02T10:01:00.000Z", "atlas answer");
+    const plan = hubTopicChipPlan([outbound, inbound]);
+    expect(plan.families.size).toBe(0);
+    expect(plan.omittedBlockKeys.size).toBe(0);
+    expect(plan.hiddenMessageIds.size).toBe(0);
+  });
+
+  it("collapses a burst of replies that share a topic and have no sends", () => {
+    const fromPrincipal = hubRow(
+      "from-principal",
+      1,
+      "2026-10-02T10:02:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const fromLab = hubRow(
+      "from-lab",
+      2,
+      "2026-10-02T10:03:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: lab,
+          fromBotName: "OSS Local Lab",
+          origin: "hub",
+          text: "Lab ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const plan = hubTopicChipPlan([fromPrincipal, fromLab]);
+    expect([...plan.families.values()]).toEqual([
+      expect.objectContaining({
+        direction: "received",
+        messageId: "from-principal",
+        names: ["Box Principal", "OSS Local Lab"],
+      }),
+    ]);
+    expect(plan.hiddenMessageIds).toEqual(new Set(["from-lab"]));
+  });
+
+  it("collapses each Rakazo bot thread on its own", () => {
+    const send = (id: string, threadId: string, hubAgentId: string, name: string, text: string) =>
+      hubRow(
+        id,
+        1,
+        "2026-10-02T10:01:00.000Z",
+        [{ kind: "hub_message_sent", hubAgentId, name, text }],
+        { threadId },
+      );
+    const plan = hubTopicChipPlan([
+      send("chief-principal", "thread-chief", principal, "Box Principal", "from chief"),
+      send("chief-lab", "thread-chief", lab, "OSS Local Lab", "lab from chief"),
+      send("scout-principal", "thread-scout", principal, "Box Principal", "from scout"),
+      send("scout-lab", "thread-scout", lab, "OSS Local Lab", "lab from scout"),
+    ]);
+    expect(plan.families.size).toBe(2);
+    expect(plan.families.get(hubChipBlockKey("chief-principal", principal, "sent"))?.names).toEqual(
+      ["Box Principal", "OSS Local Lab"],
+    );
+    expect(plan.families.get(hubChipBlockKey("scout-principal", principal, "sent"))?.names).toEqual(
+      ["Box Principal", "OSS Local Lab"],
+    );
+    expect(plan.hiddenMessageIds).toEqual(new Set(["chief-lab", "scout-lab"]));
+  });
+
+  it("keeps a one-member direction as a leg chip inside a multi-member topic", () => {
+    const toPrincipal = hubRow("to-principal", 1, "2026-10-02T10:01:00.000Z", [
+      {
+        kind: "hub_message_sent",
+        hubAgentId: principal,
+        name: "Box Principal",
+        text: "Check the deploy.",
+      },
+    ]);
+    const toLab = hubRow("to-lab", 2, "2026-10-02T10:01:01.000Z", [
+      { kind: "hub_message_sent", hubAgentId: lab, name: "OSS Local Lab", text: "Check the lab." },
+    ]);
+    const fromPrincipal = hubRow(
+      "from-principal",
+      3,
+      "2026-10-02T10:02:00.000Z",
+      [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal ready.",
+        },
+      ],
+      { role: "user" },
+    );
+    const plan = hubTopicChipPlan([toPrincipal, toLab, fromPrincipal]);
+    expect(plan.families.size).toBe(1);
+    expect(plan.families.has(hubChipBlockKey("from-principal", principal, "received"))).toBe(false);
+    expect(plan.hiddenMessageIds.has("from-principal")).toBe(false);
   });
 });
