@@ -302,6 +302,152 @@ describe("model setup gate", () => {
       }),
     });
   });
+
+  it("rejects receiveHub when both botId and groupId are set", async () => {
+    const { actor, handler } = modelGateDeps({ agentRuntime: "scripted" });
+    const response = await call(handler, actor, "threads/receiveHub", {
+      botId: "bot-1",
+      groupId: "group-1",
+      hubAgentId: "hub-atlas",
+      hubAgentName: "Atlas",
+      text: "Check the deploy.",
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects receiveHub when neither botId nor groupId is set", async () => {
+    const { actor, handler } = modelGateDeps({ agentRuntime: "scripted" });
+    const response = await call(handler, actor, "threads/receiveHub", {
+      hubAgentId: "hub-atlas",
+      hubAgentName: "Atlas",
+      text: "Check the deploy.",
+    });
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(JSON.stringify(body)).not.toContain("expected string, received undefined");
+  });
+});
+
+describe("receiveHub group target", () => {
+  it("accepts groupId without botId and lands the receipt on the group thread", async () => {
+    const members = [
+      { bot: { id: "bot-chief", name: "Chief", color: "#111", runs: [] } },
+      { bot: { id: "bot-deputy", name: "Deputy", color: "#222", runs: [] } },
+    ];
+    const group = {
+      id: "cmurj44br000i139hmz577ken",
+      name: "Team B",
+      thread: { id: "thread-g" },
+      members,
+    };
+    let created = 0;
+    const messageCreate = vi.fn().mockResolvedValue({
+      id: "msg-hub",
+      seq: 1,
+      threadId: "thread-g",
+      role: "user",
+    });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: group.id }]),
+      chatGroup: {
+        findFirst: vi.fn().mockResolvedValue(group),
+        update: vi.fn(),
+      },
+      thread: {
+        update: vi.fn(async ({ data }: { data: { nextMessageSeq?: unknown } }) =>
+          data.nextMessageSeq ? { nextMessageSeq: 2 } : { nextEventSeq: 3 },
+        ),
+      },
+      message: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: messageCreate,
+        update: vi.fn(),
+      },
+      run: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ status: "queued", startedAt: null }),
+        create: vi.fn(async () => {
+          created += 1;
+          return { id: `run-${created}`, taskId: `task-${created}`, status: "queued" };
+        }),
+        updateMany: vi.fn(),
+      },
+      task: {
+        create: vi.fn(async () => ({ id: "task-1" })),
+        updateMany: vi.fn(),
+      },
+      steeringMessage: { create: vi.fn() },
+      event: { create: vi.fn().mockResolvedValue({ seq: 3, threadId: "thread-g" }) },
+    };
+    const prisma = {
+      user: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          email: "user@rakazo.test",
+          name: "Test User",
+          avatarStyle: "robot",
+        }),
+      },
+      spaceModelPreference: { findFirst: vi.fn().mockResolvedValue(null) },
+      deploymentSettings: { findUnique: vi.fn().mockResolvedValue(null) },
+      chatGroup: { findFirst: vi.fn().mockResolvedValue(group) },
+      message: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const deps = {
+      prisma,
+      events: { notify: vi.fn().mockResolvedValue(undefined) },
+      jobs: { enqueue: vi.fn().mockResolvedValue(undefined) },
+      env: {
+        agentRuntime: "scripted",
+        defaultProvider: "openrouter",
+        defaultModel: "google/gemini-2.5-flash",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "fake",
+      },
+      dataDir: "/tmp/rakazo-router-test",
+    } as unknown as RouterDeps;
+    const actor = {
+      spaceId: "workspace-1",
+      userId: "user-1",
+      email: "user@rakazo.test",
+      isDeploymentOwner: true,
+    } satisfies Actor;
+    const handler = new RPCHandler(createRouter(deps));
+    const { response } = await handler.handle(
+      new Request("http://127.0.0.1/rpc/threads/receiveHub", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          json: {
+            groupId: group.id,
+            hubAgentId: "hub-atlas",
+            hubAgentName: "Atlas",
+            text: "Check the deploy.",
+          },
+        }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      json: {
+        taskId: "task-1",
+        runId: "run-1",
+        seq: 1,
+        runIds: ["run-1"],
+      },
+    });
+    expect(messageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          threadId: "thread-g",
+          blocks: [expect.objectContaining({ origin: "hub", kind: "bot_message_received" })],
+        }),
+      }),
+    );
+  });
 });
 
 describe("thread answer delivery", () => {

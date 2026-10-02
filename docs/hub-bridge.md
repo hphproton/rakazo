@@ -55,7 +55,7 @@ Response:
 
 ## Inbound cutover
 
-Hub → Rakazo uses `POST /rpc/threads/receiveHub`. That stores a peer receipt and wakes the target bot with trigger `hub_message`.
+Hub → Rakazo uses `POST /rpc/threads/receiveHub`. Pass exactly one of `botId` or `groupId`. A `botId` stores a peer receipt and wakes that bot with trigger `hub_message`. A `groupId` with no `botId` stores the same receipt (`bot_message_received`, `origin` `hub`) on the ChatGroup thread and wakes members on that thread. It does not copy the text onto each member's DM. Named members and `@everyone` wake the same way a person message does. When the text names nobody, the first member wakes. A caller does not need the member bot ids.
 
 ```json
 {
@@ -69,7 +69,19 @@ Hub → Rakazo uses `POST /rpc/threads/receiveHub`. That stores a peer receipt a
 }
 ```
 
-`spaceTopicKey` is optional, at most 200 characters. The same value on each bot joins that burst. Omit it and the delivery stays on that bot's thread. It is not `clientNonce`.
+```json
+{
+  "json": {
+    "groupId": "<chat group id>",
+    "hubAgentId": "hub-atlas",
+    "hubAgentName": "Atlas",
+    "text": "Deploy the staging build.",
+    "spaceTopicKey": "burst-1"
+  }
+}
+```
+
+`spaceTopicKey` is optional, at most 200 characters, on a bot or a group delivery. The same value on each bot joins that burst. Omit it and the delivery stays on that bot's thread. A group delivery stores the same key on the group-thread receipt. It is not `clientNonce`, and it is not `threadKey`.
 
 `threads/send` remains a person typing. A bot webhook whose JSON has `origin` `hub`, `event` `hub_message`, or both `hubAgentId` and `hubAgentName` responds `409` with `Hub inbound uses threads/receiveHub` and does not store a user message. Other webhook bodies are unchanged.
 
@@ -77,7 +89,9 @@ Hub → Rakazo uses `POST /rpc/threads/receiveHub`. That stores a peer receipt a
 
 A Rakazo bot delivers with the builtin tool `hub_send_message`. The user does not type `TO_HUB:`. Writing `TO_HUB:` in a reply does not send. The tool resolves a Hub member from the same directory rows as `hub/directory` (`spawnKey` `hub:<hubAgentId>`), by explicit id or by name and title. It does not require `hub/syncMembers` or a visible Hub sidebar section.
 
-The tool writes a `HUB-INBOX` row with status `wake` and a `hub_message_sent` message in the sending bot's thread. That row is a Hub chip in the same family as an inbound receipt (`Message from Hub · {name}`): avatar, pill, left alignment, and no payload bubble in the bot thread. The label is `To Hub · {name}`. When one topic includes more than one Hub member, the thread collapses each direction that has more than one turn into a single chip. The sends share `To Hub · Box Principal, OSS Local Lab`. The replies share `Message from Hub · Box Principal, OSS Local Lab`. A topic with one member still shows `To Hub · {name}` and `Message from Hub · {name}` as separate chips. The stored blocks stay; this only changes which chips the thread draws. Either chip opens the view-only topic that contains that chip. A topic is one stretch on one bot thread. Several `hub_send_message` calls before the bot writes a reply share it, and so do inbound receipts from those members. A burst of receipts from several Hub agents, with no bot reply between them, is the same kind of topic. The header lists every member (`{bot} · Hub · Box Principal, OSS Local Lab`). Each turn names its speaker. An outbound in that topic is `{bot} · Hub · {name}` so the sends stay distinct. A topic with one member keeps the 1:1 labels.
+The tool writes a `HUB-INBOX` row with status `wake` and a `hub_message_sent` message in the sending thread. A run on a ChatGroup thread echoes on that group thread. When that call omits `threadKey`, the row stores the ChatGroup id in `threadKey` so the mesh can see which group sent it. A caller-supplied `threadKey` is kept. `threadKey` is not a space topic key, and storing the group id does not drop `spaceTopicKey` from the echo. The outbox has no `groupId` column.
+
+That row is a Hub chip in the same family as an inbound receipt (`Message from Hub · {name}`): avatar, pill, left alignment, and no payload bubble in the bot thread. The label is `To Hub · {name}`. When one topic includes more than one Hub member, the thread collapses each direction that has more than one turn into a single chip. The sends share `To Hub · Box Principal, OSS Local Lab`. The replies share `Message from Hub · Box Principal, OSS Local Lab`. A topic with one member still shows `To Hub · {name}` and `Message from Hub · {name}` as separate chips. The stored blocks stay; this only changes which chips the thread draws. Either chip opens the view-only topic that contains that chip. A topic is one stretch on one bot thread. Several `hub_send_message` calls before the bot writes a reply share it, and so do inbound receipts from those members. A burst of receipts from several Hub agents, with no bot reply between them, is the same kind of topic. The header lists every member (`{bot} · Hub · Box Principal, OSS Local Lab`). Each turn names its speaker. An outbound in that topic is `{bot} · Hub · {name}` so the sends stay distinct. A topic with one member keeps the 1:1 labels.
 
 A person message — a user row that is not itself a Hub or teammate receipt — ends every open topic on that thread. For a single member, a bot text reply still starts a new topic when the next Hub turn repeats a direction already present, or the topic already has both directions. The missing direction still joins after that reply, so an inbound receipt and the outbound that answers it stay one transcript. A different Hub member who starts only after that reply gets their own topic, so two 1:1s in a row stay apart. An older chip does not open a later topic. If the clicked message is not in the loaded thread, the view stays empty and does not substitute the latest topic. An optional `spaceTopicKey` on the Hub block is the only join across Rakazo bots. The answering `hub_send_message` echo copies that key when the run's open topic on that thread already has one, and does not invent one. `threadKey` on the outbox row is still not copied onto the echo. `clientNonce` is not the key. With no `spaceTopicKey`, each bot thread keeps its own topic. Messaging two Hub members does not require one shared page; separate 1:1 topics stay valid. The person does not type in the transcript. Delivery stays this tool, then the outbox, then the mesh. The outbox row is the first-party drain. This tip has no separate native outbound sender, so cutover still reports `rakazoToHub` `mcp`: a host-straight mesh reads the outbox instead of scraping a `TO_HUB:` user message.
 
@@ -112,4 +126,8 @@ The Hub directory prompt and the `message_bot` tool tell the model those names a
 
 ## Hub skill to Rakazo
 
-Hub → Rakazo stays `threads/receiveHub`. A Hub skill named `message_rakazo_bot` (not a Rakazo builtin) can resolve `rakazoBots` from `hub/directory` and post `{ botId, hubAgentId, hubAgentName, text }`. This repository does not ship that Hub-side skill.
+Hub → Rakazo stays `threads/receiveHub`. A Hub skill named `message_rakazo_bot` (not a Rakazo builtin) can resolve `rakazoBots` from `hub/directory` and post `{ botId, hubAgentId, hubAgentName, text }`, or post `{ groupId, hubAgentId, hubAgentName, text }` for a ChatGroup. Either payload may include `spaceTopicKey`. This repository does not ship that Hub-side skill.
+
+How a Hub member picks a ChatGroup in the Hub client is residual. Grok App is closed source, and this repository has no Hub UI for that choice. The API accepts `groupId`. The client that offers it is not here.
+
+A flash-lite turn can still die before any tool with `Provider finish_reason: error`. That string is Pi mapping an upstream `finish_reason` of `error` (`@earendil-works/pi-ai` `mapStopReason`), not a missing group route. The same string aborted a bot DM before the group sends. It is not `content_filter`. Per-bot flash-lite, the space default, and `PI_DEFAULT_MODEL` stay as they are. `hub_send_message` from a group run does not depend on that provider: the tool inserts the outbox row when the run actually calls it.

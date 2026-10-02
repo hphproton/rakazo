@@ -1,16 +1,23 @@
 import { ORPCError } from "@orpc/server";
 import type { JobPublisher } from "@rakazo/adapter-kit";
 import { runContinueJob } from "@rakazo/adapter-kit";
-import type { Actor, BotMessageIntent } from "@rakazo/contracts";
+import { type Actor, type BotMessageIntent, GROUP_MEMBER_MIN } from "@rakazo/contracts";
 import {
   ACTIVE_RUN_STATUSES,
   BOT_MESSAGE_MAX_LENGTH,
   buildHubMessageWakePrompt,
   hubInboundBlock,
   isConversationalRun,
+  resolveGroupTargetBotIds,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
-import { appendEventInTransaction, createThreadMessageInTransaction } from "@rakazo/db";
+import {
+  appendEventInTransaction,
+  createThreadMessageInTransaction,
+  IsolationError,
+  lockOwnedGroup,
+  touchGroupUpdatedAt,
+} from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { withSerializableRetry } from "./serializable-retry.js";
 import type { ThreadTarget } from "./thread-target.js";
@@ -30,10 +37,10 @@ function isUniqueConstraintError(error: unknown) {
 type HubRun = { id: string; taskId: string; status: string };
 
 /**
- * Land a Hub agent's text in a bot thread as a peer receipt and wake that bot.
- * No face bot has to call message_bot. The run trigger is `hub_message` so a
- * finished turn is not auto-returned through message_bot to an id that is not
- * a workspace bot.
+ * Land a Hub agent's text as a peer receipt and wake the bot, or the ChatGroup
+ * thread when the target is a group. No face bot has to call message_bot. The
+ * run trigger is `hub_message` so a finished turn is not auto-returned through
+ * message_bot to an id that is not a workspace bot.
  */
 export async function receiveHubMessage(
   deps: {
@@ -42,7 +49,7 @@ export async function receiveHubMessage(
     jobs: Pick<JobPublisher, "enqueue">;
   },
   actor: Actor,
-  target: Extract<ThreadTarget, { kind: "bot" }>,
+  target: ThreadTarget,
   input: {
     hubAgentId: string;
     hubAgentName: string;
@@ -52,6 +59,9 @@ export async function receiveHubMessage(
     spaceTopicKey?: string;
   },
 ) {
+  if (target.kind === "group") {
+    return receiveHubOnGroup(deps, actor, target, input);
+  }
   const hubAgentId = input.hubAgentId.trim();
   const hubAgentName = input.hubAgentName.trim();
   const text = input.text.trim();
@@ -236,19 +246,27 @@ async function replayHubDelivery(
   if (!clientNonce) return null;
   const message = await deps.prisma.message.findUnique({
     where: { threadId_clientNonce: { threadId, clientNonce } },
-    include: { sourceRuns: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: 1 } },
+    include: { sourceRuns: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
   });
   if (!message) return null;
-  const linked =
-    message.sourceRuns[0] ??
-    (message.runId ? await deps.prisma.run.findUnique({ where: { id: message.runId } }) : null);
-  if (!linked) return null;
-  const run = linked as HubRun;
-  if (RUNS_NEEDING_CONTINUE.has(run.status)) {
-    await deps.jobs.enqueue(runContinueJob(run.id)).catch((error) => {
-      getLogger().error("hub message replay enqueue", error);
-    });
-  }
+  const linked: HubRun[] = message.sourceRuns.length
+    ? (message.sourceRuns as HubRun[])
+    : message.runId
+      ? [
+          (await deps.prisma.run.findUnique({ where: { id: message.runId } })) as HubRun | null,
+        ].filter((run): run is HubRun => run !== null)
+      : [];
+  const first = linked[0];
+  if (!first) return null;
+  await Promise.all(
+    linked
+      .filter((run) => RUNS_NEEDING_CONTINUE.has(run.status))
+      .map((run) =>
+        deps.jobs.enqueue(runContinueJob(run.id)).catch((error) => {
+          getLogger().error("hub message replay enqueue", error);
+        }),
+      ),
+  );
   const latestEvent = await deps.prisma.event.findFirst({
     where: { threadId },
     orderBy: { seq: "desc" },
@@ -259,5 +277,240 @@ async function replayHubDelivery(
       getLogger().error("hub message realtime notification", error);
     });
   }
-  return { taskId: run.taskId, runId: run.id, seq: message.seq, runIds: [run.id] };
+  return {
+    taskId: first.taskId,
+    runId: first.id,
+    seq: message.seq,
+    runIds: linked.map((run) => run.id),
+  };
+}
+
+type HubDeliveryDeps = {
+  prisma: PrismaClient;
+  events: Pick<ThreadEvents, "notify">;
+  jobs: Pick<JobPublisher, "enqueue">;
+};
+
+type HubDeliveryInput = {
+  hubAgentId: string;
+  hubAgentName: string;
+  text: string;
+  intent?: BotMessageIntent;
+  clientNonce?: string;
+  spaceTopicKey?: string;
+};
+
+/**
+ * Land the same Hub receipt on the ChatGroup thread and wake members there.
+ * Mention rules match a person message in the group: named members, @everyone,
+ * or the first member when nothing is named. This is not a fan-out onto DM threads.
+ */
+async function receiveHubOnGroup(
+  deps: HubDeliveryDeps,
+  actor: Actor,
+  target: Extract<ThreadTarget, { kind: "group" }>,
+  input: HubDeliveryInput,
+) {
+  const hubAgentId = input.hubAgentId.trim();
+  const hubAgentName = input.hubAgentName.trim();
+  const text = input.text.trim();
+  if (!hubAgentId || !hubAgentName || !text) {
+    throw new ORPCError("BAD_REQUEST", { message: "Hub agent id, name, and text are required." });
+  }
+  if (text.length > BOT_MESSAGE_MAX_LENGTH) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `Message exceeds the ${BOT_MESSAGE_MAX_LENGTH} character limit.`,
+    });
+  }
+
+  const replayed = await replayHubDelivery(deps, target.threadId, input.clientNonce);
+  if (replayed) return replayed;
+
+  const block = hubInboundBlock({
+    fromBotId: hubAgentId,
+    fromBotName: hubAgentName,
+    text,
+    intent: input.intent,
+    spaceTopicKey: input.spaceTopicKey,
+  });
+  const prompt = buildHubMessageWakePrompt({
+    from: { id: hubAgentId, name: hubAgentName },
+    text,
+    intent: input.intent,
+  });
+
+  const commit = () =>
+    deps.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM threads WHERE id = ${target.threadId} FOR UPDATE`;
+      if (input.clientNonce) {
+        const already = await tx.message.findUnique({
+          where: {
+            threadId_clientNonce: { threadId: target.threadId, clientNonce: input.clientNonce },
+          },
+          select: { id: true },
+        });
+        if (already) return { replay: true as const };
+      }
+
+      await lockOwnedGroup(tx, actor, target.groupId);
+      const group = await tx.chatGroup.findFirst({
+        where: {
+          id: target.groupId,
+          spaceId: actor.spaceId,
+          userId: actor.userId,
+          archivedAt: null,
+          thread: { id: target.threadId },
+        },
+        include: {
+          members: {
+            where: { bot: { archivedAt: null } },
+            include: { bot: { select: { id: true, name: true } } },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+      if (!group || group.members.length < GROUP_MEMBER_MIN) throw new IsolationError();
+      const targetBotIds = resolveGroupTargetBotIds({
+        text,
+        members: group.members.map((member) => ({
+          id: member.bot.id,
+          name: member.bot.name,
+        })),
+      });
+      if (targetBotIds.length === 0) throw new IsolationError();
+
+      const activeRuns = await tx.run.findMany({
+        where: {
+          threadId: target.threadId,
+          botId: { in: targetBotIds },
+          status: { in: [...ACTIVE_RUN_STATUSES] },
+        },
+        select: { id: true, taskId: true, botId: true, status: true, trigger: true },
+      });
+      for (const botId of targetBotIds) {
+        const runsForBot = activeRuns.filter((run) => run.botId === botId);
+        const waitingRuns = runsForBot.filter((run) => run.status === "waiting_input");
+        if (waitingRuns.length && !runsForBot.some(steersUserMessage)) {
+          throw new ORPCError("CONFLICT", { message: "Answer the pending ask first." });
+        }
+        if (
+          runsForBot.some(
+            (run) => run.status !== "waiting_input" && !STEERABLE_RUN_STATUSES.has(run.status),
+          )
+        ) {
+          throw new ORPCError("CONFLICT", { message: "Answer the pending ask first." });
+        }
+      }
+
+      const message = await createThreadMessageInTransaction(tx, {
+        threadId: target.threadId,
+        role: "user",
+        blocks: [block],
+        clientNonce: input.clientNonce,
+        markUnread: true,
+      });
+      const runs: Array<{ id: string; taskId: string; botId: string; status: string }> = [];
+      for (const botId of targetBotIds) {
+        const runsForBot = activeRuns.filter((run) => run.botId === botId);
+        const active = runsForBot.find(steersUserMessage) ?? runsForBot[0];
+        if (active) {
+          await tx.steeringMessage.create({
+            data: {
+              messageId: message.id,
+              botId,
+              userId: actor.userId,
+              runId: steersUserMessage(active) ? active.id : null,
+            },
+          });
+          runs.push(active);
+          continue;
+        }
+        const task = await tx.task.create({
+          data: {
+            spaceId: actor.spaceId,
+            botId,
+            threadId: target.threadId,
+            userId: actor.userId,
+            prompt,
+            status: "queued",
+          },
+        });
+        const run = await tx.run.create({
+          data: {
+            spaceId: actor.spaceId,
+            botId,
+            threadId: target.threadId,
+            taskId: task.id,
+            userId: actor.userId,
+            status: "queued",
+            trigger: "hub_message",
+            clientNonce: input.clientNonce ? `hub:${message.id}:${botId}` : undefined,
+            sourceMessageId: message.id,
+          },
+        });
+        runs.push({ id: run.id, taskId: run.taskId, botId, status: run.status });
+      }
+      const first = runs[0];
+      if (!first) throw new IsolationError();
+      await tx.message.update({ where: { id: message.id }, data: { runId: first.id } });
+      const created = runs.filter((run) => !activeRuns.some((active) => active.id === run.id));
+      if (created.length) {
+        await cancelSupersededQueuedRuns(tx, {
+          threadId: target.threadId,
+          botIds: created.map((run) => run.botId),
+          keepRunIds: created.map((run) => run.id),
+        });
+      }
+      await touchGroupUpdatedAt(tx, target.groupId);
+      const event = await appendEventInTransaction(tx, {
+        spaceId: actor.spaceId,
+        threadId: target.threadId,
+        botId: first.botId,
+        type: "thread.message.created",
+        runId: first.id,
+        payload: {
+          messageId: message.id,
+          role: "user",
+          blocks: [block],
+          runIds: runs.map((run) => run.id),
+        },
+      });
+      return { message, runs, eventSeq: event.seq };
+    });
+
+  const committed = await withSerializableRetry(commit).catch(async (error) => {
+    if (isUniqueConstraintError(error) || input.clientNonce) {
+      const winner = await replayHubDelivery(deps, target.threadId, input.clientNonce);
+      if (winner) return { replayed: winner } as const;
+    }
+    throw error;
+  });
+  if ("replay" in committed) {
+    const winner = await replayHubDelivery(deps, target.threadId, input.clientNonce);
+    if (winner) return winner;
+    throw new ORPCError("CONFLICT", { message: "Hub message already delivered." });
+  }
+  if ("replayed" in committed) return committed.replayed;
+
+  await deps.events.notify(target.threadId, committed.eventSeq).catch((error) => {
+    getLogger().error("hub message realtime notification", error);
+  });
+  await Promise.all(
+    committed.runs
+      .filter((run) => RUNS_NEEDING_CONTINUE.has(run.status))
+      .map((run) =>
+        deps.jobs.enqueue(runContinueJob(run.id)).catch((error) => {
+          getLogger().error("hub message enqueue", error);
+        }),
+      ),
+  );
+  const first = committed.runs[0];
+  if (!first)
+    throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Hub message did not start a run." });
+  return {
+    taskId: first.taskId,
+    runId: first.id,
+    seq: committed.message.seq,
+    runIds: committed.runs.map((run) => run.id),
+  };
 }

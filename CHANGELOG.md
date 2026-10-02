@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `threads/receiveHub` can address a ChatGroup with `groupId` and no `botId`. The Hub receipt lands on the group thread and wakes members there. An optional `spaceTopicKey` is still stored on that receipt and on the answering `hub_message_sent` echo. A group run's `hub_send_message` stores that ChatGroup id in `threadKey` when the caller omits one, and that fill does not replace `spaceTopicKey`. See [Hub bridge](docs/hub-bridge.md).
 - A Rakazo bot can send to a Hub member with the builtin tool `hub_send_message`. It resolves the member from the Hub directory and queues a `HUB-INBOX` row. The host mesh reads `hub/outbox` and acknowledges with `hub/ackOutbound`. The user does not type `TO_HUB:`. See [Hub bridge](docs/hub-bridge.md).
 - A signed-in caller can mirror Hub members into the directory with `hub/syncMembers`. Those rows stay addressable for `hub/directory` and `hub_send_message` and are not sidebar chats. `hub/directory` reads those members and the workspace bots, with a content epoch and an optional HMAC when `HUB_DIRECTORY_SIGNING_KEY` is set. Hub inbound prefers `threads/receiveHub`; a webhook shaped like a Hub delivery is refused. See [Hub bridge](docs/hub-bridge.md).
 - A signed-in caller can deliver a Hub agent's message into a bot thread with `threads/receiveHub`. The message is stored as a peer receipt from that Hub agent (a Hub marker in the thread) and wakes the bot. It does not appear as a message the person typed.

@@ -17,6 +17,7 @@ import type { PrismaClient } from "@rakazo/db";
  * with status `wake`. A host-straight mesh lists `hub/outbox` and acks ids
  * `done`. The tool does not write a user message and does not require `TO_HUB:`.
  * On success the caller records a `hub_message_sent` echo in the sending thread.
+ * A ChatGroup run that omits threadKey stores that group's id there.
  * The thread shows the same Hub chip as an inbound receipt. The payload is read
  * in the view-only topic that contains that chip. Several members addressed
  * before the bot writes a reply share that topic. The echo copies `spaceTopicKey`
@@ -122,8 +123,8 @@ export async function sendHubMessage(
   const intent = parseIntent(input.intent);
   if (!intent) return { ok: false, error: "invalid_intent" };
 
-  const threadKey = parseThreadKey(input.threadKey);
-  if (threadKey === "too_long") return { ok: false, error: "thread_key_too_long" };
+  const suppliedThreadKey = parseThreadKey(input.threadKey);
+  if (suppliedThreadKey === "too_long") return { ok: false, error: "thread_key_too_long" };
 
   const hubAgentId = input.hubAgentId?.trim() ?? "";
   const target = input.target?.trim() ?? "";
@@ -164,6 +165,10 @@ export async function sendHubMessage(
     select: { id: true },
   });
   if (!running) return { ok: false, error: "source_run_inactive" };
+
+  // Caller-supplied threadKey wins.
+  // This fill is the ChatGroup id only. It is not spaceTopicKey.
+  const threadKey = suppliedThreadKey ?? (await groupIdForRunThread(prisma, run));
 
   try {
     const created = await prisma.hubOutbound.create({
@@ -254,6 +259,23 @@ export async function ackHubInbox(
     data: { status: "done", ...(mesh ? { meshId: mesh } : {}) },
   });
   return result.count;
+}
+
+/**
+ * ChatGroup id for a run whose thread is a group, when the caller omitted threadKey.
+ * No hub_outbound.groupId column exists, and this must not be written as spaceTopicKey.
+ */
+async function groupIdForRunThread(
+  prisma: PrismaClient,
+  run: Pick<HubSendRun, "threadId" | "spaceId">,
+): Promise<string | null> {
+  const thread = await prisma.thread.findFirst({
+    where: { id: run.threadId, spaceId: run.spaceId },
+    select: { groupId: true },
+  });
+  const groupId = thread?.groupId?.trim() ?? "";
+  if (!groupId || groupId.length > HUB_THREAD_KEY_MAX) return null;
+  return groupId;
 }
 
 function parseIntent(value: string | undefined): BotMessageIntent | undefined {
