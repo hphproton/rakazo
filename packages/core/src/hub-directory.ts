@@ -1,10 +1,31 @@
 import { BOT_COLORS, BOT_NAME_MAX_LENGTH, BOT_TITLE_MAX_LENGTH } from "@rakazo/contracts";
 
-/** Sidebar section that holds mirrored Hub members. */
+/**
+ * Directory section for mirrored Hub members.
+ * Member lists omit this section. It is not a sidebar people open.
+ */
 export const HUB_SECTION_NAME = "Hub";
 
 /** Reserved spawnKey prefix. Rows with this prefix are Hub roster mirrors, not workspace bots. */
 export const HUB_SPAWN_KEY_PREFIX = "hub:";
+
+/** Shown when a person or `message_bot` tries to open a Hub roster row as a chat. */
+export const HUB_MIRROR_NOT_A_CHAT = "Hub members are not chats. Use hub_send_message.";
+
+/**
+ * Member-list filter. Hub roster rows stay addressable for `hub_send_message`
+ * and are not sidebar seats, search hits, or DM targets.
+ * `NOT startsWith` drops SQL NULL, so unset spawn keys stay on their own branch.
+ */
+export const VISIBLE_ROSTER_BOT_WHERE: {
+  OR: Array<{ spawnKey: null } | { NOT: { spawnKey: { startsWith: string } } }>;
+} = {
+  OR: [{ spawnKey: null }, { NOT: { spawnKey: { startsWith: HUB_SPAWN_KEY_PREFIX } } }],
+};
+
+export function hubMirrorChatRefusal(spawnKey: string | null | undefined): string | undefined {
+  return hubAgentIdFromSpawnKey(spawnKey) ? HUB_MIRROR_NOT_A_CHAT : undefined;
+}
 
 /** Hub → Rakazo identity path. Prefer this over threads/send and bot webhooks. */
 export const HUB_INBOUND_PROCEDURE = "threads/receiveHub" as const;

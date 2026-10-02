@@ -1,4 +1,4 @@
-import type { BotMessageIntent } from "@rakazo/contracts";
+import type { BotMessageIntent, MessageBlock } from "@rakazo/contracts";
 import { HubInboxItemSchema } from "@rakazo/contracts";
 import {
   BOT_MESSAGE_MAX_LENGTH,
@@ -15,6 +15,8 @@ import type { PrismaClient } from "@rakazo/db";
  * `hub_send_message` resolves a directory member and inserts a HUB-INBOX row
  * with status `wake`. A host-straight mesh lists `hub/outbox` and acks ids
  * `done`. The tool does not write a user message and does not require `TO_HUB:`.
+ * On success the caller records a `hub_message_sent` echo in the sending thread
+ * so the person sees the payload that left.
  */
 
 const HUB_THREAD_KEY_MAX = 200;
@@ -27,6 +29,8 @@ export type HubSendResult =
       hubAgentId: string;
       name: string;
       deliveryId: string;
+      text: string;
+      intent: BotMessageIntent;
       meshId?: string;
       replayed?: true;
       note: string;
@@ -48,6 +52,31 @@ export type HubSendResult =
         | "source_run_inactive";
     };
 
+export function hubOutboundEchoNonce(deliveryId: string): string {
+  return `hub-outbound:${deliveryId}`;
+}
+
+/** Visible echo for the sending thread. Not a teammate receipt. */
+export function hubOutboundEchoBlock(input: {
+  hubAgentId: string;
+  name: string;
+  text: string;
+  intent: BotMessageIntent;
+}): Extract<MessageBlock, { kind: "hub_message_sent" }> {
+  return {
+    kind: "hub_message_sent",
+    hubAgentId: input.hubAgentId,
+    name: input.name,
+    text: input.text,
+    intent: input.intent,
+  };
+}
+
+export type HubOutboundEcho = {
+  block: Extract<MessageBlock, { kind: "hub_message_sent" }>;
+  nonce: string;
+};
+
 type HubSendRun = {
   id: string;
   spaceId: string;
@@ -68,11 +97,15 @@ export async function sendHubMessage(
     threadKey?: string;
     deliveryKey?: string;
   },
+  echo?: (outbound: HubOutboundEcho) => Promise<void>,
 ): Promise<HubSendResult> {
   const idempotencyKey = hubSendIdempotencyKey(run.spaceId, run.userId, input.deliveryKey);
   if (idempotencyKey) {
     const prior = await readReplay(prisma, run, idempotencyKey);
-    if (prior) return prior;
+    if (prior) {
+      await emitHubOutboundEcho(echo, prior);
+      return prior;
+    }
   }
 
   const text = input.text?.trim() ?? "";
@@ -143,17 +176,24 @@ export async function sendHubMessage(
       },
       select: { id: true },
     });
-    return {
+    const sent: Extract<HubSendResult, { ok: true }> = {
       ok: true,
       hubAgentId: resolved.member.hubAgentId,
       name: resolved.member.name,
       deliveryId: created.id,
+      text,
+      intent,
       note: `Queued for ${resolved.member.name}. Delivery is async and does not end your turn.`,
     };
+    await emitHubOutboundEcho(echo, sent);
+    return sent;
   } catch (error) {
     if (idempotencyKey && isUniqueConstraint(error)) {
       const prior = await readReplay(prisma, run, idempotencyKey);
-      if (prior) return prior;
+      if (prior) {
+        await emitHubOutboundEcho(echo, prior);
+        return prior;
+      }
     }
     throw error;
   }
@@ -192,9 +232,11 @@ export async function ackHubInbox(
   prisma: PrismaClient,
   actor: { spaceId: string; userId: string },
   deliveryIds: readonly string[],
+  meshId?: string,
 ) {
   const ids = [...new Set(deliveryIds.map((id) => id.trim()).filter(Boolean))].slice(0, 100);
   if (ids.length === 0) return 0;
+  const mesh = meshId?.trim();
   const result = await prisma.hubOutbound.updateMany({
     where: {
       id: { in: ids },
@@ -202,7 +244,7 @@ export async function ackHubInbox(
       userId: actor.userId,
       status: "wake",
     },
-    data: { status: "done" },
+    data: { status: "done", ...(mesh ? { meshId: mesh } : {}) },
   });
   return result.count;
 }
@@ -240,15 +282,36 @@ async function readReplay(
     where: { idempotencyKey, spaceId: run.spaceId, userId: run.userId },
   });
   if (!existing) return undefined;
+  const intent = parseIntent(existing.intent) ?? "request";
+  const text = existing.text.trim();
+  if (!text) return undefined;
   return {
     ok: true,
     hubAgentId: existing.hubAgentId,
     name: existing.name,
     deliveryId: existing.id,
+    text,
+    intent,
     ...(existing.meshId ? { meshId: existing.meshId } : {}),
     replayed: true,
     note: `Already sent to ${existing.name} in this turn; it was not sent again.`,
   };
+}
+
+async function emitHubOutboundEcho(
+  echo: ((outbound: HubOutboundEcho) => Promise<void>) | undefined,
+  sent: Extract<HubSendResult, { ok: true }>,
+) {
+  if (!echo) return;
+  await echo({
+    block: hubOutboundEchoBlock({
+      hubAgentId: sent.hubAgentId,
+      name: sent.name,
+      text: sent.text,
+      intent: sent.intent,
+    }),
+    nonce: hubOutboundEchoNonce(sent.deliveryId),
+  });
 }
 
 function isUniqueConstraint(error: unknown): boolean {

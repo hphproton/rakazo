@@ -3912,6 +3912,10 @@ msgstr "Título"
 msgid "To:"
 msgstr "Para:"
 
+#: src/pages/Shell.tsx
+msgid "To Hub · {name}"
+msgstr "A Hub · {name}"
+
 #: src/pages/Artifacts.tsx
 msgid "Today"
 msgstr ""

@@ -576,6 +576,7 @@ export const RU_MESSAGES: Record<string, string> = {
   "Message from {peer}": "Сообщение от {peer}",
   subagent: "субагент",
   "Messaged {peer}": "Отправлено сообщение {peer}",
+  "To Hub · {name}": "В Hub · {name}",
   "No authentication": "Нет аутентификации",
   "No connection record found for {name}.": "Для {name} не найдено записей о подключении.",
   "Not in the plugin catalog": "Нет в каталоге плагинов",

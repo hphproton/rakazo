@@ -139,6 +139,7 @@ import {
   containsSecret,
   expandSkillReferencesInPrompt,
   hasMixedOneShotSchedule,
+  hubMirrorChatRefusal,
   isOneShotRoutineCrons,
   nextCronDateAcrossStrict,
 } from "@rakazo/core";
@@ -1890,7 +1891,7 @@ export function createRouter(deps: RouterDeps) {
       })),
       ackOutbound: authed.hub.ackOutbound.handler(async ({ context, input }) => ({
         ok: true as const,
-        acked: await ackHubInbox(deps.prisma, context.actor, input.deliveryIds),
+        acked: await ackHubInbox(deps.prisma, context.actor, input.deliveryIds, input.meshId),
       })),
     },
     threads: {
@@ -2047,6 +2048,8 @@ export function createRouter(deps: RouterDeps) {
       followUp: authed.threads.followUp.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         if (target.kind === "bot") {
+          const mirror = hubMirrorChatRefusal(target.bot.spawnKey);
+          if (mirror) throw new ORPCError("BAD_REQUEST", { message: mirror });
           await assertTeachingSendAllowed(deps.prisma, context.actor.spaceId, target.botId);
           const sent = await deps.events.sendUserMessage({
             spaceId: context.actor.spaceId,

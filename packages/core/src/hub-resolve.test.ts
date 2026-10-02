@@ -154,6 +154,7 @@ describe("renderHubDirectory", () => {
       { hubAgentId: "x<script>", name: "Lab <team>", title: "R&D" },
     ]);
     expect(text).toContain("Writing TO_HUB: in your reply does not send.");
+    expect(text).toContain("Do not call message_bot for them.");
     expect(text).toContain("- Pi Ops (hubAgentId: pi-ops) — Ops");
     expect(text).toContain("Lab &lt;team&gt;");
     expect(text).toContain("hubAgentId: x&lt;script&gt;");

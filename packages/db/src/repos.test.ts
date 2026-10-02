@@ -46,7 +46,55 @@ function reposFor(memoryScope: string | null) {
   return createRepos(prisma as unknown as PrismaClient);
 }
 
+describe("createRepos.listBotSections", () => {
+  it("omits the reserved Hub section from the sections people can open", async () => {
+    const stamp = new Date("2026-10-02T00:00:00.000Z");
+    const prisma = {
+      botSection: {
+        findMany: vi.fn(async () => [
+          {
+            id: "section-hub",
+            spaceId: actor.spaceId,
+            name: "Hub",
+            position: 0,
+            createdAt: stamp,
+            updatedAt: stamp,
+          },
+          {
+            id: "section-projects",
+            spaceId: actor.spaceId,
+            name: "Projects",
+            position: 1,
+            createdAt: stamp,
+            updatedAt: stamp,
+          },
+        ]),
+      },
+    };
+    const sections = await createRepos(prisma as unknown as PrismaClient).listBotSections(actor);
+    expect(sections.map((section) => section.name)).toEqual(["Projects"]);
+  });
+});
+
 describe("createRepos.listBots", () => {
+  it("omits Hub roster mirrors from the member list", async () => {
+    const prisma = {
+      bot: { findMany: vi.fn(async () => []) },
+      run: { findMany: vi.fn(async () => []) },
+    };
+    await expect(createRepos(prisma as unknown as PrismaClient).listBots(actor)).resolves.toEqual(
+      [],
+    );
+    expect(prisma.bot.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          archivedAt: null,
+          OR: [{ spawnKey: null }, { NOT: { spawnKey: { startsWith: "hub:" } } }],
+        }),
+      }),
+    );
+  });
+
   it("passes memoryScope through as null when unset", async () => {
     await expect(reposFor(null).listBots(actor)).resolves.toEqual([
       expect.objectContaining({ memoryScope: null }),

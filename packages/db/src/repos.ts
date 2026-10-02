@@ -6,7 +6,7 @@ import {
   type MessageBlock,
   type SpaceBot,
 } from "@rakazo/contracts";
-import { userVisibleMessages } from "@rakazo/core";
+import { HUB_SECTION_NAME, userVisibleMessages, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
 import type { PrismaClient } from "./client.js";
 import { type ComputerMode, ensureComputerRecord, parseComputerMode } from "./computers.js";
 import { createThreadMessageInTransaction } from "./messages.js";
@@ -108,14 +108,19 @@ export function createRepos(prisma: PrismaClient) {
       where: { spaceId: { in: spaceIds }, userId: actor.userId },
       orderBy: [{ position: "asc" }, { createdAt: "asc" }],
     });
-    return sections.map((section) => ({
-      id: section.id,
-      spaceId: section.spaceId,
-      name: section.name,
-      position: section.position,
-      createdAt: section.createdAt.toISOString(),
-      updatedAt: section.updatedAt.toISOString(),
-    }));
+    return sections.flatMap((section) => {
+      if (section.name === HUB_SECTION_NAME) return [];
+      return [
+        {
+          id: section.id,
+          spaceId: section.spaceId,
+          name: section.name,
+          position: section.position,
+          createdAt: section.createdAt.toISOString(),
+          updatedAt: section.updatedAt.toISOString(),
+        },
+      ];
+    });
   }
 
   async function listSpaceBotsForSpaces(actor: Actor, spaceIds: string[]): Promise<SpaceBot[]> {
@@ -125,6 +130,7 @@ export function createRepos(prisma: PrismaClient) {
         spaceId: { in: spaceIds },
         userId: actor.userId,
         archivedAt: null,
+        ...VISIBLE_ROSTER_BOT_WHERE,
       },
       select: {
         id: true,
@@ -287,6 +293,7 @@ export function createRepos(prisma: PrismaClient) {
           spaceId: actor.spaceId,
           userId: actor.userId,
           archivedAt: options.archived ? { not: null } : null,
+          ...VISIBLE_ROSTER_BOT_WHERE,
         },
         include: {
           thread: {

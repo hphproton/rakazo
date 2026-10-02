@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import { builtinAgentTools, DELEGATION_TOOL_NAMES } from "./builtin-tools.js";
-import { ackHubInbox, listHubInbox, sendHubMessage } from "./hub-send.js";
+import { ackHubInbox, hubOutboundEchoNonce, listHubInbox, sendHubMessage } from "./hub-send.js";
 
 const run = {
   id: "run-1",
@@ -69,22 +69,46 @@ describe("hub_send_message registration", () => {
     expect(builtinAgentTools.some((entry) => entry.name === "message_bot")).toBe(true);
     expect(DELEGATION_TOOL_NAMES.has("hub_send_message")).toBe(true);
     expect(DELEGATION_TOOL_NAMES.has("message_bot")).toBe(true);
+    const names = builtinAgentTools.map((entry) => entry.name);
+    expect(names.indexOf("hub_send_message")).toBe(names.indexOf("message_user") + 1);
+    const messageBot = builtinAgentTools.find((entry) => entry.name === "message_bot");
+    expect(messageBot?.description).toContain("hub_send_message");
+    expect(messageBot?.description.toLowerCase()).toContain("not teammates");
   });
 });
 
 describe("sendHubMessage", () => {
-  it("queues a HUB-INBOX row for an explicit id without a user message", async () => {
+  it("queues a HUB-INBOX row and echoes the payload for the sending thread", async () => {
     const { prisma, create, messageCreate } = harness();
-    const sent = await sendHubMessage(prisma, run, sender, {
-      hubAgentId: "F4ADCC55-1111-4111-8111-111111111111",
-      text: "Ship the notes",
-      deliveryKey: "effect-1",
-    });
+    const echo = vi.fn();
+    const sent = await sendHubMessage(
+      prisma,
+      run,
+      sender,
+      {
+        hubAgentId: "F4ADCC55-1111-4111-8111-111111111111",
+        text: "Ship the notes",
+        deliveryKey: "effect-1",
+      },
+      echo,
+    );
     expect(sent).toMatchObject({
       ok: true,
       hubAgentId: "f4adcc55-1111-4111-8111-111111111111",
       name: "Box Principal",
       deliveryId: "delivery-1",
+      text: "Ship the notes",
+      intent: "request",
+    });
+    expect(echo).toHaveBeenCalledWith({
+      nonce: hubOutboundEchoNonce("delivery-1"),
+      block: {
+        kind: "hub_message_sent",
+        hubAgentId: "f4adcc55-1111-4111-8111-111111111111",
+        name: "Box Principal",
+        text: "Ship the notes",
+        intent: "request",
+      },
     });
     expect(create).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0]?.[0].data).toMatchObject({
@@ -117,13 +141,21 @@ describe("sendHubMessage", () => {
     expect(missing.create).not.toHaveBeenCalled();
 
     const unknown = harness();
+    const echo = vi.fn();
     expect(
-      await sendHubMessage(unknown.prisma, run, sender, {
-        target: "No Such Agent",
-        text: "hello",
-      }),
+      await sendHubMessage(
+        unknown.prisma,
+        run,
+        sender,
+        {
+          target: "No Such Agent",
+          text: "hello",
+        },
+        echo,
+      ),
     ).toEqual({ ok: false, error: "not_found", target: "No Such Agent" });
     expect(unknown.create).not.toHaveBeenCalled();
+    expect(echo).not.toHaveBeenCalled();
 
     const ambiguous = harness({
       bots: [
@@ -174,21 +206,37 @@ describe("sendHubMessage", () => {
         id: "delivery-1",
         hubAgentId: "f4adcc55-1111-4111-8111-111111111111",
         name: "Box Principal",
+        text: "Ship the notes",
+        intent: "request",
         meshId: null,
       },
     });
-    const sent = await sendHubMessage(prisma, run, sender, {
-      target: "someone else",
-      text: "",
-      deliveryKey: "effect-1",
-    });
+    const echo = vi.fn();
+    const sent = await sendHubMessage(
+      prisma,
+      run,
+      sender,
+      {
+        target: "someone else",
+        text: "",
+        deliveryKey: "effect-1",
+      },
+      echo,
+    );
     expect(sent).toMatchObject({
       ok: true,
       deliveryId: "delivery-1",
       replayed: true,
+      text: "Ship the notes",
       hubAgentId: "f4adcc55-1111-4111-8111-111111111111",
     });
     expect(create).not.toHaveBeenCalled();
+    expect(echo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonce: "hub-outbound:delivery-1",
+        block: expect.objectContaining({ text: "Ship the notes", name: "Box Principal" }),
+      }),
+    );
   });
 });
 
@@ -250,6 +298,17 @@ describe("hub outbox drain", () => {
         status: "wake",
       },
       data: { status: "done" },
+    });
+
+    await ackHubInbox(prisma, { spaceId: "space-1", userId: "user-1" }, ["delivery-1"], "mesh-1");
+    expect(raw.hubOutbound.updateMany).toHaveBeenLastCalledWith({
+      where: {
+        id: { in: ["delivery-1"] },
+        spaceId: "space-1",
+        userId: "user-1",
+        status: "wake",
+      },
+      data: { status: "done", meshId: "mesh-1" },
     });
   });
 });

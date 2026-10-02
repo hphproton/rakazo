@@ -112,6 +112,7 @@ async function withoutPeerRunMessages<T extends { runId: string | null; blocks: 
       (block) =>
         block.kind === "bot_message_sent" ||
         block.kind === "bot_message_received" ||
+        block.kind === "hub_message_sent" ||
         block.kind === "ask" ||
         block.kind === "text",
     );
@@ -161,6 +162,7 @@ export function shouldForwardPeerThreadEvent(event: {
         "kind" in block &&
         (block.kind === "bot_message_received" ||
           block.kind === "bot_message_sent" ||
+          block.kind === "hub_message_sent" ||
           block.kind === "ask" ||
           block.kind === "text"),
     )

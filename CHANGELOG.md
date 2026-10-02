@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Hub directory members are not sidebar chats. A successful `hub_send_message` shows the outbound text and a Hub destination marker in the sending thread. `message_bot` cannot reach those members. `hub/ackOutbound` can store an optional `meshId` on the rows it acks.
 - Message bubbles in the web/PWA transcript use more of a wide window's width (70%/74% caps raised to 84%/88%, still leaving room for the hover-actions gutter), instead of leaving a quarter to a third of a long message's row empty.
 - Every run's system instructions now state the current date and time (UTC), so bots judge deadlines, recency and scheduling from the real present instead of guessing it from training data or quoted timestamps.
 - Connect Slack, WhatsApp Business Cloud, or Telegram DMs to a bot from Messaging settings, alongside iMessage/SMS. Each app can use a different bot. Group conversations remain iMessage-only.
@@ -30,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - A Rakazo bot can send to a Hub member with the builtin tool `hub_send_message`. It resolves the member from the Hub directory and queues a `HUB-INBOX` row. The host mesh reads `hub/outbox` and acknowledges with `hub/ackOutbound`. The user does not type `TO_HUB:`. See [Hub bridge](docs/hub-bridge.md).
-- A signed-in caller can mirror Hub members onto the roster with `hub/syncMembers`. Members show up as bots in a section named Hub. `hub/directory` reads those members and the workspace bots, with a content epoch and an optional HMAC when `HUB_DIRECTORY_SIGNING_KEY` is set. Hub inbound prefers `threads/receiveHub`; a webhook shaped like a Hub delivery is refused. See [Hub bridge](docs/hub-bridge.md).
+- A signed-in caller can mirror Hub members into the directory with `hub/syncMembers`. Those rows stay addressable for `hub/directory` and `hub_send_message` and are not sidebar chats. `hub/directory` reads those members and the workspace bots, with a content epoch and an optional HMAC when `HUB_DIRECTORY_SIGNING_KEY` is set. Hub inbound prefers `threads/receiveHub`; a webhook shaped like a Hub delivery is refused. See [Hub bridge](docs/hub-bridge.md).
 - A signed-in caller can deliver a Hub agent's message into a bot thread with `threads/receiveHub`. The message is stored as a peer receipt from that Hub agent (a Hub marker in the thread) and wakes the bot. It does not appear as a message the person typed.
 - Voice mode: spoken replies, hold-to-talk dictation, and half-duplex calls with ElevenLabs, OpenAI, Cartesia, or Fish Audio.
 - Desktop owners using Docker can opt into running bot shell commands directly on their computer. This grants access under the owner's OS account; see [computer providers](docs/self-host.md#choosing-a-computer-provider).

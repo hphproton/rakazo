@@ -2540,6 +2540,7 @@ function previewMessageText(message: MobileMessage): string {
           `${messagingProviderLabel(block.provider, block.transport)} · ${block.fromLabel}: ${block.text}`,
         ];
       }
+      if (block.kind === "hub_message_sent" && block.text) return [block.text];
       if (block.kind === "text" && block.text) {
         // Bot text is Markdown; user text is already plain.
         return [message.role === "bot" ? plainTextFromMarkdown(block.text) : block.text];
@@ -2664,6 +2665,50 @@ const MessageBubble = memo(function MessageBubble({
         expanded={peerExpanded}
         onToggle={() => setPeerExpanded((expanded) => !expanded)}
       />
+    );
+  }
+  const hubOutbound = message.blocks.find(
+    (block): block is Extract<MessageBlock, { kind: "hub_message_sent" }> =>
+      block.kind === "hub_message_sent",
+  );
+  if (hubOutbound) {
+    const name = hubOutbound.name;
+    const label = t("To Hub · {name}", { name });
+    return (
+      <View style={{ maxWidth: "100%", alignItems: "flex-start", gap: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <BotAvatar
+            color={tokens.mutedForeground}
+            identity={`hub:${hubOutbound.hubAgentId}`}
+            size={16}
+          />
+          <Text
+            numberOfLines={1}
+            style={{ color: tokens.mutedForeground, fontSize: 13.5, flexShrink: 1 }}
+          >
+            {label}
+          </Text>
+        </View>
+        <View
+          style={{
+            maxWidth: "100%",
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: tokens.border,
+            backgroundColor: tokens.background,
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+          }}
+        >
+          <Text
+            {...actionProps}
+            accessibilityLabel={`${label}. ${hubOutbound.text}`}
+            style={{ color: tokens.foreground, fontSize: 15.5, lineHeight: 22 }}
+          >
+            {hubOutbound.text}
+          </Text>
+        </View>
+      </View>
     );
   }
   const peerMessage = message.blocks.find(

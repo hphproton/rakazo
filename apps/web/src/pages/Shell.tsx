@@ -137,7 +137,11 @@ import { createPortal } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArtifactFileCard } from "../components/ArtifactFileCard";
 import { AskCard } from "../components/AskCard";
-import { ActiveBotGlyph, CollaborationMarker } from "../components/ai/CollaborationMarker";
+import {
+  ActiveBotGlyph,
+  CollaborationMarker,
+  HubOutboundMessage,
+} from "../components/ai/CollaborationMarker";
 import { CloudAgentCard } from "../components/CloudAgentCard";
 import { ComputerMaintenanceActions } from "../components/ComputerMaintenanceActions";
 import {
@@ -6352,6 +6356,18 @@ const MessageView = memo(function MessageView({
               </span>
               <span>{block.text}</span>
             </div>
+          );
+        }
+        if (block.kind === "hub_message_sent") {
+          const name = block.name;
+          return (
+            <HubOutboundMessage
+              key={i}
+              label={t`To Hub · ${name}`}
+              text={block.text}
+              hubAgentId={block.hubAgentId}
+              color={FALLBACK_BOT_COLOR}
+            />
           );
         }
         if (block.kind === "bot_message_sent" || block.kind === "bot_message_received") {

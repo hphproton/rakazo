@@ -1,5 +1,5 @@
 import { type Actor, MessageBlock, type RunActivityRow } from "@rakazo/contracts";
-import { ACTIVE_RUN_STATUSES, botMessageContext } from "@rakazo/core";
+import { ACTIVE_RUN_STATUSES, botMessageContext, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 
 const RECENT_LIMIT = 20;
@@ -47,7 +47,7 @@ export async function listSpaceRuns(
     where: {
       spaceId: actor.spaceId,
       userId: actor.userId,
-      bot: { archivedAt: null },
+      bot: { archivedAt: null, ...VISIBLE_ROSTER_BOT_WHERE },
       ...(filter === "active"
         ? { status: { in: [...ACTIVE_RUN_STATUSES] } }
         : { status: { in: [...TERMINAL_STATUSES] } }),

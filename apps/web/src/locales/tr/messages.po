@@ -3912,6 +3912,10 @@ msgstr "Başlık"
 msgid "To:"
 msgstr "Kime:"
 
+#: src/pages/Shell.tsx
+msgid "To Hub · {name}"
+msgstr "Hub · {name} kişisine"
+
 #: src/pages/Artifacts.tsx
 msgid "Today"
 msgstr ""

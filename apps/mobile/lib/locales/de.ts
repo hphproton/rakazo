@@ -137,6 +137,7 @@ export const DE_MESSAGES: Record<string, string> = {
   "Message from {peer}": "Nachricht von {peer}",
   "Message {name}": "{name} schreiben",
   "Messaged {peer}": "Nachricht an {peer} gesendet",
+  "To Hub · {name}": "An Hub · {name}",
   "Message…": "Nachricht…",
   "No longer active": "Nicht mehr aktiv",
   "Opened its thread.": "Thread geöffnet.",

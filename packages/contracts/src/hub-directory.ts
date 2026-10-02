@@ -81,6 +81,7 @@ export type HubOutboxResult = z.infer<typeof HubOutboxResultSchema>;
 
 export const HubAckOutboundInput = z.object({
   deliveryIds: z.array(z.string().trim().min(1).max(200)).max(100),
+  meshId: z.string().trim().min(1).max(200).optional(),
 });
 export type HubAckOutboundInput = z.infer<typeof HubAckOutboundInput>;
 
