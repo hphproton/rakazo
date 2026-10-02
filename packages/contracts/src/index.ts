@@ -5,6 +5,7 @@ export * from "./bot-secrets.js";
 export * from "./desktop.js";
 export * from "./domain.js";
 export * from "./events.js";
+export * from "./hub-directory.js";
 export * from "./ids.js";
 export * from "./integration-settings.js";
 export * from "./local-settings.js";

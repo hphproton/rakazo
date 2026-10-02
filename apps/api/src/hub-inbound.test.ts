@@ -1,6 +1,7 @@
 import type { Actor } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
+import { deliverHubInbound } from "./hub-cutover.js";
 import { receiveHubMessage } from "./hub-inbound.js";
 import type { ThreadTarget } from "./thread-target.js";
 
@@ -188,6 +189,26 @@ describe("receiveHubMessage", () => {
       }),
     );
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("delivers through the preferred receiveHub path", async () => {
+    const { tx, prisma } = transactionClient();
+    const { deps: deliveryDeps } = deps(prisma);
+
+    await deliverHubInbound(deliveryDeps, actor, target, deliveryInput());
+
+    expect(tx.run.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ trigger: "hub_message" }),
+      }),
+    );
+    expect(tx.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          blocks: [expect.objectContaining({ origin: "hub", fromBotId: "hub-atlas" })],
+        }),
+      }),
+    );
   });
 
   it("rejects a Hub id that is the target bot", async () => {
