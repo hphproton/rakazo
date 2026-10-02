@@ -4,12 +4,56 @@ import type { ThreadMessage } from "@rakazo/contracts";
 import { BotAvatar, Button, Dialog, DialogClose, DialogContent, DialogTitle } from "@rakazo/ui-web";
 import { useEffect, useMemo, useState } from "react";
 import { loadPeerHistory } from "../lib/peer-history";
-import { peerConversations } from "../lib/peer-messages";
+import { type PeerMessage, peerConversations } from "../lib/peer-messages";
 import { rpc } from "../lib/rpc";
 
+/** Bubbles for one view-only exchange. Sent is the Rakazo bot; received is the other side. */
+export function PeerConversationTranscript({
+  botName,
+  peerBotName,
+  messages,
+}: {
+  botName: string;
+  peerBotName: string;
+  messages: readonly PeerMessage[];
+}) {
+  return (
+    <div
+      data-testid="peer-conversation-transcript"
+      className="rk-scroll flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-5 md:px-7 md:py-6"
+    >
+      {messages.map((peerMessage, index) => {
+        const sent = peerMessage.direction === "sent";
+        return (
+          <div
+            key={`${peerMessage.messageId}-${index}`}
+            data-testid="peer-conversation-turn"
+            data-direction={sent ? "sent" : "received"}
+            className={`flex ${sent ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${sent ? "bg-accent" : "bg-muted"}`}
+            >
+              <div className="mb-1 text-[12px] text-muted-foreground/70" dir="auto">
+                {sent ? botName : peerBotName}
+              </div>
+              <div className="text-[14.5px] leading-[1.5] text-foreground/90" dir="auto">
+                <ChatMarkdown>{peerMessage.text}</ChatMarkdown>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
- * Full-screen view-only transcript of a bot-to-bot exchange.
- * Opened from a Messaged / Message from chip in the human thread.
+ * Full-screen view-only transcript of one exchange.
+ * Opened from a Messaged / Message from chip, or from a To Hub chip.
+ * Hub inbound and outbound turns for the same member are one conversation.
+ * There is no composer: delivery stays on hub_send_message, and Hub members
+ * are not sidebar seats.
  */
 export function PeerMessagesOverlay({
   botId,
@@ -115,33 +159,11 @@ export function PeerMessagesOverlay({
             <Trans>No messages with {peerBotName} yet.</Trans>
           </div>
         ) : (
-          <div
-            data-testid="peer-conversation-transcript"
-            className="rk-scroll flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-5 md:px-7 md:py-6"
-          >
-            {conversation.messages.map((peerMessage, index) => {
-              const sent = peerMessage.direction === "sent";
-              return (
-                <div
-                  key={`${peerMessage.messageId}-${index}`}
-                  className={`flex ${sent ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${
-                      sent ? "bg-accent" : "bg-muted"
-                    }`}
-                  >
-                    <div className="mb-1 text-[12px] text-muted-foreground/70" dir="auto">
-                      {sent ? botName : peerBotName}
-                    </div>
-                    <div className="text-[14.5px] leading-[1.5] text-foreground/90" dir="auto">
-                      <ChatMarkdown>{peerMessage.text}</ChatMarkdown>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <PeerConversationTranscript
+            botName={botName}
+            peerBotName={peerBotName}
+            messages={conversation.messages}
+          />
         )}
 
         <div className="flex items-center gap-4 border-t border-sidebar-border px-[18px] py-3.5">

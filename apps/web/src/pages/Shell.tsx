@@ -40,9 +40,10 @@ import {
   cronFromPreset,
   groupBotsForSidebar,
   groupVoiceChats,
+  hubMemberLabel,
   inferAttachmentMimeType,
   isActive,
-  isPeerReceiptBlocks,
+  isCompactCollaborationReceipt,
   isRunTerminalEvent,
   isToolActivityBlock,
   latestAnswerableAskMessageId,
@@ -137,11 +138,7 @@ import { createPortal } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArtifactFileCard } from "../components/ArtifactFileCard";
 import { AskCard } from "../components/AskCard";
-import {
-  ActiveBotGlyph,
-  CollaborationMarker,
-  HubOutboundMessage,
-} from "../components/ai/CollaborationMarker";
+import { ActiveBotGlyph, CollaborationMarker } from "../components/ai/CollaborationMarker";
 import { CloudAgentCard } from "../components/CloudAgentCard";
 import { ComputerMaintenanceActions } from "../components/ComputerMaintenanceActions";
 import {
@@ -4961,7 +4958,7 @@ const Transcript = memo(function Transcript({
           }
           const message = item.message;
           if (!messageHasVisibleBlocks(message.blocks, showToolActivity)) return null;
-          const peerReceipt = isPeerReceiptBlocks(message.blocks);
+          const peerReceipt = isCompactCollaborationReceipt(message.blocks);
           const messageReactions = reactionView.reactions.get(message.id);
           return (
             <div
@@ -6360,13 +6357,20 @@ const MessageView = memo(function MessageView({
         }
         if (block.kind === "hub_message_sent") {
           const name = block.name;
+          const label = t`To Hub · ${name}`;
           return (
-            <HubOutboundMessage
+            <CollaborationMarker
               key={i}
-              label={t`To Hub · ${name}`}
-              text={block.text}
-              hubAgentId={block.hubAgentId}
-              color={FALLBACK_BOT_COLOR}
+              ariaLabel={label}
+              color={peerBot(block.hubAgentId)?.color ?? FALLBACK_BOT_COLOR}
+              identity={block.hubAgentId}
+              label={label}
+              onClick={() =>
+                onOpenPeerMessages({
+                  peerBotId: block.hubAgentId,
+                  peerBotName: hubMemberLabel(name),
+                })
+              }
             />
           );
         }

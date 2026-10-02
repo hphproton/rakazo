@@ -14,7 +14,9 @@ export type UserVisibleMessagesOptions = {
    * A Hub receipt (`origin: "hub"`) is still a chip. It does not hide the
    * target bot's substantive turn. A trivial acknowledgement after that chip
    * (for example "OK." or "ACK") is hidden, because the chip already records
-   * receipt. A `hub_message_sent` echo stays visible either way.
+   * receipt. A `hub_message_sent` echo stays visible either way, as the same
+   * kind of chip. Its payload is read in the cross-team transcript, not as a
+   * second bubble beside the chip.
    */
   includePeerReceipts?: boolean;
   /** Peer-run ids from `run.trigger === "bot_message"` when receipts may be out of window. */
@@ -59,6 +61,22 @@ export function isPeerReceiptBlocks(blocks: readonly MessageBlock[]): boolean {
 /** Outbound Hub payload echoed in the sending thread. Always visible, including on a peer run. */
 export function isHubOutboundEcho(blocks: readonly MessageBlock[]): boolean {
   return blocks.some((block) => block.kind === "hub_message_sent");
+}
+
+/**
+ * A row whose only content is a collaboration chip (teammate receipt or Hub
+ * outbound). The transcript lays these out like an inbound Hub marker.
+ */
+export function isCompactCollaborationReceipt(blocks: readonly MessageBlock[]): boolean {
+  return (
+    blocks.length > 0 &&
+    blocks.every(
+      (block) =>
+        block.kind === "bot_message_sent" ||
+        block.kind === "bot_message_received" ||
+        block.kind === "hub_message_sent",
+    )
+  );
 }
 
 function normalizeAckPhrase(value: string): string {

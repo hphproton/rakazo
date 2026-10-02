@@ -19,6 +19,7 @@ import {
   type ComposerMention,
   cloudAgentHttpsUrl,
   groupVoiceChats,
+  hubMemberLabel,
   isApprovalAskBlock,
   isRunTerminalEvent,
   isSecretAskBlock,
@@ -75,6 +76,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppConnectCard } from "../components/AppConnectCard";
 import { AskActions } from "../components/AskActions";
 import { BotAvatar } from "../components/bot-avatar";
+import { HubConversationSheet } from "../components/hub-conversation-sheet";
 import { McpApprovalCard } from "../components/McpApprovalCard";
 import {
   MarkdownArtifactPreview,
@@ -304,11 +306,16 @@ function Thread() {
   const autoSpoken = useRef<string | null>(null);
   const autoSpokenBotId = useRef<string | null>(null);
   const threadKey = groupId ?? botId;
+  const [hubConversation, setHubConversation] = useState<{
+    peerBotId: string;
+    peerBotName: string;
+  } | null>(null);
   const [threadScrollState, setThreadScrollState] = useState<ThreadScrollState>(() =>
     scrollBehavior.current.state(),
   );
   useLayoutEffect(() => {
     scrollBehavior.current.openThread(threadKey ?? "");
+    setHubConversation(null);
     expandedHistoryThread.current = null;
     pinnedAroundRef.current = null;
     jumpScrollTarget.current = null;
@@ -1600,6 +1607,7 @@ function Thread() {
               onAnswer={answerMessage}
               onOpenBot={openBot}
               onPreviewMarkdown={setMarkdownPreview}
+              onOpenHubConversation={setHubConversation}
               actionProps={actionProps}
             />
           </Pressable>
@@ -2301,6 +2309,15 @@ function Thread() {
           </View>
         </View>
       </Modal>
+      {hubConversation && botId ? (
+        <HubConversationSheet
+          botId={botId}
+          botName={displayName || t("Bot")}
+          peerBotId={hubConversation.peerBotId}
+          peerBotName={hubConversation.peerBotName}
+          onClose={() => setHubConversation(null)}
+        />
+      ) : null}
       {markdownPreview && artifactTarget ? (
         <MarkdownArtifactPreview
           threadTarget={artifactTarget}
@@ -2577,6 +2594,45 @@ type MessageActionProps = Pick<
   "onLongPress" | "accessibilityActions" | "onAccessibilityAction"
 >;
 
+function HubReceiptChip({
+  actionProps,
+  color,
+  identity,
+  label,
+  onPress,
+  textColor,
+}: {
+  actionProps: MessageActionProps;
+  color: string;
+  identity: string;
+  label: string;
+  onPress?: () => void;
+  textColor: string;
+}) {
+  return (
+    <Pressable
+      {...actionProps}
+      accessible
+      accessibilityLabel={label}
+      accessibilityRole={onPress ? "button" : undefined}
+      onPress={onPress}
+      style={{
+        width: "100%",
+        paddingVertical: 4,
+        alignItems: "center",
+        justifyContent: "flex-start",
+        flexDirection: "row",
+        gap: 6,
+      }}
+    >
+      <BotAvatar color={color} identity={identity} size={16} />
+      <Text numberOfLines={1} style={{ color: textColor, fontSize: 13.5, flexShrink: 1 }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 const MessageBubble = memo(function MessageBubble({
   botId,
   botName,
@@ -2588,6 +2644,7 @@ const MessageBubble = memo(function MessageBubble({
   canAnswer,
   onAnswer,
   onOpenBot,
+  onOpenHubConversation,
   onPreviewMarkdown,
   actionProps,
 }: {
@@ -2601,6 +2658,7 @@ const MessageBubble = memo(function MessageBubble({
   canAnswer: boolean;
   onAnswer: (message: MobileMessage, answer: string, username?: string) => Promise<void>;
   onOpenBot: (botId: string, name: string) => void;
+  onOpenHubConversation: (peer: { peerBotId: string; peerBotName: string }) => void;
   onPreviewMarkdown: (target: MarkdownArtifactPreviewTarget) => void;
   actionProps: MessageActionProps;
 }) {
@@ -2675,40 +2733,19 @@ const MessageBubble = memo(function MessageBubble({
     const name = hubOutbound.name;
     const label = t("To Hub · {name}", { name });
     return (
-      <View style={{ maxWidth: "100%", alignItems: "flex-start", gap: 6 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          <BotAvatar
-            color={tokens.mutedForeground}
-            identity={`hub:${hubOutbound.hubAgentId}`}
-            size={16}
-          />
-          <Text
-            numberOfLines={1}
-            style={{ color: tokens.mutedForeground, fontSize: 13.5, flexShrink: 1 }}
-          >
-            {label}
-          </Text>
-        </View>
-        <View
-          style={{
-            maxWidth: "100%",
-            borderRadius: 20,
-            borderWidth: 1,
-            borderColor: tokens.border,
-            backgroundColor: tokens.background,
-            paddingHorizontal: 16,
-            paddingVertical: 12,
-          }}
-        >
-          <Text
-            {...actionProps}
-            accessibilityLabel={`${label}. ${hubOutbound.text}`}
-            style={{ color: tokens.foreground, fontSize: 15.5, lineHeight: 22 }}
-          >
-            {hubOutbound.text}
-          </Text>
-        </View>
-      </View>
+      <HubReceiptChip
+        actionProps={actionProps}
+        color={tokens.mutedForeground}
+        identity={hubOutbound.hubAgentId}
+        label={label}
+        textColor={tokens.mutedForeground}
+        onPress={() =>
+          onOpenHubConversation({
+            peerBotId: hubOutbound.hubAgentId,
+            peerBotName: hubMemberLabel(name),
+          })
+        }
+      />
     );
   }
   const peerMessage = message.blocks.find(
@@ -2729,29 +2766,25 @@ const MessageBubble = memo(function MessageBubble({
       members?.find((member) => member.botId === peerBotId)?.color ??
       tokens.mutedForeground;
     // Compact receipt only: peer bodies stay out of the human thread.
-    // Full view-only peer chat is web-first; mobile keeps the chip without expand.
+    // Teammate chips stay closed. A Hub receipt opens the same view-only transcript as outbound.
+    const hubPeer = !sent && peerMessage.origin === "hub";
     return (
-      <Pressable
-        {...actionProps}
-        accessible
-        accessibilityLabel={label}
-        style={{
-          width: "100%",
-          paddingVertical: 4,
-          alignItems: "center",
-          justifyContent: "flex-start",
-          flexDirection: "row",
-          gap: 6,
-        }}
-      >
-        <BotAvatar color={peerColor} identity={peerBotId} size={16} />
-        <Text
-          numberOfLines={1}
-          style={{ color: tokens.mutedForeground, fontSize: 13.5, flexShrink: 1 }}
-        >
-          {label}
-        </Text>
-      </Pressable>
+      <HubReceiptChip
+        actionProps={actionProps}
+        color={peerColor}
+        identity={peerBotId}
+        label={label}
+        textColor={tokens.mutedForeground}
+        onPress={
+          hubPeer
+            ? () =>
+                onOpenHubConversation({
+                  peerBotId,
+                  peerBotName: peer,
+                })
+            : undefined
+        }
+      />
     );
   }
   const channelMessage = message.blocks.find(
