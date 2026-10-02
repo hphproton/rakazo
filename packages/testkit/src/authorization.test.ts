@@ -194,6 +194,8 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["voice/prepare", { text: "Nope" }],
       ["hub/directory", {}],
       ["hub/syncMembers", { members: [{ hubAgentId: "hub-atlas", name: "Atlas" }] }],
+      ["hub/outbox"],
+      ["hub/ackOutbound", { deliveryIds: ["missing-delivery"] }],
     ]);
 
     const results = await Promise.all(
