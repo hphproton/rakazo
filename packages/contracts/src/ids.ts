@@ -47,5 +47,6 @@ export const SandboxKind = z.enum([
   "box",
   "desktop",
   "fake",
+  "sand",
 ]);
 export type SandboxKind = z.infer<typeof SandboxKind>;

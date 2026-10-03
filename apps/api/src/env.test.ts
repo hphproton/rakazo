@@ -94,6 +94,10 @@ describe("loadEnv", () => {
     });
   });
 
+  it("keeps sand selected without borrowing a seat", () => {
+    expect(loadEnv({ ...base, SANDBOX_PROVIDER: "sand" }).sandboxProvider).toBe("sand");
+  });
+
   it("loads provider-specific Box configuration", () => {
     const env = loadEnv({
       ...base,

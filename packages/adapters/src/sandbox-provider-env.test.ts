@@ -11,6 +11,10 @@ describe("resolveSandboxProvider", () => {
     expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "" })).toBe("none");
   });
 
+  it("keeps sand selected without a host token", () => {
+    expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "sand" })).toBe("sand");
+  });
+
   it("falls back to none when a remote provider key is missing", () => {
     expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "e2b" })).toBe("none");
     expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "daytona" })).toBe("none");
@@ -61,6 +65,18 @@ describe("sandboxProviderOptionsFromEnv", () => {
       createosBaseUrl: "https://api.example.test",
       createosShape: "s-4vcpu-8gb",
       createosRootfs: "desktop:2",
+    });
+  });
+
+  it("loads the sand-host router without a seat map", () => {
+    expect(
+      sandboxProviderOptionsFromEnv({
+        SAND_HOST_URL: " http://127.0.0.1:1339 ",
+        SAND_HOST_TOKEN: " test-sand-token ",
+      }),
+    ).toMatchObject({
+      sandHostUrl: "http://127.0.0.1:1339",
+      sandHostToken: "test-sand-token",
     });
   });
 });

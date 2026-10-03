@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NO_SANDBOX_MESSAGE } from "./none-sandbox.js";
 import { createSandboxProvider } from "./sandbox-factory.js";
 
@@ -50,9 +50,27 @@ describe("createSandboxProvider", () => {
     expect(createSandboxProvider("box", { boxApiKey: "test-box-key" }).describe().id).toBe("box");
   });
 
+  it("selects sand and still refuses a bot id that has no seat", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const sandbox = createSandboxProvider("sand", {});
+      expect(sandbox.describe()).toMatchObject({
+        id: "sand",
+        capabilities: { graphical: true, multiScreen: false },
+      });
+      await expect(
+        sandbox.provision({ botId: "11111111-1111-4111-8111-111111111111", homePath: "/tmp" }, ctx),
+      ).rejects.toThrow(/no seat policy/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("throws on unknown provider", () => {
     expect(() => createSandboxProvider("bogus", {})).toThrow(
-      'Unknown SANDBOX_PROVIDER "bogus". Use none | docker | e2b | daytona | createos | box | e2b-emulator | daytona-emulator | box-emulator | desktop | fake.',
+      'Unknown SANDBOX_PROVIDER "bogus". Use none | docker | e2b | daytona | createos | box | e2b-emulator | daytona-emulator | box-emulator | desktop | sand | fake.',
     );
   });
 });

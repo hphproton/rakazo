@@ -31,7 +31,8 @@ run `bash install-images.sh`. Flags may be combined in either order: `--prepare-
 `SANDBOX_PROVIDER` defaults to `docker`. The images Compose file runs a sandbox supervisor
 (from the app image, on the internal network only) and pulls `ghcr.io/elie222/rakazo/computer`.
 Signup and local Docker computers work without an E2B account. Optional remote providers: set
-`SANDBOX_PROVIDER` to `e2b`, `daytona`, `createos`, or `box` and add the matching API key. The published-images
+`SANDBOX_PROVIDER` to `e2b`, `daytona`, `createos`, or `box` and add the matching API key.
+`sand` talks to the sand-host router instead, and still needs a seat policy before a bot can use it. The published-images
 Compose stack requires `SANDBOX_SUPERVISOR_TOKEN` for every provider; leave it empty and `compose up` fails closed.
 
 Optional: set `OPENROUTER_API_KEY` or connect a model in the UI after signup.
@@ -231,7 +232,7 @@ Optional:
 ```env
 SIGNUPS_ENABLED=true
 SIGNUP_ALLOWLIST=you@example.com,@company.com
-SANDBOX_PROVIDER=docker   # or none, e2b, daytona, createos, box. Keep fake only for pnpm test.
+SANDBOX_PROVIDER=docker   # or none, e2b, daytona, createos, box, sand. Keep fake only for pnpm test.
 AGENT_RUNTIME=pi          # Keep scripted only for pnpm test.
 WAKEUP_DRIVER=graphile
 SANDBOX_IDLE_MS=600000    # pause the bot computer after 10 minutes idle
