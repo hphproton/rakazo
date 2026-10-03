@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { NO_SANDBOX_MESSAGE } from "./none-sandbox.js";
+import { SandSeatUnmappedError } from "./sand-seat.js";
 import { createSandboxProvider } from "./sandbox-factory.js";
 
 const AGENT_A = "11111111-1111-4111-8111-111111111111";
@@ -144,6 +145,78 @@ describe("createSandboxProvider", () => {
       await expect(
         sandbox.provision({ botId: "team-space", homePath: "/tmp" }, { ...ctx, botId: "bot-b" }),
       ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ignores a leftover fake provider ref and still refuses a different sand agent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const homeKey = "team-space";
+      const sandbox = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-a": AGENT_A }),
+      });
+      const caller = { ...ctx, botId: "bot-a" };
+      await expect(
+        sandbox.provision(
+          {
+            botId: homeKey,
+            homePath: "/tmp",
+            providerRef: `fake-${homeKey}`,
+            providerKind: "fake",
+          },
+          caller,
+        ),
+      ).resolves.toMatchObject({ botId: homeKey, providerRef: AGENT_A, fresh: false });
+      await expect(
+        sandbox.provision(
+          { botId: homeKey, homePath: "/tmp", providerRef: "box-machine", providerKind: "box" },
+          caller,
+        ),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      await expect(
+        sandbox.provision(
+          { botId: homeKey, homePath: "/tmp", providerRef: AGENT_A, providerKind: "sand" },
+          caller,
+        ),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      const byHome = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ [homeKey]: AGENT_A }),
+      });
+      await expect(
+        byHome.provision(
+          {
+            botId: homeKey,
+            homePath: "/tmp",
+            providerRef: `fake-${homeKey}`,
+            providerKind: "fake",
+          },
+          { ...ctx, botId: "bot-b" },
+        ),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      await expect(
+        sandbox.provision(
+          { botId: homeKey, homePath: "/tmp", providerRef: AGENT_B, providerKind: "sand" },
+          caller,
+        ),
+      ).rejects.toThrow(SandSeatUnmappedError);
+      const unmapped = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-c": AGENT_A }),
+      });
+      await expect(
+        unmapped.provision(
+          {
+            botId: homeKey,
+            homePath: "/tmp",
+            providerRef: `fake-${homeKey}`,
+            providerKind: "fake",
+          },
+          caller,
+        ),
+      ).rejects.toThrow(SandSeatUnmappedError);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();

@@ -105,6 +105,7 @@ export * from "./realtime.js";
 export * from "./release-watch.js";
 export * from "./remote-mcp.js";
 export * from "./run-secret.js";
+export * from "./sand-hand.js";
 export * from "./sand-host.js";
 export * from "./sand-sandbox.js";
 export * from "./sand-seat.js";

@@ -145,9 +145,16 @@ export function assertSandAgentId(agentId: string): void {
   }
 }
 
+/** True when `value` is a sand agent UUID. A `fake-` id and any other provider ref are not. */
+export function isSandAgentId(value: string): boolean {
+  return SAND_AGENT_UUID.test(value);
+}
+
 /**
- * Apply the seat policy. A stored provider ref is not a seat, and neither is
- * the bot id, even when that id is already a UUID.
+ * Apply the seat policy. A stored provider ref is not a seat. A leftover ref
+ * from another provider, including `fake-<home key>`, does not veto the map.
+ * A different sand agent UUID does. The bot id is not a seat either, even when
+ * that id is already a UUID.
  */
 export function requireSandSeat(policy: SandSeatPolicy, request: SandSeatRequest): SandSeat {
   const seat = policy.resolve(request);
@@ -158,7 +165,8 @@ export function requireSandSeat(policy: SandSeatPolicy, request: SandSeatRequest
       "Seat policy returned the Rakazo bot id. That id is not a sand agent UUID.",
     );
   }
-  if (request.providerRef !== undefined && request.providerRef !== seat.agentId) {
+  const stored = request.providerRef?.trim();
+  if (stored && isSandAgentId(stored) && stored !== seat.agentId) {
     throw new SandSeatUnmappedError(request.botId);
   }
   return { agentId: seat.agentId };

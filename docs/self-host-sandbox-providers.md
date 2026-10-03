@@ -57,9 +57,14 @@ the bot id, so map that bot id. A Team Computer's home key is `team-` plus the
 space id, shared by every bot on that computer, so map `team-<space id>` when
 those bots should use one sand agent. A bot id entry is also accepted and is
 used before the shared team home key. Anything missing from the map is refused,
-and an unset map refuses every bot.
+and an unset map refuses every bot. A stored ref from another provider, including
+`fake-<home key>`, does not block that map. A different sand agent UUID still refuses.
 This does not create an agent. It does not point a screen at display `:1` or
 `:3`. Selecting `sand` does not change the default for any other deployment.
+
+Sand desktop hands are observe and the action kinds click, move, down, up,
+type, key, scroll, and wait. `focus`, `open_path`, and `launch_app` are refused.
+There is no pty, snapshot, takeover, extra screen, or page browser.
 
 `SAND_HOST_TOKEN` is an optional bearer for that router. The agent selector
 header is `x-sand-agent-id`. Replace that header if the live router picks the

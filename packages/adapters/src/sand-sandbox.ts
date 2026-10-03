@@ -20,6 +20,7 @@ import {
   computerObservation,
   normalizeWorkspacePath,
 } from "./computer-support.js";
+import { SAND_HAND_REFUSAL, sandHandRefuses } from "./sand-hand.js";
 import type { SandComputerAction, SandHost } from "./sand-host.js";
 import { sandExecEnv, sandImageMeta } from "./sand-host.js";
 import type { SandSeatPolicy } from "./sand-seat.js";
@@ -326,6 +327,7 @@ function toSandAction(action: ComputerAction): SandComputerAction {
     };
   }
   if (action.kind === "wait") return { wait: { durationMs: Math.max(0, Math.round(action.ms)) } };
+  if (sandHandRefuses(action.kind)) throw new Error(SAND_HAND_REFUSAL);
   throw new Error(`sand computer use does not support ${action.kind}`);
 }
 
