@@ -28,7 +28,7 @@ test("joins Chief and Deputy in the existing topic view when they share a key", 
     }),
   ).toBeVisible();
   const turns = view.getByTestId("peer-conversation-turn");
-  await expect(turns).toHaveCount(8);
+  await expect(turns).toHaveCount(10);
   await expect(turns.nth(0)).toContainText("Chief · Hub · Box Principal");
   await expect(turns.nth(0)).toContainText("Check the deploy.");
   await expect(turns.nth(1)).toContainText("Deputy · Hub · Box Principal");
@@ -36,6 +36,11 @@ test("joins Chief and Deputy in the existing topic view when they share a key", 
   await expect(turns.nth(4)).toContainText("Hub · Box Principal");
   await expect(turns.nth(4)).toContainText("Principal ready.");
   await expect(turns.nth(5)).toContainText("Principal to Deputy.");
+  await expect(turns.nth(8)).toHaveAttribute("data-direction", "sent");
+  await expect(turns.nth(8)).toContainText("Chief");
+  await expect(turns.nth(8)).toContainText("Chief on it.");
+  await expect(turns.nth(9)).toHaveAttribute("data-direction", "sent");
+  await expect(turns.nth(9)).toContainText("Deputy on it.");
   await expect(view.getByText("This chat is view-only")).toBeVisible();
   await expect(view.getByRole("textbox")).toHaveCount(0);
 

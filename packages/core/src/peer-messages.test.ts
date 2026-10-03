@@ -273,6 +273,7 @@ describe("hub chip transcripts", () => {
       hubExchangeForAnchor([outbound, reply, inbound], { messageId, peerBotId: HUB });
     expect(fromChip("in")?.messages.map((turn) => [turn.direction, turn.text])).toEqual([
       ["received", "Check the deploy."],
+      ["sent", "Queued for Atlas."],
       ["sent", "NATIVE_HUB_SEND_SMOKE"],
     ]);
     expect(fromChip("out")?.messages.map((turn) => turn.text)).toEqual(
@@ -307,7 +308,11 @@ describe("hub chip transcripts", () => {
       messageId: "later",
       peerBotId: HUB,
     });
-    expect(opened?.messages.map((turn) => turn.text)).toEqual(["older inbound", "older outbound"]);
+    expect(opened?.messages.map((turn) => turn.text)).toEqual([
+      "older inbound",
+      "older outbound",
+      "Done with the first request.",
+    ]);
     expect(smoke?.messages.map((turn) => turn.text)).toEqual(["NATIVE_HUB_SEND_SMOKE"]);
   });
 
@@ -548,7 +553,13 @@ describe("hub chip transcripts", () => {
       hubExchangeForAnchor(messages, { messageId: "from-lab", peerBotId: lab })?.messages.map(
         (turn) => turn.text,
       ),
-    ).toEqual(["Check the deploy.", "Check the lab.", "Principal ready.", "Lab ready."]);
+    ).toEqual([
+      "Check the deploy.",
+      "Check the lab.",
+      "Principal ready.",
+      "Lab ready.",
+      "Both answered.",
+    ]);
     expect(
       hubExchangeForAnchor(messages, { messageId: "later", peerBotId: principal })?.messages.map(
         (turn) => turn.text,
@@ -1126,6 +1137,96 @@ describe("space-wide hub topic", () => {
     expect(spaceTopicKeyForHubSend([inbound], "thread-chief", lab)).toBe(key);
     expect(spaceTopicKeyForHubSend([inbound, reply], "thread-chief", principal)).toBe(key);
     expect(spaceTopicKeyForHubSend([inbound, reply], "thread-chief", lab)).toBeUndefined();
+  });
+
+  it("shows each bot's reply on the shared topic and keeps one chip per bot", () => {
+    const chiefThread = [
+      ...burst("thread-chief", "c", chief, key),
+      {
+        id: "c-reply",
+        threadId: "thread-chief",
+        seq: 5,
+        role: "bot" as const,
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T10:04:00.000Z",
+        blocks: [{ kind: "text" as const, text: "Chief on it." }],
+      },
+      {
+        id: "c-ack",
+        threadId: "thread-chief",
+        seq: 6,
+        role: "bot" as const,
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T10:04:30.000Z",
+        blocks: [{ kind: "text" as const, text: "OK." }],
+      },
+    ];
+    const deputyThread = [
+      ...burst("thread-deputy", "d", deputy, key),
+      {
+        id: "d-reply",
+        threadId: "thread-deputy",
+        seq: 5,
+        role: "bot" as const,
+        botId: deputy.id,
+        botName: deputy.name,
+        createdAt: "2026-10-02T10:05:00.000Z",
+        blocks: [{ kind: "text" as const, text: "Deputy on it." }],
+      },
+    ];
+    const unrelated: Row = {
+      id: "d-other",
+      threadId: "thread-deputy",
+      seq: 9,
+      role: "bot",
+      botId: deputy.id,
+      botName: deputy.name,
+      createdAt: "2026-10-02T12:00:00.000Z",
+      blocks: [
+        { kind: "hub_message_sent", hubAgentId: lab, name: "OSS Local Lab", text: "later lab" },
+      ],
+    };
+    const both = [...chiefThread, ...deputyThread];
+    const opened = hubExchangeForAnchor(both, { messageId: "c-in-p", peerBotId: principal });
+    expect(ids(opened)).toEqual([
+      "c-out-p",
+      "d-out-p",
+      "c-out-l",
+      "d-out-l",
+      "c-in-p",
+      "d-in-p",
+      "c-in-l",
+      "d-in-l",
+      "c-reply",
+      "d-reply",
+    ]);
+    expect(opened?.messages.map((turn) => turn.text)).toContain("Chief on it.");
+    expect(opened?.messages.map((turn) => turn.text)).toContain("Deputy on it.");
+    expect(opened?.messages.map((turn) => turn.text)).not.toContain("OK.");
+    expect(peerTurnSpeaker(opened!.messages.at(-2)!, "Chief", 2)).toBe("Chief");
+    expect(peerTurnSpeaker(opened!.messages.at(-1)!, "Deputy", 2)).toBe("Deputy");
+    expect(hubTranscriptTitle("Chief", opened!)).toBe(
+      "Chief, Deputy · Hub · Box Principal, OSS Local Lab",
+    );
+
+    const chiefPlan = hubTopicChipPlan(chiefThread);
+    const deputyPlan = hubTopicChipPlan(deputyThread);
+    const combined = hubTopicChipPlan([...both, unrelated]);
+    expect(chiefPlan.families.size).toBe(2);
+    expect(deputyPlan.families.size).toBe(2);
+    expect(combined.families.size).toBe(4);
+    expect(chiefPlan.hiddenMessageIds.has("c-reply")).toBe(false);
+    expect([...combined.families.values()].every((family) => family.names.length === 2)).toBe(true);
+
+    const loaded = messagesForHubTranscript(chiefThread, [...deputyThread, unrelated], {
+      messageId: "c-in-p",
+      peerBotId: principal,
+    });
+    expect(loaded.map((message) => message.id)).toContain("d-reply");
+    expect(loaded.map((message) => message.id)).toContain("c-reply");
+    expect(loaded.map((message) => message.id)).not.toContain("d-other");
   });
 
   it("loads sibling messages for the anchor key and leaves a missing key on one thread", () => {
