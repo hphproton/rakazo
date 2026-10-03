@@ -1,7 +1,5 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
-import { lstat, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type {
   AdapterContext,
   CommandRequest,
@@ -31,14 +29,20 @@ export interface DisplayContainerAttachment {
   home: string;
 }
 
-/** Chief. Deputy and every other bot stay on the space provider. */
+/**
+ * Chief. Deputy and every other bot stay on the space provider.
+ * `home` is the path inside the container. The lab mounts the host directory
+ * there; exec must not use the host path as its working directory.
+ */
 const DEFAULT_DISPLAY_CONTAINERS: readonly DisplayContainerAttachment[] = [
   {
     botId: "cmurhzv6600039g9hdhbizc35",
-    container: "rakazo-display-chief",
-    home: "/workspace/rakazo-stack/bot-homes/chief",
+    container: "team-b-chief-desktop",
+    home: "/home/rakazo",
   },
 ];
+
+const RUNTIME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,32}$/;
 
 const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
@@ -59,6 +63,13 @@ export function displayContainerAttachments(
   if (configured === undefined) return DEFAULT_DISPLAY_CONTAINERS.map((entry) => ({ ...entry }));
   if (!configured.trim()) return [];
   return configured.split(",").map((entry) => parseDisplayAttachment(entry.trim()));
+}
+
+/** Podman by default. This does not change the process-wide SANDBOX_PROVIDER. */
+export function displayRuntime(env: NodeJS.ProcessEnv = process.env): string {
+  const runtime = env.SANDBOX_DISPLAY_RUNTIME?.trim() || "podman";
+  if (!RUNTIME_NAME.test(runtime)) throw new Error("display runtime is invalid");
+  return runtime;
 }
 
 export function displayAttachmentForBot(
@@ -122,6 +133,7 @@ export class DisplayContainerSandbox implements SandboxProvider {
     private readonly inner: SandboxProvider,
     private readonly attachments: readonly DisplayContainerAttachment[],
     private readonly spawnCommand: DisplaySpawn = nodeSpawn,
+    private readonly runtime = displayRuntime(),
   ) {}
 
   describe() {
@@ -166,8 +178,9 @@ export class DisplayContainerSandbox implements SandboxProvider {
       return;
     }
     const argv = request.argv.length > 0 ? request.argv : ["echo", "ready"];
-    yield* streamDockerExec(
+    yield* streamContainerExec(
       this.spawnCommand,
+      this.runtime,
       attachment,
       cwd,
       request.env,
@@ -213,22 +226,13 @@ export class DisplayContainerSandbox implements SandboxProvider {
     const attachment = displayAttachmentForBot(context.botId, this.attachments);
     if (!attachment) return this.inner.listFiles(computer, directory, context);
     const relative = displayRelativePath(attachment.botId, directory);
-    const target = await walkContained(await homeRoot(attachment.home), relative);
-    const entries = await readdir(target, { withFileTypes: true });
-    const listed: ComputerFileEntry[] = [];
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue;
-      const child = path.join(target, entry.name);
-      const info = await stat(child);
-      const childPath = relative ? `${relative}/${entry.name}` : entry.name;
-      listed.push({
-        path: childPath,
-        kind: info.isDirectory() ? "dir" : "file",
-        size: info.size,
-        ...(info.isFile() && info.mode & 0o111 ? { executable: true } : {}),
-      });
-    }
-    return listed;
+    const result = await runContainerExec(this.spawnCommand, this.runtime, attachment, {
+      cwd: displayWorkingDirectory(attachment, relative),
+      argv: ["find", ".", "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%m\t%f\n"],
+      signal: context.signal,
+    });
+    if (result.code !== 0) throw new Error(result.stderr.trim() || "could not list files");
+    return parseFindListing(relative, result.stdout.toString("utf8"));
   }
 
   async readFile(
@@ -241,22 +245,37 @@ export class DisplayContainerSandbox implements SandboxProvider {
     if (!attachment) return this.inner.readFile(computer, filePath, context, options);
     const relative = displayRelativePath(attachment.botId, filePath);
     if (!relative) throw new Error("path is outside this computer's home");
-    const target = await walkContained(await homeRoot(attachment.home), relative);
-    const info = await stat(target);
-    if (options?.maxBytes !== undefined && info.size > options.maxBytes) {
-      throw new Error(`computer file exceeds ${options.maxBytes} bytes`);
-    }
-    return new Uint8Array(await readFile(target));
+    const result = await runContainerExec(this.spawnCommand, this.runtime, attachment, {
+      cwd: attachment.home,
+      argv: ["sh", "-c", 'if [ -L "$1" ]; then exit 2; fi; cat -- "$1"', "display-cat", relative],
+      signal: context.signal,
+      maxStdout: options?.maxBytes,
+    });
+    if (result.code === 2) throw new Error("path is outside this computer's home");
+    if (result.code !== 0) throw new Error(result.stderr.trim() || "computer file not found");
+    return new Uint8Array(result.stdout);
   }
 
   async writeFile(computer: ComputerRef, file: PortableFile, context: AdapterContext) {
     const attachment = displayAttachmentForBot(context.botId, this.attachments);
     if (!attachment) return this.inner.writeFile(computer, file, context);
-    const target = await containedWritePath(
-      attachment.home,
-      displayRelativePath(attachment.botId, file.path),
-    );
-    await writeFile(target, file.content, { mode: file.executable ? 0o700 : 0o600 });
+    const relative = displayRelativePath(attachment.botId, file.path);
+    if (!relative) throw new Error("path is outside this computer's home");
+    const result = await runContainerExec(this.spawnCommand, this.runtime, attachment, {
+      cwd: attachment.home,
+      argv: [
+        "sh",
+        "-c",
+        'if [ -L "$1" ]; then exit 2; fi; mkdir -p -- "$(dirname -- "$1")" && cat > "$1" && chmod "$2" -- "$1"',
+        "display-write",
+        relative,
+        file.executable ? "700" : "600",
+      ],
+      stdin: file.content,
+      signal: context.signal,
+    });
+    if (result.code === 2) throw new Error("path is outside this computer's home");
+    if (result.code !== 0) throw new Error(result.stderr.trim() || "could not write file");
   }
 
   exportWorkspace(computer: ComputerRef, context: AdapterContext) {
@@ -341,71 +360,26 @@ function stripTrailingSlash(value: string): string {
   return value.length > 1 ? value.replace(/\/+$/, "") : value;
 }
 
-function isEnoent(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
+function parseFindListing(directory: string, stdout: string): ComputerFileEntry[] {
+  const listed: ComputerFileEntry[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    const [kind, size, mode, name] = line.split("\t");
+    if (!name || (kind !== "d" && kind !== "f")) continue;
+    const permissions = Number.parseInt(mode ?? "", 8);
+    listed.push({
+      path: directory ? `${directory}/${name}` : name,
+      kind: kind === "d" ? "dir" : "file",
+      size: Number(size) || 0,
+      ...(kind === "f" && permissions & 0o111 ? { executable: true } : {}),
+    });
+  }
+  return listed;
 }
 
-async function homeRoot(home: string): Promise<string> {
-  try {
-    const root = await realpath(home);
-    const info = await stat(root);
-    if (!info.isDirectory()) throw new Error("display home is not available");
-    return root;
-  } catch (error) {
-    if (isEnoent(error)) throw new Error("display home is not available");
-    throw error;
-  }
-}
-
-async function containedWritePath(home: string, relative: string): Promise<string> {
-  const safe = normalizeWorkspacePath(relative);
-  if (!safe) throw new Error("path is outside this computer's home");
-  const root = await homeRoot(home);
-  const segments = safe.split("/");
-  let current = root;
-  for (const segment of segments.slice(0, -1)) {
-    const next = path.join(current, segment);
-    try {
-      const info = await lstat(next);
-      if (info.isSymbolicLink() || !info.isDirectory()) {
-        throw new Error("path is outside this computer's home");
-      }
-    } catch (error) {
-      if (!isEnoent(error)) throw error;
-      await mkdir(next);
-    }
-    current = next;
-  }
-  const parent = await realpath(current);
-  const rootReal = await realpath(root);
-  if (parent !== rootReal && !parent.startsWith(`${rootReal}${path.sep}`)) {
-    throw new Error("path is outside this computer's home");
-  }
-  const leaf = path.join(parent, segments.at(-1)!);
-  try {
-    const info = await lstat(leaf);
-    if (info.isSymbolicLink()) throw new Error("path is outside this computer's home");
-  } catch (error) {
-    if (!isEnoent(error)) throw error;
-  }
-  return leaf;
-}
-
-async function walkContained(root: string, relative: string): Promise<string> {
-  const segments = relative ? normalizeWorkspacePath(relative).split("/") : [];
-  let current = root;
-  for (const segment of segments) {
-    if (!segment) continue;
-    const next = path.join(current, segment);
-    const info = await lstat(next);
-    if (info.isSymbolicLink()) throw new Error("path is outside this computer's home");
-    current = next;
-  }
-  return current;
-}
-
-function streamDockerExec(
+function streamContainerExec(
   spawnCommand: DisplaySpawn,
+  runtime: string,
   attachment: DisplayContainerAttachment,
   cwd: string,
   env: Record<string, string> | undefined,
@@ -415,10 +389,98 @@ function streamDockerExec(
 ): AsyncIterable<ProcessEvent> {
   const args = displayExecArgs(attachment, cwd, env, argv, timeoutMs);
   return streamChild(
-    spawnCommand("docker", args, { stdio: ["ignore", "pipe", "pipe"] }),
+    spawnCommand(runtime, args, { stdio: ["ignore", "pipe", "pipe"] }),
     timeoutMs,
     signal,
   );
+}
+
+function runContainerExec(
+  spawnCommand: DisplaySpawn,
+  runtime: string,
+  attachment: DisplayContainerAttachment,
+  request: {
+    cwd: string;
+    argv: readonly string[];
+    stdin?: Uint8Array;
+    signal: AbortSignal;
+    maxStdout?: number;
+  },
+): Promise<{ code: number; stdout: Buffer; stderr: string }> {
+  const timeoutMs = boundedSandboxCommandTimeoutMs(undefined);
+  const args = displayExecArgs(attachment, request.cwd, undefined, request.argv, timeoutMs);
+  const child = spawnCommand(runtime, args, {
+    stdio: [request.stdin ? "pipe" : "ignore", "pipe", "pipe"],
+  });
+  if (request.stdin) {
+    child.stdin?.write(request.stdin);
+    child.stdin?.end();
+  }
+  return collectChild(child, timeoutMs, request.signal, request.maxStdout);
+}
+
+function collectChild(
+  child: ChildProcess,
+  timeoutMs: number,
+  signal: AbortSignal,
+  maxStdout: number | undefined,
+): Promise<{ code: number; stdout: Buffer; stderr: string }> {
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  let stdoutBytes = 0;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      resolve({
+        code,
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      child.kill("SIGTERM");
+      reject(error);
+    };
+    const abort = () => {
+      child.kill("SIGTERM");
+      finish(130);
+    };
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(124);
+    }, timeoutMs);
+    timeout.unref?.();
+    signal.addEventListener("abort", abort, { once: true });
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      stdoutBytes += bytes.length;
+      if (maxStdout !== undefined && stdoutBytes > maxStdout) {
+        fail(new Error(`computer file exceeds ${maxStdout} bytes`));
+        return;
+      }
+      stdout.push(bytes);
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      reject(error);
+    });
+    child.on("close", (code) => finish(code ?? 1));
+    if (signal.aborted) abort();
+  });
 }
 
 async function* streamChild(

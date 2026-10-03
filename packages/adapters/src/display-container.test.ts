@@ -1,8 +1,5 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { ProcessEvent } from "@rakazo/adapter-kit";
 import { sandboxCommandTimeoutMs } from "@rakazo/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,14 +22,18 @@ const ctx = {
   signal: new AbortController().signal,
 };
 
-function chiefAttachment(home: string): DisplayContainerAttachment {
+function chiefAttachment(): DisplayContainerAttachment {
   const [attachment] = displayContainerAttachments({});
   if (!attachment) throw new Error("missing display attachment");
-  return { ...attachment, home };
+  return attachment;
 }
 
 function fakeChild(stdout: string, code = 0) {
   const child = new EventEmitter() as ChildProcess;
+  const stdin = new EventEmitter() as NonNullable<ChildProcess["stdin"]>;
+  stdin.write = (() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+  stdin.end = (() => stdin) as NonNullable<ChildProcess["stdin"]>["end"];
+  child.stdin = stdin;
   child.stdout = new EventEmitter() as ChildProcess["stdout"];
   child.stderr = new EventEmitter() as ChildProcess["stderr"];
   child.kill = vi.fn();
@@ -61,8 +62,8 @@ describe("display container attachment", () => {
     delete process.env.SANDBOX_DISPLAY_BOTS;
     const [attachment] = displayContainerAttachments();
     expect(attachment).toMatchObject({
-      container: "rakazo-display-chief",
-      home: "/workspace/rakazo-stack/bot-homes/chief",
+      container: "team-b-chief-desktop",
+      home: "/home/rakazo",
     });
     expect(displayContainerAttachments({ SANDBOX_DISPLAY_BOTS: "" })).toEqual([]);
     expect(
@@ -76,7 +77,7 @@ describe("display container attachment", () => {
   });
 
   it("runs the attached bot inside the container and leaves every other bot on fake echo", async () => {
-    const attachment = chiefAttachment("/opt/display-home");
+    const attachment = chiefAttachment();
     const spawn = vi.fn<DisplaySpawn>(() => fakeChild("from-container\n"));
     const sandbox = new DisplayContainerSandbox(new FakeSandboxProvider(), [attachment], spawn);
     const computer = await sandbox.provision({ botId: "team-home", homePath: "/unused" }, ctx);
@@ -93,6 +94,7 @@ describe("display container attachment", () => {
       { type: "exit", code: 0 },
     ]);
     expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]?.[0]).toBe("podman");
     const args = spawn.mock.calls[0]?.[1] ?? [];
     expect(args).toEqual(
       displayExecArgs(
@@ -103,7 +105,9 @@ describe("display container attachment", () => {
         sandboxCommandTimeoutMs(),
       ),
     );
-    expect(args).toContain("rakazo-display-chief");
+    expect(args).toContain("team-b-chief-desktop");
+    expect(args).toContain("/home/rakazo");
+    expect(args.filter((arg) => arg.startsWith("/"))).toEqual(["/home/rakazo"]);
     expect(args).not.toContain("ran uname");
 
     const deputy = await collect(
@@ -117,7 +121,7 @@ describe("display container attachment", () => {
   });
 
   it("refuses a working directory outside the container home", async () => {
-    const attachment = chiefAttachment("/opt/display-home");
+    const attachment = chiefAttachment();
     const spawn = vi.fn<DisplaySpawn>(() => fakeChild("nope\n"));
     const sandbox = new DisplayContainerSandbox(new FakeSandboxProvider(), [attachment], spawn);
     const computer = await sandbox.provision({ botId: "team-home", homePath: "/unused" }, ctx);
@@ -134,33 +138,42 @@ describe("display container attachment", () => {
     expect(displayWorkingDirectory(attachment, `bots/${attachment.botId}`)).toBe(attachment.home);
   });
 
-  it("reads and writes the attached home and does not follow a symlink out of it", async () => {
-    const home = await mkdtemp(path.join(tmpdir(), "rakazo-display-"));
-    try {
-      const attachment = chiefAttachment(home);
-      const sandbox = new DisplayContainerSandbox(new FakeSandboxProvider(), [attachment]);
-      const computer = await sandbox.provision({ botId: "team-home", homePath: "/unused" }, ctx);
-      const chief = { ...ctx, botId: attachment.botId };
-      await sandbox.writeFile(
-        computer,
-        { path: `bots/${attachment.botId}/notes/hello.txt`, content: Buffer.from("hello") },
-        chief,
-      );
-      expect(
-        new TextDecoder().decode(await sandbox.readFile(computer, "notes/hello.txt", chief)),
-      ).toBe("hello");
-      const listed = await sandbox.listFiles(computer, `bots/${attachment.botId}`, chief);
-      expect(listed.map((entry) => entry.path)).toEqual(["notes"]);
-      await symlink("/etc/hostname", path.join(home, "escape"));
-      await expect(sandbox.readFile(computer, "escape", chief)).rejects.toThrow(
-        "path is outside this computer's home",
-      );
-      await expect(
-        sandbox.readFile(computer, "notes/hello.txt", { ...ctx, botId: "bot-deputy" }),
-      ).rejects.toThrow("computer file not found");
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+  it("reads and writes through podman exec and refuses a path that escapes the home", async () => {
+    const attachment = chiefAttachment();
+    const spawn = vi.fn<DisplaySpawn>(() => fakeChild(""));
+    const sandbox = new DisplayContainerSandbox(new FakeSandboxProvider(), [attachment], spawn);
+    const computer = await sandbox.provision({ botId: "team-home", homePath: "/unused" }, ctx);
+    const chief = { ...ctx, botId: attachment.botId };
+    await sandbox.writeFile(
+      computer,
+      { path: `bots/${attachment.botId}/notes/hello.txt`, content: Buffer.from("hello") },
+      chief,
+    );
+    const writeArgs = spawn.mock.calls.at(-1)?.[1] ?? [];
+    expect(spawn.mock.calls[0]?.[0]).toBe("podman");
+    expect(writeArgs).toContain("team-b-chief-desktop");
+    expect(writeArgs).toContain("/home/rakazo");
+    expect(writeArgs).toContain("notes/hello.txt");
+
+    spawn.mockImplementation(() => fakeChild("hello"));
+    expect(
+      new TextDecoder().decode(await sandbox.readFile(computer, "notes/hello.txt", chief)),
+    ).toBe("hello");
+    const readArgs = spawn.mock.calls.at(-1)?.[1] ?? [];
+    expect(readArgs).toContain("notes/hello.txt");
+
+    spawn.mockImplementation(() => fakeChild("d\t4096\t755\tnotes\n"));
+    const listed = await sandbox.listFiles(computer, `bots/${attachment.botId}`, chief);
+    expect(listed).toEqual([{ path: "notes", kind: "dir", size: 4096 }]);
+
+    spawn.mockClear();
+    await expect(sandbox.readFile(computer, "../etc/hostname", chief)).rejects.toThrow(
+      "Path escapes the computer workspace",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    await expect(
+      sandbox.readFile(computer, "notes/hello.txt", { ...ctx, botId: "bot-deputy" }),
+    ).rejects.toThrow("computer file not found");
   });
 
   it("keeps a fake space wrapped and a docker space on docker", async () => {
