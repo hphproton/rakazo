@@ -1229,6 +1229,151 @@ describe("space-wide hub topic", () => {
     expect(loaded.map((message) => message.id)).not.toContain("d-other");
   });
 
+  it("shows each bot's run reply on the shared topic after the thread moves on", () => {
+    const chiefReceipt: Row = {
+      id: "c-in",
+      threadId: "thread-chief",
+      seq: 1,
+      role: "user",
+      runId: "run-chief",
+      botId: chief.id,
+      botName: chief.name,
+      createdAt: "2026-10-02T10:00:01.000Z",
+      blocks: [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal to Chief.",
+          spaceTopicKey: key,
+        },
+      ],
+    };
+    const deputyReceipt: Row = {
+      id: "d-in",
+      threadId: "thread-deputy",
+      seq: 1,
+      role: "user",
+      runId: "run-deputy",
+      botId: deputy.id,
+      botName: deputy.name,
+      createdAt: "2026-10-02T10:00:00.000Z",
+      blocks: [
+        {
+          kind: "bot_message_received",
+          fromBotId: principal,
+          fromBotName: "Box Principal",
+          origin: "hub",
+          text: "Principal to Deputy.",
+          spaceTopicKey: key,
+        },
+      ],
+    };
+    const chiefThread: Row[] = [
+      {
+        id: "c-before",
+        threadId: "thread-chief",
+        seq: 0,
+        role: "bot",
+        runId: "run-chief",
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T09:59:00.000Z",
+        blocks: [{ kind: "text", text: "Earlier Chief note." }],
+      },
+      chiefReceipt,
+      {
+        id: "c-person",
+        threadId: "thread-chief",
+        seq: 2,
+        role: "user",
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T10:01:00.000Z",
+        blocks: [{ kind: "text", text: "a different request" }],
+      },
+      {
+        id: "c-activity",
+        threadId: "thread-chief",
+        seq: 3,
+        role: "bot",
+        runId: "run-chief",
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T10:01:30.000Z",
+        blocks: [{ kind: "progress", text: "Using shell.", activity: true }],
+      },
+      {
+        id: "c-reply",
+        threadId: "thread-chief",
+        seq: 4,
+        role: "bot",
+        runId: "run-chief",
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T10:02:00.000Z",
+        blocks: [{ kind: "text", text: "Chief on it." }],
+      },
+      {
+        id: "c-later",
+        threadId: "thread-chief",
+        seq: 5,
+        role: "bot",
+        runId: "run-other",
+        botId: chief.id,
+        botName: chief.name,
+        createdAt: "2026-10-02T10:03:00.000Z",
+        blocks: [{ kind: "text", text: "Later Chief note." }],
+      },
+    ];
+    const deputyThread: Row[] = [
+      deputyReceipt,
+      {
+        id: "d-person",
+        threadId: "thread-deputy",
+        seq: 2,
+        role: "user",
+        botId: deputy.id,
+        botName: deputy.name,
+        createdAt: "2026-10-02T10:01:30.000Z",
+        blocks: [{ kind: "text", text: "something else" }],
+      },
+      {
+        id: "d-reply",
+        threadId: "thread-deputy",
+        seq: 3,
+        role: "bot",
+        runId: "run-deputy",
+        botId: deputy.id,
+        botName: deputy.name,
+        createdAt: "2026-10-02T10:04:00.000Z",
+        blocks: [{ kind: "progress", text: "Deputy on it." }],
+      },
+    ];
+    const loaded = messagesForHubTranscript(chiefThread, deputyThread, {
+      messageId: "c-in",
+      peerBotId: principal,
+    });
+    const opened = peerTranscriptForChip(loaded, {
+      scope: "hub",
+      messageId: "c-in",
+      peerBotId: principal,
+    });
+    expect(hubTranscriptTitle("Chief", opened!)).toBe("Deputy, Chief · Hub · Box Principal");
+    expect(opened?.messages.map((turn) => turn.text)).toEqual([
+      "Principal to Deputy.",
+      "Principal to Chief.",
+      "Chief on it.",
+      "Deputy on it.",
+    ]);
+    expect(opened?.messages.map((turn) => turn.text)).not.toContain("Later Chief note.");
+    expect(opened?.messages.map((turn) => turn.text)).not.toContain("Earlier Chief note.");
+    expect(opened?.messages.map((turn) => turn.text)).not.toContain("Using shell.");
+    expect(opened?.messages.map((turn) => turn.text)).not.toContain("a different request");
+    expect(loaded.map((message) => message.id)).toContain("d-reply");
+  });
+
   it("loads sibling messages for the anchor key and leaves a missing key on one thread", () => {
     const chiefThread = burst("thread-chief", "c", chief, key);
     const deputyThread = burst("thread-deputy", "d", deputy, key);

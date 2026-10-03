@@ -63,6 +63,8 @@ type PeerTranscriptMessage = {
   seq?: number;
   botId?: string;
   botName?: string;
+  /** Hub receipt and the bot messages that answer it share this run. */
+  runId?: string;
 };
 
 type PeerBlock = Extract<MessageBlock, { kind: "bot_message_sent" | "bot_message_received" }>;
@@ -603,8 +605,7 @@ function isPersonAuthoredMessage(message: PeerTranscriptMessage): boolean {
 }
 
 function isBotReplyText(message: PeerTranscriptMessage): boolean {
-  if (message.role === "user") return false;
-  return message.blocks.some((block) => block.kind === "text" && block.text.trim().length > 0);
+  return botReplyText(message) !== undefined;
 }
 
 function noteBotReply(open: OpenHubTopic[] | undefined, message: PeerTranscriptMessage) {
@@ -620,13 +621,29 @@ function noteBotReply(open: OpenHubTopic[] | undefined, message: PeerTranscriptM
   }
   const text = botReplyText(message);
   if (!answered || !text || isTrivialHubAckText(text)) return;
-  answered.turns.push(botReplyTurn(message, text, answered.spaceTopicKey));
+  answered.turns.push(botReplyTurn(message, text, topicReplyKey(answered)));
+}
+
+function topicReplyKey(topic: OpenHubTopic): string | undefined {
+  if (topic.spaceTopicKey) return topic.spaceTopicKey;
+  for (let index = topic.turns.length - 1; index >= 0; index -= 1) {
+    const key = topic.turns[index]?.spaceTopicKey;
+    if (key) return key;
+  }
+  return undefined;
 }
 
 function botReplyText(message: PeerTranscriptMessage): string | undefined {
+  if (message.role === "user") return undefined;
   const parts: string[] = [];
   for (const block of message.blocks) {
-    if (block.kind === "text" && block.text.trim()) parts.push(block.text.trim());
+    if (block.kind === "text" && block.text.trim()) {
+      parts.push(block.text.trim());
+      continue;
+    }
+    if (block.kind === "progress" && block.activity !== true && block.text.trim()) {
+      parts.push(block.text.trim());
+    }
   }
   if (parts.length === 0) return undefined;
   return parts.join("\n");
@@ -722,7 +739,11 @@ function topicJoinedBySend(
   return undefined;
 }
 
-/** Keyed Hub turns plus each bot's written reply that inherited that key. */
+/**
+ * Keyed Hub turns plus each bot's written reply.
+ * A reply that shares the Hub receipt's run stays even when a later person
+ * message on that thread has already closed the topic walk.
+ */
 function turnsForSpaceTopic(
   messages: readonly PeerTranscriptMessage[],
   key: string,
@@ -731,7 +752,37 @@ function turnsForSpaceTopic(
   const turns = [...done, ...[...openByThread.values()].flat()].flatMap((topic) =>
     topic.turns.filter((turn) => turn.spaceTopicKey === key),
   );
+  const seen = new Set(turns.map((turn) => turn.messageId));
+  for (const reply of runLinkedReplies(messages, key, seen)) turns.push(reply);
   return turns.slice().sort(comparePeerTurns);
+}
+
+function runLinkedReplies(
+  messages: readonly PeerTranscriptMessage[],
+  key: string,
+  seen: Set<string>,
+): PeerMessage[] {
+  const receiptByRun = new Map<string, { message: PeerTranscriptMessage; index: number }>();
+  for (const [index, message] of messages.entries()) {
+    if (!message.runId) continue;
+    if (!message.blocks.some((block) => blockSpaceTopicKey(block) === key)) continue;
+    const previous = receiptByRun.get(message.runId);
+    if (!previous || compareTranscriptOrder(message, index, previous.message, previous.index) < 0) {
+      receiptByRun.set(message.runId, { message, index });
+    }
+  }
+  const replies: PeerMessage[] = [];
+  for (const [index, message] of messages.entries()) {
+    if (!message.runId || seen.has(message.id)) continue;
+    const receipt = receiptByRun.get(message.runId);
+    if (!receipt || (message.threadId ?? "") !== (receipt.message.threadId ?? "")) continue;
+    if (compareTranscriptOrder(receipt.message, receipt.index, message, index) >= 0) continue;
+    const text = botReplyText(message);
+    if (!text || isTrivialHubAckText(text)) continue;
+    replies.push(botReplyTurn(message, text, key));
+    seen.add(message.id);
+  }
+  return replies;
 }
 
 function comparePeerTurns(a: PeerMessage, b: PeerMessage): number {

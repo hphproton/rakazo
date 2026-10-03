@@ -118,7 +118,7 @@ Optional. Two Rakazo bots share the existing view-only transcript only when each
 2. Each bot's answering `hub_send_message` echoes the key while its own topic is still open. A person message on one bot does not close the other bot's topic.
 3. Each bot thread still shows at most two chips for a multi-member burst. Open either chip.
 
-The transcript lists both bots' Hub turns for that key and each bot's written reply. A reply that exists only in the bot chat is not enough; it is on this page too. A burst with no key stays on the bot thread that stored it, even when the texts and timestamps match. Two Hub members can stay on separate 1:1 topics. This does not add a space inbox or a composer.
+The transcript lists both bots' Hub turns for that key and each bot's written reply. A reply that shares the Hub receipt's run stays on that page after a later person message on the thread. Text from another run stays off, and so does a tool-activity progress line. A reply that exists only in the bot chat is not enough; it is on this page too. A burst with no key stays on the bot thread that stored it, even when the texts and timestamps match. Two Hub members can stay on separate 1:1 topics. This does not add a space inbox or a composer.
 
 The Hub directory prompt and the `message_bot` tool tell the model those names are not chats. `message_bot` refuses a Hub roster row and does not start a run.
 
