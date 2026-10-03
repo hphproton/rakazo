@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
+
 /**
  * A sand seat is an existing sand agent id. Rakazo bot ids are not seats.
  * The host has no attach call that accepts a bot id, and this policy does not
- * create or borrow an agent.
+ * create an agent.
  */
 export interface SandSeat {
   agentId: string;
@@ -17,11 +19,68 @@ export interface SandSeatPolicy {
   resolve(request: SandSeatRequest): SandSeat | undefined;
 }
 
-/** Built-in policy until one exists for ids that are not sand agent UUIDs. */
+/** Used when `SANDBOX_SAND_SEAT_MAP` is unset. Every bot id is unmapped. */
 export class RefusingSandSeatPolicy implements SandSeatPolicy {
   resolve(): undefined {
     return undefined;
   }
+}
+
+/** Operator map of Rakazo bot id to an existing sand agent UUID. */
+export class MappedSandSeatPolicy implements SandSeatPolicy {
+  constructor(private readonly seats: ReadonlyMap<string, string>) {}
+
+  resolve(request: SandSeatRequest): SandSeat | undefined {
+    const agentId = this.seats.get(request.botId);
+    return agentId === undefined ? undefined : { agentId };
+  }
+}
+
+const SEAT_MAP_ERROR = "SANDBOX_SAND_SEAT_MAP must be a JSON object of bot id to sand agent UUID.";
+
+/**
+ * Build the seat policy from `SANDBOX_SAND_SEAT_MAP`.
+ * The value is a JSON object, or a path to a file that contains one.
+ * An unset value refuses every bot. Unmapped ids still resolve to nothing.
+ */
+export function sandSeatPolicyFromConfig(raw: string | undefined): SandSeatPolicy {
+  const value = raw?.trim();
+  if (!value) return new RefusingSandSeatPolicy();
+  return new MappedSandSeatPolicy(parseSandSeatMap(seatMapText(value)));
+}
+
+function seatMapText(value: string): string {
+  if (value.startsWith("{")) return value;
+  try {
+    return readFileSync(value, "utf8");
+  } catch {
+    throw new Error("SANDBOX_SAND_SEAT_MAP file could not be read.");
+  }
+}
+
+export function parseSandSeatMap(text: string): Map<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(SEAT_MAP_ERROR);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(SEAT_MAP_ERROR);
+  }
+  const seats = new Map<string, string>();
+  for (const [botId, agentId] of Object.entries(parsed)) {
+    if (!botId || typeof agentId !== "string") throw new Error(SEAT_MAP_ERROR);
+    const id = agentId.trim();
+    assertSandAgentId(id);
+    if (id === botId) {
+      throw new SandSeatInvalidError(
+        "Seat policy returned the Rakazo bot id. That id is not a sand agent UUID.",
+      );
+    }
+    seats.set(botId, id);
+  }
+  return seats;
 }
 
 export class SandSeatUnmappedError extends Error {

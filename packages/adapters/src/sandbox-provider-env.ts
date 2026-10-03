@@ -10,7 +10,7 @@ export function resolveSandboxProvider(source: NodeJS.ProcessEnv = process.env):
   if (requested === "daytona" && !optional(source.DAYTONA_API_KEY)) return "none";
   if (requested === "createos" && !optional(source.CREATEOS_SANDBOX_API_KEY)) return "none";
   if (requested === "box" && !optional(source.BOX_API_KEY)) return "none";
-  // No remote key. Provision still refuses until a seat policy maps the bot id.
+  // No remote key. Unmapped bots still refuse until SANDBOX_SAND_SEAT_MAP names them.
   if (requested === "sand") return "sand";
   // Production without a supervisor token cannot run Docker computers; boot as none instead of exiting.
   if (
@@ -40,6 +40,7 @@ export function sandboxProviderOptionsFromEnv(
   | "boxApiUrl"
   | "sandHostUrl"
   | "sandHostToken"
+  | "sandSeatMap"
 > {
   return {
     e2bApiKey: source.E2B_API_KEY,
@@ -54,6 +55,7 @@ export function sandboxProviderOptionsFromEnv(
     boxApiUrl: source.BOX_API_URL ?? source.BOX_BASE_URL,
     sandHostUrl: optional(source.SAND_HOST_URL),
     sandHostToken: optional(source.SAND_HOST_TOKEN),
+    sandSeatMap: optional(source.SANDBOX_SAND_SEAT_MAP),
   };
 }
 

@@ -12,7 +12,7 @@ import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { NoneSandboxProvider } from "./none-sandbox.js";
 import { ConnectSandHost } from "./sand-host.js";
 import { SandSandboxProvider } from "./sand-sandbox.js";
-import { RefusingSandSeatPolicy } from "./sand-seat.js";
+import { sandSeatPolicyFromConfig } from "./sand-seat.js";
 
 export interface SandboxProviderOptions {
   supervisorUrl?: string;
@@ -30,6 +30,11 @@ export interface SandboxProviderOptions {
   /** Sand-host router. Unset uses http://127.0.0.1:1339. */
   sandHostUrl?: string;
   sandHostToken?: string;
+  /**
+   * JSON object mapping a Rakazo bot id to an existing sand agent UUID,
+   * or a path to a file that contains that object. Unset refuses every bot.
+   */
+  sandSeatMap?: string;
   dataDir?: string;
 }
 
@@ -88,7 +93,7 @@ export function createSandboxProvider(kind: string, opts: SandboxProviderOptions
       return new FakeSandboxProvider();
     case "sand":
       return new SandSandboxProvider({
-        policy: new RefusingSandSeatPolicy(),
+        policy: sandSeatPolicyFromConfig(opts.sandSeatMap),
         host: new ConnectSandHost({
           baseUrl: opts.sandHostUrl,
           token: opts.sandHostToken,
