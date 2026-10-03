@@ -104,6 +104,16 @@ later" item.
 - Moving hosts: copy `.env` and volumes together; treat `.env` as secret
   material in transit.
 
+## Bridge credentials
+
+An external bridge does not get its own environment variable. Use the operator
+session or one bot webhook secret, as described in
+[Single-space bridge](./single-space-bridge.md). Keep both outside `.env` and
+outside git. Do not reuse `BETTER_AUTH_SECRET`, `ENCRYPTION_KEY`,
+`SCREEN_PROXY_SECRET`, `SANDBOX_SUPERVISOR_TOKEN`, or `RAKAZO_UPDATER_TOKEN`
+as either value.
+
 ## Related
 
 - [Self-hosting](./self-host.md)
+- [Single-space bridge](./single-space-bridge.md)

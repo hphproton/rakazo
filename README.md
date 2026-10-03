@@ -209,6 +209,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and test m
 
 - [Self-hosting](./docs/self-host.md)
 - [Self-host secrets](./docs/self-host-secrets.md)
+- [Single-space bridge](./docs/single-space-bridge.md)
 - [Computer runtime and isolation](./docs/computer-runtime.md)
 - [Desktop releases](./docs/desktop-release.md)
 - [Mobile releases](./docs/mobile-release.md)
