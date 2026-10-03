@@ -65,13 +65,14 @@ export function sealScreenCapability(
   const result = new URL(`${prefix}${target.pathname || "/"}`, new URL(origin).origin);
   // noVNC reads these from the browser URL. Keep its socket inside the capability
   // route while the provider's nested socket token stays sealed server-side.
+  // The custom embed joins a relative path onto its capability directory.
+  // Stock noVNC resolves a path without a leading slash under the page
+  // directory, so that socket must be origin-absolute.
   result.search = new URLSearchParams({
     autoconnect: "true",
     resize: "scale",
     view_only: policy === "control" ? "false" : "true",
-    // Our embed resolves the socket relative to its own capability directory;
-    // stock noVNC resolves it from the origin root.
-    path: target.pathname === "/embed.html" ? "websockify" : `${prefix.slice(1)}/websockify`,
+    path: target.pathname === "/embed.html" ? "websockify" : `${prefix}/websockify`,
   }).toString();
   return result.toString();
 }
