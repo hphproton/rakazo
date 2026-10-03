@@ -4,6 +4,7 @@ import type { ProcessEvent } from "@rakazo/adapter-kit";
 import { sandboxCommandTimeoutMs } from "@rakazo/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DISPLAY_CONTAINER_TEMPLATE,
   type DisplayContainerAttachment,
   DisplayContainerSandbox,
   type DisplaySpawn,
@@ -74,6 +75,60 @@ describe("display container attachment", () => {
     expect(() =>
       displayContainerAttachments({ SANDBOX_DISPLAY_BOTS: "bot-z|-rf|/tmp/bot-z" }),
     ).toThrow("display container name is invalid");
+    expect(DISPLAY_CONTAINER_TEMPLATE).toEqual({
+      image: "localhost/rakazo-desktop-vendored:hub-f",
+      home: "/home/rakazo",
+      display: ":1",
+    });
+    expect(attachment?.home).toBe(DISPLAY_CONTAINER_TEMPLATE.home);
+  });
+
+  it("attaches any bot from the same template and leaves an unlisted bot on fake echo", async () => {
+    const attachments = displayContainerAttachments({
+      SANDBOX_DISPLAY_BOTS:
+        "bot-deputy|team-b-deputy-desktop,bot-other|team-b-other-desktop|/srv/other",
+    });
+    expect(attachments).toEqual([
+      {
+        botId: "bot-deputy",
+        container: "team-b-deputy-desktop",
+        home: DISPLAY_CONTAINER_TEMPLATE.home,
+      },
+      { botId: "bot-other", container: "team-b-other-desktop", home: "/srv/other" },
+    ]);
+    const deputy = attachments[0];
+    if (!deputy) throw new Error("missing deputy attachment");
+    const spawn = vi.fn<DisplaySpawn>(() => fakeChild("from-deputy\n"));
+    const sandbox = new DisplayContainerSandbox(new FakeSandboxProvider(), attachments, spawn);
+    const computer = await sandbox.provision({ botId: "team-home", homePath: "/unused" }, ctx);
+    const events = await collect(
+      sandbox.execute(
+        computer,
+        { argv: ["uname"], cwd: "bots/bot-deputy" },
+        { ...ctx, botId: "bot-deputy" },
+      ),
+    );
+    expect(events).toEqual([
+      { type: "stdout", data: "from-deputy\n" },
+      { type: "exit", code: 0 },
+    ]);
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    expect(spawn.mock.calls[0]?.[0]).toBe("podman");
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("team-b-deputy-desktop");
+    expect(args).toContain(`HOME=${DISPLAY_CONTAINER_TEMPLATE.home}`);
+    expect(args).toContain(`DISPLAY=${DISPLAY_CONTAINER_TEMPLATE.display}`);
+    expect(args).not.toContain(DISPLAY_CONTAINER_TEMPLATE.image);
+    expect(args).not.toContain("start");
+
+    const unlisted = await collect(
+      sandbox.execute(computer, { argv: ["uname"] }, { ...ctx, botId: "bot-unlisted" }),
+    );
+    expect(unlisted).toContainEqual({ type: "stdout", data: "ran uname\n" });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    await sandbox.stop(computer, { ...ctx, botId: "bot-deputy" });
+    await sandbox.destroy(computer, { ...ctx, botId: "bot-deputy" });
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("runs the attached bot inside the container and leaves every other bot on fake echo", async () => {
