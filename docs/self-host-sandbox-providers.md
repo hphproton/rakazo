@@ -39,6 +39,25 @@ Missing supervisor token is a **setup failure**: do not treat `sandbox: "none"` 
 
 Signup and local Docker computers work **without** an E2B (or other remote) account.
 
+## `sand` (sand-host hands)
+
+`SANDBOX_PROVIDER=sand` sends shell, files, and screen actions to the sand-host
+router (`SAND_HOST_URL`, default `http://127.0.0.1:1339`) over ConnectRPC
+`ControlService` and `ExecService`. One sand agent id is one exec-daemon and
+one X display. This is not ASCII `box`, not the Docker supervisor on `:7091`,
+and not a Team B display container.
+
+A Rakazo bot id is not a sand agent id. `SandSeatPolicy` is the only place that
+may name an existing agent, and the built-in policy refuses every bot id. This
+provider does not create an agent and does not borrow one. It does not point a
+screen at display `:1` or `:3`. Selecting `sand` does not change the default
+for any other deployment. Provision fails with a seat-policy error until a
+policy exists for ids that are not sand agent UUIDs.
+
+`SAND_HOST_TOKEN` is an optional bearer for that router. The agent selector
+header is `x-sand-agent-id`. Replace that header if the live router picks the
+agent another way.
+
 ## `none`
 
 Runs API/web without provisioning bot computers.

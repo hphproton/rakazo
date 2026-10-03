@@ -138,7 +138,7 @@ export type ComputerAction =
 export interface ComputerObservation {
   frameId: string;
   capturedAt: string;
-  mimeType: "image/png" | "image/jpeg";
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
   image: Uint8Array;
   width: number;
   height: number;
@@ -166,7 +166,7 @@ export interface ComputerFileEntry {
 
 export type AgentToolResultContent =
   | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: "image/png" | "image/jpeg" };
+  | { type: "image"; data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" };
 
 /** A provider-neutral tool result an agent runtime can forward without flattening images. */
 export interface AgentToolExecutionResult {

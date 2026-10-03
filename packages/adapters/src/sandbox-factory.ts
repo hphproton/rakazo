@@ -10,6 +10,9 @@ import { ManagedSandboxEmulator } from "./e2b-emulator.js";
 import { E2BSandboxProvider } from "./e2b-sandbox.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { NoneSandboxProvider } from "./none-sandbox.js";
+import { ConnectSandHost } from "./sand-host.js";
+import { SandSandboxProvider } from "./sand-sandbox.js";
+import { RefusingSandSeatPolicy } from "./sand-seat.js";
 
 export interface SandboxProviderOptions {
   supervisorUrl?: string;
@@ -24,6 +27,9 @@ export interface SandboxProviderOptions {
   createosRootfs?: string;
   boxApiKey?: string;
   boxApiUrl?: string;
+  /** Sand-host router. Unset uses http://127.0.0.1:1339. */
+  sandHostUrl?: string;
+  sandHostToken?: string;
   dataDir?: string;
 }
 
@@ -80,9 +86,17 @@ export function createSandboxProvider(kind: string, opts: SandboxProviderOptions
       });
     case "fake":
       return new FakeSandboxProvider();
+    case "sand":
+      return new SandSandboxProvider({
+        policy: new RefusingSandSeatPolicy(),
+        host: new ConnectSandHost({
+          baseUrl: opts.sandHostUrl,
+          token: opts.sandHostToken,
+        }),
+      });
     default:
       throw new Error(
-        `Unknown SANDBOX_PROVIDER "${kind}". Use none | docker | e2b | daytona | createos | box | e2b-emulator | daytona-emulator | box-emulator | desktop | fake.`,
+        `Unknown SANDBOX_PROVIDER "${kind}". Use none | docker | e2b | daytona | createos | box | e2b-emulator | daytona-emulator | box-emulator | desktop | sand | fake.`,
       );
   }
 }
