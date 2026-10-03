@@ -1,10 +1,11 @@
 import type { ThreadMessage } from "@rakazo/contracts";
 import {
   hubChipBlockKey,
-  hubExchangeForAnchor,
   hubMemberLabel,
   hubTopicChipPlan,
   hubTranscriptTitle,
+  messagesForHubTranscript,
+  peerTranscriptForChip,
 } from "@rakazo/core";
 import { BotAvatar } from "@rakazo/ui-web";
 import { createRoot } from "react-dom/client";
@@ -230,7 +231,12 @@ function ThreadChips({ testId, thread }: { testId: string; thread: readonly Row[
   );
 }
 
-const conversation = hubExchangeForAnchor([...chiefThread, ...deputyThread], {
+const loaded = messagesForHubTranscript(chiefThread, deputyThread, {
+  messageId: "c-out-p",
+  peerBotId: PRINCIPAL,
+});
+const conversation = peerTranscriptForChip(loaded, {
+  scope: "hub",
   messageId: "c-out-p",
   peerBotId: PRINCIPAL,
 });
