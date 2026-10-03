@@ -28,6 +28,7 @@ describe("hub directory contract", () => {
       signature: null,
     });
     expect(parsed.hubMembers[0]?.hubAgentId).toBe("hub-atlas");
+    expect(parsed.groups).toEqual([]);
     expect(parsed.signature).toBeNull();
   });
 
@@ -54,6 +55,22 @@ describe("hub directory contract", () => {
       "name",
       "spawnKey",
       "title",
+    ]);
+    expect(parsed.groups).toEqual([]);
+  });
+
+  it("parses chat groups beside the bot export", () => {
+    const parsed = HubDirectorySchema.parse({
+      epoch: "abc123",
+      issuedAt: "2026-10-02T00:00:00.000Z",
+      spaceId: "space-1",
+      hubMembers: [],
+      rakazoBots: [],
+      groups: [{ id: "group-team", name: "Team B", memberBotIds: ["bot-chief", "bot-deputy"] }],
+      signature: null,
+    });
+    expect(parsed.groups).toEqual([
+      { id: "group-team", name: "Team B", memberBotIds: ["bot-chief", "bot-deputy"] },
     ]);
   });
 

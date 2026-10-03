@@ -269,6 +269,37 @@ describe("hubRosterStore", () => {
       },
     });
   });
+
+  it("reads non-archived chat groups for the directory and does not open a messaging provider", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: "group-b",
+        name: "Team B",
+        members: [{ botId: "chief" }, { botId: "deputy" }],
+      },
+    ]);
+    const prisma = {
+      chatGroup: { findMany },
+    } as unknown as PrismaClient;
+    const store = hubRosterStore(prisma, { createBot: vi.fn() }, actor);
+    expect(await store.listGroups?.()).toEqual([
+      {
+        id: "group-b",
+        name: "Team B",
+        archived: false,
+        memberBotIds: ["chief", "deputy"],
+      },
+    ]);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { spaceId: "space-1", userId: "user-1", archivedAt: null },
+      select: {
+        id: true,
+        name: true,
+        members: { select: { botId: true } },
+      },
+    });
+    expect(prisma).not.toHaveProperty("externalConversation");
+  });
 });
 
 describe("readHubDirectory", () => {
@@ -290,6 +321,63 @@ describe("readHubDirectory", () => {
       { id: "chief", name: "Chief", title: "Lead", archived: false, spawnKey: null },
     ]);
     expect(directory.hubMembers).toEqual([]);
+    expect(directory.groups).toEqual([]);
+  });
+
+  it("exports workspace group members and leaves Hub rows out of the member list", async () => {
+    const store = memoryStore([
+      {
+        id: "chief",
+        name: "Chief",
+        title: "",
+        archived: false,
+        spawnKey: null,
+        sectionId: null,
+        updatedAt: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        id: "deputy",
+        name: "Deputy",
+        title: "",
+        archived: true,
+        spawnKey: null,
+        sectionId: null,
+        updatedAt: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        id: "atlas",
+        name: "Atlas",
+        title: "",
+        archived: false,
+        spawnKey: "hub:hub-atlas",
+        sectionId: "section-hub",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+      },
+    ]);
+    store.listGroups = async () => [
+      {
+        id: "group-b",
+        name: "Team B",
+        archived: false,
+        memberBotIds: ["atlas", "deputy", "chief"],
+      },
+    ];
+    const directory = await readHubDirectory(store, { issuedAt, signingKey: "test-directory-key" });
+    expect(directory.groups).toEqual([{ id: "group-b", name: "Team B", memberBotIds: ["chief"] }]);
+    expect(directory.hubMembers.map((member) => member.hubAgentId)).toEqual(["hub-atlas"]);
+    const joined = await readHubDirectory(
+      {
+        ...store,
+        async list() {
+          const bots = await store.list();
+          return bots.map((bot) => (bot.id === "deputy" ? { ...bot, archived: false } : bot));
+        },
+      },
+      { issuedAt, signingKey: "test-directory-key" },
+    );
+    expect(joined.groups[0]?.memberBotIds).toEqual(["chief", "deputy"]);
+    expect(joined.epoch).not.toBe(directory.epoch);
+    expect(joined.signature).not.toBe(directory.signature);
   });
 });
 

@@ -196,6 +196,67 @@ describe("buildHubDirectory", () => {
       issuedAt: first.issuedAt,
     });
     expect(renamed.epoch).not.toBe(first.epoch);
+    expect(first.groups).toEqual([]);
+  });
+
+  it("exports workspace group members and changes the epoch when membership changes", () => {
+    const bots = [
+      bot({ id: "chief", name: "Chief", spawnKey: null }),
+      bot({ id: "deputy", name: "Deputy", spawnKey: null, archived: true }),
+      bot({ id: "atlas", name: "Atlas", spawnKey: "hub:hub-atlas" }),
+    ];
+    const groups = [
+      {
+        id: "group-b",
+        name: "Team B",
+        archived: false,
+        memberBotIds: ["atlas", "deputy", "chief", "chief", "missing"],
+      },
+      {
+        id: "group-a",
+        name: "Archived",
+        archived: true,
+        memberBotIds: ["chief"],
+      },
+      {
+        id: "group-hub",
+        name: "Hub only",
+        archived: false,
+        memberBotIds: ["atlas"],
+      },
+    ];
+    const first = buildHubDirectory({
+      spaceId: "space-1",
+      bots,
+      groups,
+      issuedAt: "2026-10-02T00:00:00.000Z",
+    });
+    expect(first.groups).toEqual([
+      { id: "group-b", name: "Team B", memberBotIds: ["chief"] },
+      { id: "group-hub", name: "Hub only", memberBotIds: [] },
+    ]);
+    expect(first.epoch).toBe(
+      hubRosterEpoch(first.spaceId, first.hubMembers, first.rakazoBots, first.groups),
+    );
+    const same = buildHubDirectory({
+      spaceId: "space-1",
+      bots,
+      groups,
+      issuedAt: "2026-10-02T00:05:00.000Z",
+    });
+    expect(same.epoch).toBe(first.epoch);
+
+    const joined = buildHubDirectory({
+      spaceId: "space-1",
+      bots: bots.map((item) => (item.id === "deputy" ? { ...item, archived: false } : item)),
+      groups,
+      issuedAt: first.issuedAt,
+    });
+    expect(joined.groups).toEqual([
+      { id: "group-b", name: "Team B", memberBotIds: ["chief", "deputy"] },
+      { id: "group-hub", name: "Hub only", memberBotIds: [] },
+    ]);
+    expect(joined.epoch).not.toBe(first.epoch);
   });
 
   it("places mirrored rows in the Hub section of the shared roster grouper", () => {
