@@ -44,14 +44,17 @@ Response:
     "rakazoBots": [
       { "id": "<bot id>", "name": "Chief", "title": "", "archived": false, "spawnKey": null }
     ],
+    "groups": [
+      { "id": "<chat group id>", "name": "Team B", "memberBotIds": ["<bot id>"] }
+    ],
     "signature": null
   }
 }
 ```
 
-`epoch` changes only when that snapshot changes. A later read of the same roster keeps the same epoch. `hubMembers` are keyed by Hub agent id. `rakazoBots` are keyed by bot id. Instructions, model settings, and webhook secrets are not included.
+`epoch` changes only when that snapshot changes. A later read of the same roster keeps the same epoch. `hubMembers` are keyed by Hub agent id. `rakazoBots` are keyed by bot id. `groups` are the caller's non-archived ChatGroups, sorted by id. `memberBotIds` lists workspace bots in that group and omits archived bots and Hub roster rows. Archived groups are omitted. Adding or removing a workspace bot from a group changes the epoch. Instructions, model settings, and webhook secrets are not included. The Rakazo sidebar still omits Hub rows, and this document does not add Rakazo bots to a Hub sidebar.
 
-`signature` is hex HMAC-SHA256 over the canonical JSON of `epoch`, `spaceId`, `hubMembers`, and `rakazoBots` when `HUB_DIRECTORY_SIGNING_KEY` is set. Otherwise it is null. The call still requires a signed-in session. `issuedAt` is not part of the signature.
+`signature` is hex HMAC-SHA256 over the canonical JSON of `epoch`, `spaceId`, `hubMembers`, `rakazoBots`, and `groups` when `HUB_DIRECTORY_SIGNING_KEY` is set. Otherwise it is null. The call still requires a signed-in session. `issuedAt` is not part of the signature. A document that omits `groups` still parses, with that field empty.
 
 ## Inbound cutover
 

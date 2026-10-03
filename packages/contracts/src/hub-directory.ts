@@ -32,6 +32,13 @@ export const HubDirectoryBotSchema = z.object({
 });
 export type HubDirectoryBot = z.infer<typeof HubDirectoryBotSchema>;
 
+export const HubDirectoryGroupSchema = z.object({
+  id: Id,
+  name: z.string(),
+  memberBotIds: z.array(Id),
+});
+export type HubDirectoryGroup = z.infer<typeof HubDirectoryGroupSchema>;
+
 /** Bidirectional roster snapshot. signature is null until a directory signing key is configured. */
 export const HubDirectorySchema = z.object({
   epoch: z.string().min(1),
@@ -39,6 +46,7 @@ export const HubDirectorySchema = z.object({
   spaceId: Id,
   hubMembers: z.array(HubDirectoryMemberSchema),
   rakazoBots: z.array(HubDirectoryBotSchema),
+  groups: z.array(HubDirectoryGroupSchema).default([]),
   signature: z.string().nullable(),
 });
 export type HubDirectoryDocument = z.infer<typeof HubDirectorySchema>;

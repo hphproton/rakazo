@@ -80,12 +80,28 @@ export type HubDirectoryBot = {
   spawnKey: string | null;
 };
 
+/** One non-archived ChatGroup. `memberBotIds` are workspace bots only. */
+export type HubDirectoryGroup = {
+  id: string;
+  name: string;
+  memberBotIds: string[];
+};
+
+/** Group row before Hub mirrors and archived bots are removed from the member list. */
+export type HubDirectoryGroupSource = {
+  id: string;
+  name: string;
+  archived: boolean;
+  memberBotIds: readonly string[];
+};
+
 export type HubDirectory = {
   epoch: string;
   issuedAt: string;
   spaceId: string;
   hubMembers: HubDirectoryMember[];
   rakazoBots: HubDirectoryBot[];
+  groups: HubDirectoryGroup[];
 };
 
 export type HubRosterPlan = {
@@ -213,6 +229,7 @@ export function buildHubDirectory(input: {
   spaceId: string;
   bots: readonly HubRosterRecord[];
   issuedAt: string;
+  groups?: readonly HubDirectoryGroupSource[];
 }): HubDirectory {
   const hubMembers: HubDirectoryMember[] = [];
   const rakazoBots: HubDirectoryBot[] = [];
@@ -238,13 +255,15 @@ export function buildHubDirectory(input: {
   }
   hubMembers.sort((a, b) => compareIds(a.hubAgentId, b.hubAgentId));
   rakazoBots.sort((a, b) => compareIds(a.id, b.id));
-  const epoch = hubRosterEpoch(input.spaceId, hubMembers, rakazoBots);
+  const groups = directoryGroups(input.bots, input.groups ?? []);
+  const epoch = hubRosterEpoch(input.spaceId, hubMembers, rakazoBots, groups);
   return {
     epoch,
     issuedAt: input.issuedAt,
     spaceId: input.spaceId,
     hubMembers,
     rakazoBots,
+    groups,
   };
 }
 
@@ -253,19 +272,21 @@ export function hubRosterEpoch(
   spaceId: string,
   hubMembers: readonly HubDirectoryMember[],
   rakazoBots: readonly HubDirectoryBot[],
+  groups: readonly HubDirectoryGroup[] = [],
 ): string {
-  return fnv1a64(canonicalRosterBody(spaceId, hubMembers, rakazoBots));
+  return fnv1a64(canonicalRosterBody(spaceId, hubMembers, rakazoBots, groups));
 }
 
 /** Bytes covered by the directory HMAC. issuedAt is intentionally outside the signature. */
 export function canonicalHubDirectoryBody(
-  directory: Pick<HubDirectory, "epoch" | "spaceId" | "hubMembers" | "rakazoBots">,
+  directory: Pick<HubDirectory, "epoch" | "spaceId" | "hubMembers" | "rakazoBots" | "groups">,
 ): string {
   return JSON.stringify({
     epoch: directory.epoch,
     spaceId: directory.spaceId,
     hubMembers: directory.hubMembers,
     rakazoBots: directory.rakazoBots,
+    groups: directory.groups,
   });
 }
 
@@ -309,8 +330,33 @@ function canonicalRosterBody(
   spaceId: string,
   hubMembers: readonly HubDirectoryMember[],
   rakazoBots: readonly HubDirectoryBot[],
+  groups: readonly HubDirectoryGroup[],
 ): string {
-  return JSON.stringify({ spaceId, hubMembers, rakazoBots });
+  return JSON.stringify({ spaceId, hubMembers, rakazoBots, groups });
+}
+
+/**
+ * Archived groups stay out. Archived bots and Hub roster rows stay out of
+ * `memberBotIds`, so a membership change is visible without putting those rows
+ * on a sidebar.
+ */
+function directoryGroups(
+  bots: readonly HubRosterRecord[],
+  groups: readonly HubDirectoryGroupSource[],
+): HubDirectoryGroup[] {
+  const byId = new Map(bots.map((bot) => [bot.id, bot]));
+  const listed: HubDirectoryGroup[] = [];
+  for (const group of groups) {
+    if (group.archived) continue;
+    const memberBotIds = [...new Set(group.memberBotIds)].filter((botId) => {
+      const bot = byId.get(botId);
+      return Boolean(bot && !bot.archived && !hubAgentIdFromSpawnKey(bot.spawnKey));
+    });
+    memberBotIds.sort(compareIds);
+    listed.push({ id: group.id, name: group.name, memberBotIds });
+  }
+  listed.sort((a, b) => compareIds(a.id, b.id));
+  return listed;
 }
 
 function compareIds(a: string, b: string): number {

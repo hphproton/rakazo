@@ -1,6 +1,11 @@
 import type { Actor } from "@rakazo/contracts";
 import { HubDirectorySchema, HubSyncResultSchema } from "@rakazo/contracts";
-import type { HubDirectory, HubMemberDraft, HubRosterRecord } from "@rakazo/core";
+import type {
+  HubDirectory,
+  HubDirectoryGroupSource,
+  HubMemberDraft,
+  HubRosterRecord,
+} from "@rakazo/core";
 import {
   buildHubDirectory,
   HUB_SECTION_NAME,
@@ -33,6 +38,8 @@ export type HubRosterStore = {
     unarchive: boolean;
   }): Promise<void>;
   archiveHubBot(botId: string, at: Date): Promise<void>;
+  /** Absent on stores that predate group export. Those reads report no groups. */
+  listGroups?(): Promise<HubDirectoryGroupSource[]>;
 };
 
 /**
@@ -68,7 +75,12 @@ export async function syncHubMembers(
   for (const member of plan.archive) {
     await store.archiveHubBot(member.botId, options.issuedAt);
   }
-  const directory = signedDirectory(store.spaceId, await store.list(), options);
+  const directory = signedDirectory(
+    store.spaceId,
+    await store.list(),
+    options,
+    await listDirectoryGroups(store),
+  );
   return HubSyncResultSchema.parse({
     sectionId,
     sectionName: HUB_SECTION_NAME,
@@ -80,10 +92,15 @@ export async function syncHubMembers(
 }
 
 export async function readHubDirectory(
-  store: Pick<HubRosterStore, "spaceId" | "list">,
+  store: Pick<HubRosterStore, "spaceId" | "list"> & Partial<Pick<HubRosterStore, "listGroups">>,
   options: { issuedAt: Date; signingKey?: string },
 ) {
-  return signedDirectory(store.spaceId, await store.list(), options);
+  return signedDirectory(
+    store.spaceId,
+    await store.list(),
+    options,
+    await listDirectoryGroups(store),
+  );
 }
 
 export function hubRosterStore(
@@ -177,17 +194,41 @@ export function hubRosterStore(
     async archiveHubBot(botId, at) {
       await updateOwnedBot(prisma, actor, botId, { archivedAt: at, pinned: false });
     },
+    async listGroups() {
+      const groups = await prisma.chatGroup.findMany({
+        where: { spaceId: actor.spaceId, userId: actor.userId, archivedAt: null },
+        select: {
+          id: true,
+          name: true,
+          members: { select: { botId: true } },
+        },
+      });
+      return groups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        archived: false,
+        memberBotIds: group.members.map((member) => member.botId),
+      }));
+    },
   };
+}
+
+async function listDirectoryGroups(
+  store: Partial<Pick<HubRosterStore, "listGroups">>,
+): Promise<HubDirectoryGroupSource[]> {
+  return store.listGroups ? store.listGroups() : [];
 }
 
 function signedDirectory(
   spaceId: string,
   bots: readonly HubRosterRecord[],
   options: { issuedAt: Date; signingKey?: string },
+  groups: readonly HubDirectoryGroupSource[],
 ) {
   const directory: HubDirectory = buildHubDirectory({
     spaceId,
     bots,
+    groups,
     issuedAt: options.issuedAt.toISOString(),
   });
   return HubDirectorySchema.parse(withHubDirectorySignature(directory, options.signingKey));
