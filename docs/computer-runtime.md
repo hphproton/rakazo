@@ -13,9 +13,11 @@ SandboxProvider workspace <-> AgentHomeStore <-> Rakazo-owned DATA_DIR
 
 `sand` is the sand-host router in front of an existing agent's exec-daemon.
 Hands are shell, files, and computer-use on that agent. A Rakazo bot id is not
-an agent id. `SANDBOX_SAND_SEAT_MAP` names an existing agent UUID for each listed
-bot. Unmapped ids are refused. It does not create an agent or attach display
-`:1` or `:3`. The pod workspace is
+an agent id. `SANDBOX_SAND_SEAT_MAP` accepts a bot id or a computer home key.
+A dedicated computer uses the bot id. A Team Computer uses `team-` plus the
+space id, and a bot id entry on that computer is used first. Unmapped ids are
+refused. It does not create an agent or attach display `:1` or `:3`. The pod
+workspace is
 `/workspace`, shared by sand windows, and it is not a Team B container.
 
 Pi runs in the Rakazo API/worker process. It is not installed in, or executed by, E2B. The built-in tools are ordinary Pi tools, not Claude- or MCP-specific tools, so any model exposed through Pi can call them. Screen operation still requires a model that can accept image tool results and reason about screenshots.
