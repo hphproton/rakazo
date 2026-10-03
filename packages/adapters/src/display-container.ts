@@ -30,15 +30,26 @@ export interface DisplayContainerAttachment {
 }
 
 /**
- * Chief. Deputy and every other bot stay on the space provider.
+ * Shared shape for a lab-started display container.
+ * Exec never pulls or starts `image`. The lab does that.
  * `home` is the path inside the container. The lab mounts the host directory
  * there; exec must not use the host path as its working directory.
+ */
+export const DISPLAY_CONTAINER_TEMPLATE = {
+  image: "localhost/rakazo-desktop-vendored:hub-f",
+  home: "/home/rakazo",
+  display: ":1",
+} as const;
+
+/**
+ * Built-in attachment when `SANDBOX_DISPLAY_BOTS` is unset.
+ * Any other bot, including Deputy, uses the same template through that variable.
  */
 const DEFAULT_DISPLAY_CONTAINERS: readonly DisplayContainerAttachment[] = [
   {
     botId: "cmurhzv6600039g9hdhbizc35",
     container: "team-b-chief-desktop",
-    home: "/home/rakazo",
+    home: DISPLAY_CONTAINER_TEMPLATE.home,
   },
 ];
 
@@ -54,7 +65,8 @@ export type DisplaySpawn = (
 
 /**
  * When set, replaces the built-in attachment. An empty value attaches nobody.
- * Entries are `botId|container|home`, separated by commas.
+ * Entries are `botId|container` or `botId|container|home`, separated by commas.
+ * A missing home uses {@link DISPLAY_CONTAINER_TEMPLATE}.
  */
 export function displayContainerAttachments(
   env: NodeJS.ProcessEnv = process.env,
@@ -113,7 +125,7 @@ export function displayExecArgs(
     "-e",
     `HOME=${attachment.home}`,
     "-e",
-    "DISPLAY=:1",
+    `DISPLAY=${DISPLAY_CONTAINER_TEMPLATE.display}`,
     attachment.container,
     "timeout",
     "--kill-after=1s",
@@ -331,9 +343,14 @@ export class DisplayContainerSandbox implements SandboxProvider {
 }
 
 function parseDisplayAttachment(entry: string): DisplayContainerAttachment {
-  const [botId, container, home] = entry.split("|");
-  if (!botId || !container || !home || entry.split("|").length !== 3) {
-    throw new Error("SANDBOX_DISPLAY_BOTS entries are botId|container|home");
+  const parts = entry.split("|");
+  if (parts.length < 2 || parts.length > 3 || parts.some((part) => part.length === 0)) {
+    throw new Error("SANDBOX_DISPLAY_BOTS entries are botId|container or botId|container|home");
+  }
+  const [botId, container, configuredHome] = parts;
+  const home = configuredHome ?? DISPLAY_CONTAINER_TEMPLATE.home;
+  if (!botId || !container) {
+    throw new Error("SANDBOX_DISPLAY_BOTS entries are botId|container or botId|container|home");
   }
   if (!CONTAINER_NAME.test(container)) throw new Error("display container name is invalid");
   if (!home.startsWith("/")) throw new Error("display home must be an absolute path");
