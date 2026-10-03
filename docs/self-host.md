@@ -242,7 +242,7 @@ E2B_API_KEY=              # when SANDBOX_PROVIDER=e2b
 DAYTONA_API_KEY=          # when SANDBOX_PROVIDER=daytona
 CREATEOS_SANDBOX_API_KEY= # when SANDBOX_PROVIDER=createos
 BOX_API_KEY=              # when SANDBOX_PROVIDER=box
-# SANDBOX_SAND_SEAT_MAP={"bot-id":"00000000-0000-4000-8000-000000000000"}
+# SANDBOX_SAND_SEAT_MAP={"bot-a":"00000000-0000-4000-8000-000000000000","bot-b":"11111111-1111-4111-8111-111111111111"}
 ```
 
 To use an operator-controlled OpenAI-compatible server such as Ollama, LM Studio, llama.cpp, or

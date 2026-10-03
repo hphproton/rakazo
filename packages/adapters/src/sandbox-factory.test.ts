@@ -6,6 +6,7 @@ import { NO_SANDBOX_MESSAGE } from "./none-sandbox.js";
 import { createSandboxProvider } from "./sandbox-factory.js";
 
 const AGENT_A = "11111111-1111-4111-8111-111111111111";
+const AGENT_B = "22222222-2222-4222-8222-222222222222";
 
 const ctx = {
   operationId: "op",
@@ -67,6 +68,28 @@ describe("createSandboxProvider", () => {
       await expect(
         sandbox.provision({ botId: "11111111-1111-4111-8111-111111111111", homePath: "/tmp" }, ctx),
       ).rejects.toThrow(/no seat policy/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("resolves every listed bot and refuses one that is not listed", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const sandbox = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-a": AGENT_A, "bot-b": AGENT_B }),
+      });
+      await expect(
+        sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      await expect(
+        sandbox.provision({ botId: "bot-b", homePath: "/tmp" }, ctx),
+      ).resolves.toMatchObject({ providerRef: AGENT_B, fresh: false });
+      await expect(sandbox.provision({ botId: "bot-c", homePath: "/tmp" }, ctx)).rejects.toThrow(
+        /no seat policy/i,
+      );
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
