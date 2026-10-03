@@ -61,6 +61,10 @@ and an unset map refuses every bot.
 This does not create an agent. It does not point a screen at display `:1` or
 `:3`. Selecting `sand` does not change the default for any other deployment.
 
+Sand desktop hands are observe and the action kinds click, move, down, up,
+type, key, scroll, and wait. `focus`, `open_path`, and `launch_app` are refused.
+There is no pty, snapshot, takeover, extra screen, or page browser.
+
 `SAND_HOST_TOKEN` is an optional bearer for that router. The agent selector
 header is `x-sand-agent-id`. Replace that header if the live router picks the
 agent another way.

@@ -460,17 +460,42 @@ function isWebp(bytes: Uint8Array): boolean {
 }
 
 function webpSize(bytes: Uint8Array): { width: number; height: number } {
-  const vp8x =
-    bytes.length >= 30 &&
-    bytes[12] === 0x56 &&
-    bytes[13] === 0x50 &&
-    bytes[14] === 0x38 &&
-    bytes[15] === 0x58;
-  if (!vp8x) return { width: 0, height: 0 };
-  return {
-    width: 1 + (bytes[24] ?? 0) + ((bytes[25] ?? 0) << 8) + ((bytes[26] ?? 0) << 16),
-    height: 1 + (bytes[27] ?? 0) + ((bytes[28] ?? 0) << 8) + ((bytes[29] ?? 0) << 16),
-  };
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let canvas: { width: number; height: number } | undefined;
+  let keyframe: { width: number; height: number } | undefined;
+  let offset = 12;
+  while (offset + 8 <= bytes.byteLength) {
+    const fourcc = String.fromCharCode(
+      bytes[offset] ?? 0,
+      bytes[offset + 1] ?? 0,
+      bytes[offset + 2] ?? 0,
+      bytes[offset + 3] ?? 0,
+    );
+    const size = view.getUint32(offset + 4, true);
+    const payload = offset + 8;
+    if (size > bytes.byteLength || payload + size > bytes.byteLength) break;
+    if (fourcc === "VP8X" && size >= 10) {
+      const width = vp8xDimension(bytes, payload + 4);
+      const height = vp8xDimension(bytes, payload + 7);
+      if (width > 0 && height > 0) canvas = { width, height };
+    } else if (fourcc === "VP8 " && size >= 10 && ((bytes[payload] ?? 1) & 1) === 0) {
+      const start =
+        bytes[payload + 3] === 0x9d && bytes[payload + 4] === 0x01 && bytes[payload + 5] === 0x2a;
+      if (start) {
+        const width = ((bytes[payload + 6] ?? 0) | ((bytes[payload + 7] ?? 0) << 8)) & 0x3fff;
+        const height = ((bytes[payload + 8] ?? 0) | ((bytes[payload + 9] ?? 0) << 8)) & 0x3fff;
+        if (width > 0 && height > 0) keyframe = { width, height };
+      }
+    }
+    offset = payload + size + (size & 1);
+  }
+  return canvas ?? keyframe ?? { width: 0, height: 0 };
+}
+
+function vp8xDimension(bytes: Uint8Array, offset: number): number {
+  return (
+    1 + (bytes[offset] ?? 0) + ((bytes[offset + 1] ?? 0) << 8) + ((bytes[offset + 2] ?? 0) << 16)
+  );
 }
 
 function jpegSize(bytes: Uint8Array): { width: number; height: number } {

@@ -1,5 +1,6 @@
-import type { AdapterContext, ProcessEvent } from "@rakazo/adapter-kit";
+import type { AdapterContext, ProcessEvent, SandboxProvider } from "@rakazo/adapter-kit";
 import { describe, expect, it, vi } from "vitest";
+import { SAND_HAND_REFUSAL } from "./sand-hand.js";
 import type {
   SandComputerAction,
   SandDirectoryEntry,
@@ -163,8 +164,16 @@ describe("sand sandbox provider", () => {
     const sandbox = provider(host);
     expect(sandbox.describe()).toMatchObject({
       id: "sand",
-      capabilities: { graphical: true, multiScreen: false, pty: false },
+      capabilities: {
+        graphical: true,
+        multiScreen: false,
+        pty: false,
+        snapshots: false,
+        takeover: false,
+      },
     });
+    const described: SandboxProvider = sandbox;
+    expect(described.pageBrowser).toBeUndefined();
     const computer = await sandbox.provision({ botId: "bot-a", homePath: "/home/rakazo" }, ctx);
     expect(computer).toMatchObject({
       id: `sand:${AGENT_A}`,
@@ -311,7 +320,13 @@ describe("sand sandbox provider", () => {
     ]);
     await expect(
       sandbox.act(computer, { actions: [{ kind: "focus", application: "xterm" }] }, ctx),
-    ).rejects.toThrow(/does not support focus/);
+    ).rejects.toThrow(SAND_HAND_REFUSAL);
+    await expect(
+      sandbox.act(computer, { actions: [{ kind: "open", path: "notes/result.txt" }] }, ctx),
+    ).rejects.toThrow(SAND_HAND_REFUSAL);
+    await expect(
+      sandbox.act(computer, { actions: [{ kind: "launch", application: "xterm" }] }, ctx),
+    ).rejects.toThrow(SAND_HAND_REFUSAL);
   });
 
   it("returns a reported screen url and refuses display :1 and :3", async () => {

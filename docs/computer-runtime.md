@@ -17,8 +17,12 @@ an agent id. `SANDBOX_SAND_SEAT_MAP` accepts a bot id or a computer home key.
 A dedicated computer uses the bot id. A Team Computer uses `team-` plus the
 space id, and a bot id entry on that computer is used first. Unmapped ids are
 refused. It does not create an agent or attach display `:1` or `:3`. The pod
-workspace is
-`/workspace`, shared by sand windows, and it is not a Team B container.
+workspace is `/workspace`, shared by sand windows, and it is not a Team B
+container. Sand hands are `computer_observe` plus `computer_act` kinds click,
+move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and
+`launch_app` are refused. The provider is graphical, without a pty, snapshots,
+takeover, multiple screens, or a page browser. A model that cannot see keeps
+the filesystem tools and those same refusals; screenshot tools stay hidden.
 
 Pi runs in the Rakazo API/worker process. It is not installed in, or executed by, E2B. The built-in tools are ordinary Pi tools, not Claude- or MCP-specific tools, so any model exposed through Pi can call them. Screen operation still requires a model that can accept image tool results and reason about screenshots.
 
