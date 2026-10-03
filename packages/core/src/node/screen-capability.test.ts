@@ -98,8 +98,18 @@ describe("sealed screen capabilities", () => {
     );
     expect(url.toString()).not.toContain("fake-socket-token");
     expect(url.searchParams.get("autoconnect")).toBe("true");
-    const socketPath = `/${url.searchParams.get("path")}`;
-    expect(openScreenCapability(socketPath, "fake-secret", 101)?.target.path).toBe(
+    const socketPath = url.searchParams.get("path");
+    expect(socketPath?.startsWith("/novnc/session/view/")).toBe(true);
+    expect(socketPath?.endsWith("/websockify")).toBe(true);
+    const page = new URL(url.pathname, "http://127.0.0.1:5173");
+    const resolved = new URL(socketPath ?? "", page);
+    expect(resolved.pathname).toBe(page.pathname.replace(/\/[^/]*$/, "/websockify"));
+    const nested = new URL(socketPath?.replace(/^\//, "") ?? "", page);
+    expect(nested.pathname).toBe(
+      `${page.pathname.replace(/\/[^/]*$/, "/")}${socketPath?.replace(/^\//, "")}`,
+    );
+    expect(nested.pathname).not.toBe(resolved.pathname);
+    expect(openScreenCapability(resolved.pathname, "fake-secret", 101)?.target.path).toBe(
       "/websockify?token=fake-socket-token",
     );
   });
