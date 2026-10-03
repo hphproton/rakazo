@@ -14,6 +14,7 @@ import type {
 } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import { DesktopSandboxProvider } from "./desktop-sandbox.js";
+import { DisplayContainerSandbox, displayContainerAttachments } from "./display-container.js";
 import { createSandboxProvider, type SandboxProviderOptions } from "./sandbox-factory.js";
 
 export function sandboxKindForBot(envKind: string, computerHost: string | null | undefined) {
@@ -32,6 +33,11 @@ export function createRunSandbox(
     });
   }
   const primary = createSandboxProvider(kind, opts);
+  if (kind === "fake") {
+    const attachments = displayContainerAttachments();
+    if (attachments.length > 0) return new DisplayContainerSandbox(primary, attachments);
+    return primary;
+  }
   if (kind !== "docker" || !opts.prisma) return primary;
   return new HostAwareSandbox(
     primary,
