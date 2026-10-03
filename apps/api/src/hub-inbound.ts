@@ -36,6 +36,13 @@ function isUniqueConstraintError(error: unknown) {
 
 type HubRun = { id: string; taskId: string; status: string };
 
+type HubDeliveryResult = {
+  taskId: string;
+  runId: string;
+  seq: number;
+  runIds: string[];
+};
+
 /**
  * Land a Hub agent's text as a peer receipt and wake the bot, or the ChatGroup
  * thread when the target is a group. No face bot has to call message_bot. The
@@ -58,7 +65,7 @@ export async function receiveHubMessage(
     clientNonce?: string;
     spaceTopicKey?: string;
   },
-) {
+): Promise<HubDeliveryResult> {
   if (target.kind === "group") {
     return receiveHubOnGroup(deps, actor, target, input);
   }
@@ -301,16 +308,97 @@ type HubDeliveryInput = {
 };
 
 /**
- * Land the same Hub receipt on the ChatGroup thread and wake members there.
- * Mention rules match a person message in the group: named members, @everyone,
- * or the first member when nothing is named. This is not a fan-out onto DM threads.
+ * Members a group Hub delivery wakes. Mention rules match a person message:
+ * named members, @everyone, or the first member when nothing is named.
+ */
+async function hubTargetsForGroup(
+  deps: HubDeliveryDeps,
+  actor: Actor,
+  target: Extract<ThreadTarget, { kind: "group" }>,
+  text: string,
+): Promise<string[]> {
+  const group = await deps.prisma.chatGroup.findFirst({
+    where: {
+      id: target.groupId,
+      spaceId: actor.spaceId,
+      userId: actor.userId,
+      archivedAt: null,
+      thread: { id: target.threadId },
+    },
+    include: {
+      members: {
+        where: { bot: { archivedAt: null } },
+        include: { bot: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+  if (!group || group.members.length < GROUP_MEMBER_MIN) throw new IsolationError();
+  const targetBotIds = resolveGroupTargetBotIds({
+    text,
+    members: group.members.map((member) => ({ id: member.bot.id, name: member.bot.name })),
+  });
+  if (targetBotIds.length === 0) throw new IsolationError();
+  return targetBotIds;
+}
+
+/** One Hub receipt and one wake per bot thread. Not one chip on the group thread. */
+async function deliverHubToEachBot(
+  deps: HubDeliveryDeps,
+  actor: Actor,
+  targetBotIds: readonly string[],
+  input: HubDeliveryInput,
+): Promise<HubDeliveryResult> {
+  const threads = await deps.prisma.thread.findMany({
+    where: {
+      spaceId: actor.spaceId,
+      userId: actor.userId,
+      botId: { in: [...targetBotIds] },
+    },
+    select: { id: true, botId: true },
+  });
+  const threadByBot = new Map(
+    threads.flatMap((thread) => (thread.botId ? [[thread.botId, thread.id] as const] : [])),
+  );
+  if (targetBotIds.some((botId) => !threadByBot.has(botId))) throw new IsolationError();
+  const results = [];
+  for (const botId of targetBotIds) {
+    const threadId = threadByBot.get(botId);
+    if (!threadId) throw new IsolationError();
+    results.push(
+      await receiveHubMessage(
+        deps,
+        actor,
+        { kind: "bot", botId, threadId } as Extract<ThreadTarget, { kind: "bot" }>,
+        input,
+      ),
+    );
+  }
+  const first = results[0];
+  if (!first) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Hub message did not start a run." });
+  }
+  return {
+    taskId: first.taskId,
+    runId: first.runId,
+    seq: first.seq,
+    runIds: results.flatMap((result) => result.runIds),
+  };
+}
+
+/**
+ * One woken member keeps the receipt on the ChatGroup thread.
+ * More than one woken member gets a separate receipt on each bot's own thread,
+ * the same 1:1 chip a direct `botId` delivery would write. `spaceTopicKey` is
+ * copied onto each of those receipts so the optional join can still include
+ * every bot's reply.
  */
 async function receiveHubOnGroup(
   deps: HubDeliveryDeps,
   actor: Actor,
   target: Extract<ThreadTarget, { kind: "group" }>,
   input: HubDeliveryInput,
-) {
+): Promise<HubDeliveryResult> {
   const hubAgentId = input.hubAgentId.trim();
   const hubAgentName = input.hubAgentName.trim();
   const text = input.text.trim();
@@ -322,6 +410,9 @@ async function receiveHubOnGroup(
       message: `Message exceeds the ${BOT_MESSAGE_MAX_LENGTH} character limit.`,
     });
   }
+
+  const split = await hubTargetsForGroup(deps, actor, target, text);
+  if (split.length > 1) return deliverHubToEachBot(deps, actor, split, input);
 
   const replayed = await replayHubDelivery(deps, target.threadId, input.clientNonce);
   if (replayed) return replayed;

@@ -101,6 +101,14 @@ const chiefThread = [
     chief,
     "user",
   ),
+  row(
+    "c-reply",
+    "thread-chief",
+    5,
+    "2026-10-02T10:04:00.000Z",
+    [{ kind: "text", text: "Chief on it." }],
+    chief,
+  ),
 ];
 
 const deputyThread = [
@@ -160,6 +168,14 @@ const deputyThread = [
     ],
     deputy,
     "user",
+  ),
+  row(
+    "d-reply",
+    "thread-deputy",
+    5,
+    "2026-10-02T10:05:00.000Z",
+    [{ kind: "text", text: "Deputy on it." }],
+    deputy,
   ),
 ];
 

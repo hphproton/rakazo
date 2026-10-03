@@ -77,6 +77,7 @@ function transactionClient(activeRuns: Array<Record<string, unknown>> = []) {
 
 function groupTransaction(activeRuns: Array<Record<string, unknown>> = []) {
   let created = 0;
+  let messages = 0;
   const tx = {
     $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }]),
     chatGroup: {
@@ -93,11 +94,14 @@ function groupTransaction(activeRuns: Array<Record<string, unknown>> = []) {
     },
     message: {
       findUnique: vi.fn().mockResolvedValue(null),
-      create: vi.fn().mockResolvedValue({
-        id: "msg-hub",
-        seq: 3,
-        threadId: "thread-g",
-        role: "user",
+      create: vi.fn(async () => {
+        messages += 1;
+        return {
+          id: `msg-hub-${messages}`,
+          seq: 3,
+          threadId: "thread-g",
+          role: "user",
+        };
       }),
       update: vi.fn(),
     },
@@ -126,9 +130,35 @@ function groupTransaction(activeRuns: Array<Record<string, unknown>> = []) {
     message: { findUnique: vi.fn().mockResolvedValue(null) },
     run: { findUnique: vi.fn() },
     event: { findFirst: vi.fn() },
+    chatGroup: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: "group-1",
+        members: groupMembers,
+      }),
+    },
+    thread: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: "thread-chief", botId: "bot-chief" },
+        { id: "thread-deputy", botId: "bot-deputy" },
+      ]),
+    },
     $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
   } as unknown as PrismaClient;
   return { tx, prisma };
+}
+
+function messageThreadIds(tx: {
+  message: { create: { mock: { calls: Array<[{ data: { threadId: string } }]> } } };
+}): string[] {
+  return tx.message.create.mock.calls.map((call) => call[0].data.threadId);
+}
+
+function hubReceipts(tx: {
+  message: {
+    create: { mock: { calls: Array<[{ data: { blocks: Array<Record<string, unknown>> } }]> } };
+  };
+}): Array<Record<string, unknown>> {
+  return tx.message.create.mock.calls.flatMap((call) => call[0].data.blocks);
 }
 
 function deps(prisma: PrismaClient) {
@@ -371,7 +401,7 @@ describe("receiveHubMessage", () => {
           botId: "bot-chief",
           threadId: "thread-g",
           trigger: "hub_message",
-          clientNonce: "hub:msg-hub:bot-chief",
+          clientNonce: "hub:msg-hub-1:bot-chief",
         }),
       }),
     );
@@ -403,20 +433,36 @@ describe("receiveHubMessage", () => {
     );
   });
 
-  it("wakes every member for @everyone with distinct run nonces", async () => {
-    const { tx, prisma } = groupTransaction();
-    const { deps: deliveryDeps } = deps(prisma);
-
-    const result = await receiveHubMessage(
-      deliveryDeps,
+  it("splits a Hub message to Chief and Deputy onto each bot thread", async () => {
+    const everyone = groupTransaction();
+    const everyoneDeps = deps(everyone.prisma);
+    const everyoneResult = await receiveHubMessage(
+      everyoneDeps.deps,
       actor,
       groupTarget,
-      deliveryInput({ text: "@everyone check the deploy" }),
+      deliveryInput({ text: "@everyone check the deploy", spaceTopicKey: "burst-1" }),
     );
 
-    expect(result.runIds).toEqual(["run-1", "run-2"]);
-    const nonces = tx.run.create.mock.calls.map((call) => call[0].data.clientNonce as string);
-    expect(nonces).toEqual(["hub:msg-hub:bot-chief", "hub:msg-hub:bot-deputy"]);
+    expect(everyoneResult.runIds).toEqual(["run-1", "run-2"]);
+    expect(messageThreadIds(everyone.tx)).toEqual(["thread-chief", "thread-deputy"]);
+    expect(messageThreadIds(everyone.tx)).not.toContain("thread-g");
+    expect(hubReceipts(everyone.tx).every((block) => block.spaceTopicKey === "burst-1")).toBe(true);
+    expect(everyone.tx.chatGroup.update).not.toHaveBeenCalled();
+    expect(everyoneDeps.enqueue).toHaveBeenCalledTimes(2);
+
+    const named = groupTransaction();
+    const namedResult = await receiveHubMessage(
+      deps(named.prisma).deps,
+      actor,
+      groupTarget,
+      deliveryInput({
+        text: "@Chief @Deputy check the deploy",
+        clientNonce: "hub-nonce-2",
+      }),
+    );
+    expect(namedResult.runIds).toHaveLength(2);
+    expect(messageThreadIds(named.tx)).toEqual(["thread-chief", "thread-deputy"]);
+    const nonces = named.tx.run.create.mock.calls.map((call) => call[0].data.clientNonce as string);
     expect(new Set(nonces).size).toBe(2);
   });
 

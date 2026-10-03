@@ -1,6 +1,7 @@
 import type { MessageBlock } from "@rakazo/contracts";
 import { normalizeSpaceTopicKey } from "@rakazo/contracts";
 import { hubMemberLabel, peerReceiptDisplayName } from "./bot-messages.js";
+import { isTrivialHubAckText } from "./message-visibility.js";
 
 export interface PeerMessage {
   messageId: string;
@@ -14,6 +15,14 @@ export interface PeerMessage {
   /** Rakazo bot whose thread stored this turn. */
   botId?: string;
   botName?: string;
+  /**
+   * The bot's written reply to a Hub receipt. It stays on that topic, including
+   * the space join, instead of living only in the bot's own chat.
+   */
+  botReply?: boolean;
+  /** Ordering for a space join. Not a second copy of the message. */
+  threadId?: string;
+  seq?: number;
 }
 
 /** Rakazo bot named in a space-wide transcript, first appearance order. */
@@ -173,8 +182,9 @@ export type PeerTranscriptChip = {
  * that contains `messageId` for that `peerBotId`. A miss returns null and
  * does not substitute the latest topic. Two Rakazo bots stay apart unless the
  * anchor block has a spaceTopicKey that the other bot's Hub turns also carry.
- * Two Hub members do not require one shared page. Teammate scope stays one
- * conversation per bot id.
+ * That join includes each bot's written reply to the Hub receipt, not only the
+ * Hub-origin rows. Two Hub members do not require one shared page. Teammate
+ * scope stays one conversation per bot id.
  */
 export function peerTranscriptForChip(
   messages: readonly PeerTranscriptMessage[],
@@ -187,8 +197,10 @@ export function peerTranscriptForChip(
 /**
  * Hub topic that contains this chip's message. Null when that message is absent.
  * A spaceTopicKey on the anchor includes every loaded Hub turn with that key,
- * including the other bot. No key keeps today's per-thread topic. Text and
- * timestamps do not join, and two Hub members stay on the topics they already have.
+ * including the other bot, plus each bot's written reply on that topic. No key
+ * keeps today's per-thread topic, including that bot's reply. Text and
+ * timestamps do not join threads, and two Hub members stay on the topics they
+ * already have.
  */
 export function hubExchangeForAnchor(
   messages: readonly PeerTranscriptMessage[],
@@ -205,12 +217,16 @@ export function hubExchangeForAnchor(
   );
   const key = anchorTurn?.spaceTopicKey;
   if (!key) return match;
-  const turns = hubTurnsWithSpaceTopicKey(messages, key);
+  const turns = turnsForSpaceTopic(messages, key);
   if (turns.length === 0) return match;
   return toSpaceConversation(turns);
 }
 
-/** Own thread, plus other threads' messages that carry the anchor's spaceTopicKey. */
+/**
+ * Own thread, plus other threads' messages that belong on the anchor's space topic.
+ * A sibling Hub block with the key qualifies. So does that bot's written reply,
+ * which has no key of its own. An unrelated Hub send on the sibling stays out.
+ */
 export function messagesForHubTranscript<T extends PeerTranscriptMessage>(
   ownThread: readonly T[],
   siblings: readonly T[],
@@ -219,10 +235,9 @@ export function messagesForHubTranscript<T extends PeerTranscriptMessage>(
   const key = spaceTopicKeyOnAnchor(ownThread, anchor);
   if (!key) return [...ownThread];
   const ownThreadId = ownThread.find((message) => message.id === anchor.messageId)?.threadId;
-  const related = siblings.filter((message) => {
-    if (ownThreadId && message.threadId === ownThreadId) return false;
-    return messageHasSpaceTopicKey(message, key);
-  });
+  const others = siblings.filter((message) => !ownThreadId || message.threadId !== ownThreadId);
+  const ids = new Set(turnsForSpaceTopic(others, key).map((turn) => turn.messageId));
+  const related = others.filter((message) => ids.has(message.id));
   return [...ownThread, ...related];
 }
 
@@ -325,13 +340,14 @@ export function hubTopicChipPlan(messages: readonly PeerTranscriptMessage[]): Hu
   const keptMessageIds = new Set<string>();
 
   for (const topic of hubTopics(messages)) {
-    const memberCount = new Set(topic.messages.map((turn) => turn.peerBotId)).size;
+    const protocol = topic.messages.filter((turn) => !turn.botReply);
+    const memberCount = new Set(protocol.map((turn) => turn.peerBotId)).size;
     if (memberCount < 2) {
-      for (const turn of topic.messages) keptMessageIds.add(turn.messageId);
+      for (const turn of protocol) keptMessageIds.add(turn.messageId);
       continue;
     }
     for (const direction of ["sent", "received"] as const) {
-      const turns = topic.messages.filter((turn) => turn.direction === direction);
+      const turns = protocol.filter((turn) => turn.direction === direction);
       const anchor = turns[0];
       if (!anchor) continue;
       if (turns.length < 2) {
@@ -395,11 +411,12 @@ export function hubReceiptRowHidden(
  * A single peer keeps the Rakazo bot's name on sent turns.
  */
 export function peerTurnSpeaker(
-  turn: Pick<PeerMessage, "direction" | "peerBotName" | "botName">,
+  turn: Pick<PeerMessage, "direction" | "peerBotName" | "botName" | "botReply">,
   botName: string,
   participantCount: number,
 ): string {
   const speaker = turn.botName?.trim() || botName;
+  if (turn.botReply) return speaker;
   if (turn.direction === "received") return turn.peerBotName;
   if (participantCount > 1) return `${speaker} · ${turn.peerBotName}`;
   return speaker;
@@ -449,7 +466,7 @@ function walkHubTopics(messages: readonly PeerTranscriptMessage[]): {
       }
       continue;
     }
-    if (isBotReplyText(message)) noteBotReply(openByThread.get(threadId));
+    if (isBotReplyText(message)) noteBotReply(openByThread.get(threadId), message);
   }
 
   return { done, openByThread };
@@ -590,13 +607,51 @@ function isBotReplyText(message: PeerTranscriptMessage): boolean {
   return message.blocks.some((block) => block.kind === "text" && block.text.trim().length > 0);
 }
 
-function noteBotReply(open: OpenHubTopic[] | undefined) {
+function noteBotReply(open: OpenHubTopic[] | undefined, message: PeerTranscriptMessage) {
   if (!open) return;
+  let answered: OpenHubTopic | undefined;
   for (const topic of open) {
     if (topic.turns.length === 0) continue;
     topic.botTextSince = true;
     topic.spoke = true;
+    if (topic.turns.some((turn) => turn.direction === "received" && !turn.botReply)) {
+      answered = topic;
+    }
   }
+  const text = botReplyText(message);
+  if (!answered || !text || isTrivialHubAckText(text)) return;
+  answered.turns.push(botReplyTurn(message, text, answered.spaceTopicKey));
+}
+
+function botReplyText(message: PeerTranscriptMessage): string | undefined {
+  const parts: string[] = [];
+  for (const block of message.blocks) {
+    if (block.kind === "text" && block.text.trim()) parts.push(block.text.trim());
+  }
+  if (parts.length === 0) return undefined;
+  return parts.join("\n");
+}
+
+function botReplyTurn(
+  message: PeerTranscriptMessage,
+  text: string,
+  spaceTopicKey: string | undefined,
+): PeerMessage {
+  const key = normalizeSpaceTopicKey(spaceTopicKey);
+  return {
+    messageId: message.id,
+    direction: "sent",
+    peerBotId: message.botId ?? "",
+    peerBotName: message.botName?.trim() || "",
+    text,
+    createdAt: message.createdAt ?? "",
+    botReply: true,
+    ...(key ? { spaceTopicKey: key } : {}),
+    ...(message.botId ? { botId: message.botId } : {}),
+    ...(message.botName ? { botName: message.botName } : {}),
+    ...(message.threadId ? { threadId: message.threadId } : {}),
+    ...(message.seq != null ? { seq: message.seq } : {}),
+  };
 }
 
 function hubTurnsFrom(message: PeerTranscriptMessage): PeerMessage[] {
@@ -622,6 +677,8 @@ function withThreadSpeaker(
     ...(key ? { spaceTopicKey: key } : {}),
     ...(message.botId ? { botId: message.botId } : {}),
     ...(message.botName ? { botName: message.botName } : {}),
+    ...(message.threadId ? { threadId: message.threadId } : {}),
+    ...(message.seq != null ? { seq: message.seq } : {}),
   };
 }
 
@@ -665,40 +722,32 @@ function topicJoinedBySend(
   return undefined;
 }
 
-function hubTurnsWithSpaceTopicKey(
+/** Keyed Hub turns plus each bot's written reply that inherited that key. */
+function turnsForSpaceTopic(
   messages: readonly PeerTranscriptMessage[],
   key: string,
 ): PeerMessage[] {
-  const ordered = messages
-    .map((message, index) => ({ message, index }))
-    .sort((a, b) => compareSpaceTranscriptOrder(a.message, a.index, b.message, b.index));
-  const turns: PeerMessage[] = [];
-  for (const { message } of ordered) {
-    for (const turn of hubTurnsFrom(message)) {
-      if (turn.spaceTopicKey === key) turns.push(turn);
-    }
-  }
-  return turns;
+  const { done, openByThread } = walkHubTopics(messages);
+  const turns = [...done, ...[...openByThread.values()].flat()].flatMap((topic) =>
+    topic.turns.filter((turn) => turn.spaceTopicKey === key),
+  );
+  return turns.slice().sort(comparePeerTurns);
 }
 
-function compareSpaceTranscriptOrder(
-  a: PeerTranscriptMessage,
-  aIndex: number,
-  b: PeerTranscriptMessage,
-  bIndex: number,
-): number {
-  const time = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+function comparePeerTurns(a: PeerMessage, b: PeerMessage): number {
+  const time = a.createdAt.localeCompare(b.createdAt);
   if (time !== 0) return time;
   const thread = (a.threadId ?? "").localeCompare(b.threadId ?? "");
   if (thread !== 0) return thread;
   if (a.seq != null && b.seq != null && a.seq !== b.seq) return a.seq - b.seq;
-  return aIndex - bIndex;
+  return a.messageId.localeCompare(b.messageId);
 }
 
 function toSpaceConversation(turns: PeerMessage[]): PeerConversation {
   const order: string[] = [];
   const names = new Map<string, string>();
   for (const turn of turns) {
+    if (turn.botReply) continue;
     if (!names.has(turn.peerBotId)) order.push(turn.peerBotId);
     names.set(turn.peerBotId, turn.peerBotName);
   }
