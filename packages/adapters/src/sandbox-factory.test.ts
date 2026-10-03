@@ -1,6 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { NO_SANDBOX_MESSAGE } from "./none-sandbox.js";
 import { createSandboxProvider } from "./sandbox-factory.js";
+
+const AGENT_A = "11111111-1111-4111-8111-111111111111";
+const AGENT_B = "22222222-2222-4222-8222-222222222222";
 
 const ctx = {
   operationId: "op",
@@ -66,6 +72,103 @@ describe("createSandboxProvider", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("resolves every listed bot and refuses one that is not listed", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const sandbox = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-a": AGENT_A, "bot-b": AGENT_B }),
+      });
+      await expect(
+        sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      await expect(
+        sandbox.provision({ botId: "bot-b", homePath: "/tmp" }, ctx),
+      ).resolves.toMatchObject({ providerRef: AGENT_B, fresh: false });
+      await expect(sandbox.provision({ botId: "bot-c", homePath: "/tmp" }, ctx)).rejects.toThrow(
+        /no seat policy/i,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("resolves a mapped bot and still refuses an unmapped one", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ computerUseSupported: true }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const sandbox = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-a": AGENT_A }),
+      });
+      await expect(sandbox.provision({ botId: "bot-b", homePath: "/tmp" }, ctx)).rejects.toThrow(
+        /no seat policy/i,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+      expect(computer).toMatchObject({
+        botId: "bot-a",
+        kind: "sand",
+        providerRef: AGENT_A,
+        fresh: false,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      await sandbox.prepare(computer, ctx);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const call = fetchMock.mock.calls[0];
+      if (!call) throw new Error("expected a sand host request");
+      const [url, init] = call;
+      expect(String(url)).toContain("/agent.v1.ControlService/GetCapabilities");
+      expect(new Headers(init?.headers).get("x-sand-agent-id")).toBe(AGENT_A);
+      expect(String(url)).not.toContain("createAgent");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("loads a seat map from a JSON file and still refuses ids that are missing", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sand-seats-"));
+    const file = path.join(dir, "seats.json");
+    writeFileSync(file, JSON.stringify({ "bot-a": ` ${AGENT_A} ` }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const sandbox = createSandboxProvider("sand", { sandSeatMap: file });
+      await expect(
+        sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      await expect(sandbox.provision({ botId: "bot-b", homePath: "/tmp" }, ctx)).rejects.toThrow(
+        /no seat policy/i,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a seat map that invents an agent, echoes the bot id, or selects a shared display", () => {
+    expect(() =>
+      createSandboxProvider("sand", { sandSeatMap: JSON.stringify({ "bot-a": "createAgent" }) }),
+    ).toThrow(/not a sand agent UUID/);
+    expect(() =>
+      createSandboxProvider("sand", { sandSeatMap: JSON.stringify({ "bot-a": ":1" }) }),
+    ).toThrow(/display :1 or :3/);
+    expect(() =>
+      createSandboxProvider("sand", { sandSeatMap: JSON.stringify({ "bot-a": ":3" }) }),
+    ).toThrow(/display :1 or :3/);
+    expect(() =>
+      createSandboxProvider("sand", { sandSeatMap: JSON.stringify({ [AGENT_A]: AGENT_A }) }),
+    ).toThrow(/Rakazo bot id/);
+    expect(() =>
+      createSandboxProvider("sand", {
+        sandSeatMap: path.join(tmpdir(), "missing-sand-seats.json"),
+      }),
+    ).toThrow(/file could not be read/);
   });
 
   it("throws on unknown provider", () => {

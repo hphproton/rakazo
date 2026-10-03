@@ -47,12 +47,13 @@ router (`SAND_HOST_URL`, default `http://127.0.0.1:1339`) over ConnectRPC
 one X display. This is not ASCII `box`, not the Docker supervisor on `:7091`,
 and not a Team B display container.
 
-A Rakazo bot id is not a sand agent id. `SandSeatPolicy` is the only place that
-may name an existing agent, and the built-in policy refuses every bot id. This
-provider does not create an agent and does not borrow one. It does not point a
-screen at display `:1` or `:3`. Selecting `sand` does not change the default
-for any other deployment. Provision fails with a seat-policy error until a
-policy exists for ids that are not sand agent UUIDs.
+A Rakazo bot id is not a sand agent id. `SANDBOX_SAND_SEAT_MAP` is a JSON object
+of bot id to an existing sand agent UUID, or a path to a file that contains that
+object. The API and the worker read it when they start. A file path has to be
+visible to both processes. A listed bot uses that agent. A bot missing from the
+map is refused, and an unset map refuses every bot.
+This does not create an agent. It does not point a screen at display `:1` or
+`:3`. Selecting `sand` does not change the default for any other deployment.
 
 `SAND_HOST_TOKEN` is an optional bearer for that router. The agent selector
 header is `x-sand-agent-id`. Replace that header if the live router picks the

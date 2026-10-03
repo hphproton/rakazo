@@ -77,6 +77,16 @@ describe("sandboxProviderOptionsFromEnv", () => {
     ).toMatchObject({
       sandHostUrl: "http://127.0.0.1:1339",
       sandHostToken: "test-sand-token",
+      sandSeatMap: undefined,
     });
+  });
+
+  it("loads a sand seat map when one is set", () => {
+    const sandSeatMap = '{"bot-a":"11111111-1111-4111-8111-111111111111"}';
+    expect(
+      sandboxProviderOptionsFromEnv({
+        SANDBOX_SAND_SEAT_MAP: ` ${sandSeatMap} `,
+      }).sandSeatMap,
+    ).toBe(sandSeatMap);
   });
 });

@@ -32,7 +32,7 @@ run `bash install-images.sh`. Flags may be combined in either order: `--prepare-
 (from the app image, on the internal network only) and pulls `ghcr.io/elie222/rakazo/computer`.
 Signup and local Docker computers work without an E2B account. Optional remote providers: set
 `SANDBOX_PROVIDER` to `e2b`, `daytona`, `createos`, or `box` and add the matching API key.
-`sand` talks to the sand-host router instead, and still needs a seat policy before a bot can use it. The published-images
+`sand` talks to the sand-host router instead. `SANDBOX_SAND_SEAT_MAP` maps bot ids to existing sand agent UUIDs; unmapped bots are refused. The published-images
 Compose stack requires `SANDBOX_SUPERVISOR_TOKEN` for every provider; leave it empty and `compose up` fails closed.
 
 Optional: set `OPENROUTER_API_KEY` or connect a model in the UI after signup.
@@ -242,6 +242,7 @@ E2B_API_KEY=              # when SANDBOX_PROVIDER=e2b
 DAYTONA_API_KEY=          # when SANDBOX_PROVIDER=daytona
 CREATEOS_SANDBOX_API_KEY= # when SANDBOX_PROVIDER=createos
 BOX_API_KEY=              # when SANDBOX_PROVIDER=box
+# SANDBOX_SAND_SEAT_MAP={"bot-a":"00000000-0000-4000-8000-000000000000","bot-b":"11111111-1111-4111-8111-111111111111"}
 ```
 
 To use an operator-controlled OpenAI-compatible server such as Ollama, LM Studio, llama.cpp, or
