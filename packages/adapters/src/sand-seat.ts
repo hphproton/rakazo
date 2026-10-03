@@ -10,11 +10,18 @@ export interface SandSeat {
 }
 
 export interface SandSeatRequest {
+  /**
+   * Id passed to sandbox provision as `botId`. The product puts the computer
+   * home key here: the bot id for a dedicated computer, `team-` plus the space
+   * id for a shared Team Computer.
+   */
   botId: string;
+  /** Rakazo bot id from the adapter context, when the caller has one. */
+  callerBotId?: string;
   providerRef?: string;
 }
 
-/** Maps a Rakazo bot id to an existing sand agent. Unmapped ids are refused. */
+/** Maps a bot id or a computer home key to an existing sand agent. Unmapped ids are refused. */
 export interface SandSeatPolicy {
   resolve(request: SandSeatRequest): SandSeat | undefined;
 }
@@ -26,17 +33,25 @@ export class RefusingSandSeatPolicy implements SandSeatPolicy {
   }
 }
 
-/** Operator map of Rakazo bot id to an existing sand agent UUID. */
+/**
+ * Operator map. Keys are bot ids or computer home keys. A bot id entry is used
+ * before the shared team home key. Unlisted ids still resolve to nothing.
+ */
 export class MappedSandSeatPolicy implements SandSeatPolicy {
   constructor(private readonly seats: ReadonlyMap<string, string>) {}
 
   resolve(request: SandSeatRequest): SandSeat | undefined {
-    const agentId = this.seats.get(request.botId);
-    return agentId === undefined ? undefined : { agentId };
+    const keys = [request.callerBotId, request.botId].filter((key): key is string => Boolean(key));
+    for (const key of keys) {
+      const agentId = this.seats.get(key);
+      if (agentId !== undefined) return { agentId };
+    }
+    return undefined;
   }
 }
 
-const SEAT_MAP_ERROR = "SANDBOX_SAND_SEAT_MAP must be a JSON object of bot id to sand agent UUID.";
+const SEAT_MAP_ERROR =
+  "SANDBOX_SAND_SEAT_MAP must be a JSON object of bot id or team home key to sand agent UUID.";
 
 /**
  * Build the seat policy from `SANDBOX_SAND_SEAT_MAP`.
@@ -86,9 +101,10 @@ export function parseSandSeatMap(text: string): Map<string, string> {
 export class SandSeatUnmappedError extends Error {
   readonly botId: string;
 
-  constructor(botId: string) {
+  constructor(botId: string, callerBotId?: string) {
+    const who = callerBotId && callerBotId !== botId ? `${botId} or ${callerBotId}` : botId;
     super(
-      `No sand seat for ${botId}. A Rakazo bot id is not a sand agent id, and no seat policy maps it.`,
+      `No sand seat for ${who}. A Rakazo bot id is not a sand agent id, and no seat policy maps it.`,
     );
     this.name = "SandSeatUnmappedError";
     this.botId = botId;
@@ -135,9 +151,9 @@ export function assertSandAgentId(agentId: string): void {
  */
 export function requireSandSeat(policy: SandSeatPolicy, request: SandSeatRequest): SandSeat {
   const seat = policy.resolve(request);
-  if (!seat) throw new SandSeatUnmappedError(request.botId);
+  if (!seat) throw new SandSeatUnmappedError(request.botId, request.callerBotId);
   assertSandAgentId(seat.agentId);
-  if (seat.agentId === request.botId) {
+  if (seat.agentId === request.botId || seat.agentId === request.callerBotId) {
     throw new SandSeatInvalidError(
       "Seat policy returned the Rakazo bot id. That id is not a sand agent UUID.",
     );

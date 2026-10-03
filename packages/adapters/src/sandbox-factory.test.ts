@@ -96,6 +96,60 @@ describe("createSandboxProvider", () => {
     }
   });
 
+  it("resolves a team computer by bot id or by home key", async () => {
+    const homeKey = "team-space";
+    const fetchMock = vi.fn(async () => Response.json({ computerUseSupported: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const byBot = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-a": AGENT_A }),
+      });
+      const botContext = { ...ctx, botId: "bot-a" };
+      const byBotId = await byBot.provision({ botId: homeKey, homePath: "/tmp" }, botContext);
+      expect(byBotId).toMatchObject({ botId: homeKey, providerRef: AGENT_A, fresh: false });
+      await byBot.prepare(byBotId, botContext);
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      const byHome = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ [homeKey]: AGENT_B }),
+      });
+      await expect(
+        byHome.provision({ botId: homeKey, homePath: "/tmp" }, { ...ctx, botId: "bot-b" }),
+      ).resolves.toMatchObject({ botId: homeKey, providerRef: AGENT_B, fresh: false });
+
+      const neither = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "bot-c": AGENT_A }),
+      });
+      await expect(
+        neither.provision({ botId: homeKey, homePath: "/tmp" }, botContext),
+      ).rejects.toThrow(/no seat policy/i);
+      await expect(
+        neither.provision({ botId: homeKey, homePath: "/tmp" }, botContext),
+      ).rejects.toThrow(homeKey);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses a bot id entry before the shared team home key", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const sandbox = createSandboxProvider("sand", {
+        sandSeatMap: JSON.stringify({ "team-space": AGENT_A, "bot-a": AGENT_B }),
+      });
+      await expect(
+        sandbox.provision({ botId: "team-space", homePath: "/tmp" }, { ...ctx, botId: "bot-a" }),
+      ).resolves.toMatchObject({ providerRef: AGENT_B, fresh: false });
+      await expect(
+        sandbox.provision({ botId: "team-space", homePath: "/tmp" }, { ...ctx, botId: "bot-b" }),
+      ).resolves.toMatchObject({ providerRef: AGENT_A, fresh: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("resolves a mapped bot and still refuses an unmapped one", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({ computerUseSupported: true }),

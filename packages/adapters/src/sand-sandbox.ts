@@ -63,9 +63,13 @@ export class SandSandboxProvider implements SandboxProvider {
       providerRef?: string;
       providerKind?: ComputerRef["kind"];
     },
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<ComputerRef> {
-    const seat = requireSandSeat(this.opts.policy, request);
+    const seat = requireSandSeat(this.opts.policy, {
+      botId: request.botId,
+      callerBotId: context.botId,
+      providerRef: request.providerRef,
+    });
     return {
       id: `sand:${seat.agentId}`,
       botId: request.botId,
@@ -76,7 +80,7 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async prepare(computer: ComputerRef, context: AdapterContext): Promise<void> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     await this.opts.host.capabilities(seat.agentId, context.signal);
   }
 
@@ -85,7 +89,7 @@ export class SandSandboxProvider implements SandboxProvider {
     request: CommandRequest,
     context: AdapterContext,
   ): AsyncIterable<ProcessEvent> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     if (request.argv.length === 0) {
       yield { type: "stderr", data: "sand exec requires a command\n" };
       yield { type: "exit", code: 1 };
@@ -120,9 +124,9 @@ export class SandSandboxProvider implements SandboxProvider {
   async connectScreen(
     computer: ComputerRef,
     _request: ScreenRequest,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<ScreenSession> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const url = this.opts.host.screenUrl(seat.agentId);
     if (url && sandScreenSelectsForbiddenDisplay(url)) throw new SandDisplayForbiddenError();
     return { url, mimeType: "text/html", close: async () => undefined };
@@ -134,12 +138,12 @@ export class SandSandboxProvider implements SandboxProvider {
     _lease: ControlLeaseRef,
     context: AdapterContext,
   ): Promise<void> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     await this.opts.host.computerUse(seat.agentId, [toSandAction(input)], context.signal);
   }
 
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const result = await this.opts.host.computerUse(
       seat.agentId,
       [{ screenshot: {} }],
@@ -149,7 +153,7 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const actions = boundedComputerActions(request.actions).map(toSandAction);
     const sent = request.observe === false ? actions : [...actions, { screenshot: {} }];
     const result = await this.opts.host.computerUse(seat.agentId, sent, context.signal);
@@ -166,7 +170,7 @@ export class SandSandboxProvider implements SandboxProvider {
     directory: string,
     context: AdapterContext,
   ): Promise<ComputerFileEntry[]> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const absolute = sandWorkspacePath(directory);
     const entries = await this.opts.host.listDirectory(seat.agentId, absolute, context.signal);
     return entries.flatMap((entry) => {
@@ -190,7 +194,7 @@ export class SandSandboxProvider implements SandboxProvider {
     context: AdapterContext,
     options?: { maxBytes?: number },
   ): Promise<Uint8Array> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const bytes = await this.opts.host.readFile(
       seat.agentId,
       sandWorkspacePath(path),
@@ -203,7 +207,7 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async writeFile(computer: ComputerRef, file: PortableFile, context: AdapterContext) {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const absolute = sandWorkspacePath(file.path);
     await this.opts.host.writeFile(seat.agentId, absolute, file.content, context.signal);
     if (file.executable) {
@@ -215,7 +219,7 @@ export class SandSandboxProvider implements SandboxProvider {
     computer: ComputerRef,
     context: AdapterContext,
   ): AsyncIterable<PortableFile> {
-    const seat = this.seat(computer);
+    const seat = this.seat(computer, context);
     const files = await this.listTree(seat.agentId, SAND_WORKSPACE, context.signal);
     for (const file of files) {
       yield {
@@ -237,8 +241,8 @@ export class SandSandboxProvider implements SandboxProvider {
     for await (const file of files) await this.writeFile(computer, file, context);
   }
 
-  async snapshot(computer: ComputerRef, _context: AdapterContext) {
-    const seat = this.seat(computer);
+  async snapshot(computer: ComputerRef, context: AdapterContext) {
+    const seat = this.seat(computer, context);
     return {
       id: `sand-workspace-${seat.agentId}`,
       createdAt: new Date().toISOString(),
@@ -249,9 +253,10 @@ export class SandSandboxProvider implements SandboxProvider {
 
   async destroy(_computer: ComputerRef, _context: AdapterContext): Promise<void> {}
 
-  private seat(computer: ComputerRef) {
+  private seat(computer: ComputerRef, context: AdapterContext) {
     return requireSandSeat(this.opts.policy, {
       botId: computer.botId,
+      callerBotId: context.botId,
       providerRef: computer.providerRef,
     });
   }

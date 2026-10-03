@@ -48,10 +48,16 @@ one X display. This is not ASCII `box`, not the Docker supervisor on `:7091`,
 and not a Team B display container.
 
 A Rakazo bot id is not a sand agent id. `SANDBOX_SAND_SEAT_MAP` is a JSON object
-of bot id to an existing sand agent UUID, or a path to a file that contains that
-object. The API and the worker read it when they start. A file path has to be
-visible to both processes. A listed bot uses that agent. A bot missing from the
-map is refused, and an unset map refuses every bot.
+of bot id or computer home key to an existing sand agent UUID, or a path to a
+file that contains that object. The API and the worker read it when they start.
+A file path has to be visible to both processes.
+
+Provision receives the computer home key. A dedicated computer's home key is
+the bot id, so map that bot id. A Team Computer's home key is `team-` plus the
+space id, shared by every bot on that computer, so map `team-<space id>` when
+those bots should use one sand agent. A bot id entry is also accepted and is
+used before the shared team home key. Anything missing from the map is refused,
+and an unset map refuses every bot.
 This does not create an agent. It does not point a screen at display `:1` or
 `:3`. Selecting `sand` does not change the default for any other deployment.
 
