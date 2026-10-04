@@ -14,9 +14,10 @@ import {
 } from "../../lib/computer-screen";
 
 /**
- * Human viewer for a sand screen. The picture is an in-app RFB client on the
- * sealed websockify path. The sidebar picture uses the same 16/10 card as the
- * stock computer preview. Stock noVNC and other providers stay unchanged.
+ * Human viewer for a sand screen. The sidebar keeps the stock 16/10 card and
+ * does not open a websockify socket. Open full mounts an in-app RFB client on
+ * the sealed path and disconnects that client when the overlay closes.
+ * Stock noVNC and other providers stay unchanged.
  */
 export function SandScreenShell({
   variant,
@@ -46,9 +47,16 @@ export function SandScreenShell({
 }) {
   const { t } = useLingui();
   const [live, setLive] = useState(false);
-  const connection = sandViewerConnection({ url, state, screenError, live });
+  const streaming = variant === "overlay";
+  const connection = sandViewerConnection({
+    url,
+    state,
+    screenError,
+    live: streaming && live,
+  });
   const quiet = screenError || state === "stopped" || state === "suspended" || state === "error";
-  const showFrame = Boolean(url) && !quiet;
+  const showFrame = streaming && Boolean(url) && !quiet;
+  const status = streaming || connection === "stale" ? connection : "idle";
 
   async function copyLink() {
     if (!url) return;
@@ -74,9 +82,7 @@ export function SandScreenShell({
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" dir="auto">
           {botName}
         </span>
-        <span className="shrink-0 text-sm text-muted-foreground">
-          {connectionLabel(connection)}
-        </span>
+        <span className="shrink-0 text-sm text-muted-foreground">{connectionLabel(status)}</span>
         {variant === "panel" ? (
           <Button
             type="button"
@@ -230,8 +236,9 @@ function SandScreenFrame({
   );
 }
 
-function connectionLabel(connection: SandViewerConnection) {
+function connectionLabel(connection: SandViewerConnection | "idle") {
   if (connection === "connected") return <Trans>Connected</Trans>;
   if (connection === "stale") return <Trans>Stale</Trans>;
+  if (connection === "idle") return <Trans>Idle</Trans>;
   return <Trans>Reconnecting</Trans>;
 }

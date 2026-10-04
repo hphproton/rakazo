@@ -2186,6 +2186,10 @@ msgstr "How to check"
 msgid "I’m done"
 msgstr "I’m done"
 
+#: src/components/computer/SandScreenShell.tsx
+msgid "Idle"
+msgstr "Idle"
+
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "If you heard that, voice is ready."
 msgstr "If you heard that, voice is ready."

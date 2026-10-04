@@ -2186,6 +2186,10 @@ msgstr "如何检查"
 msgid "I’m done"
 msgstr "我做完了"
 
+#: src/components/computer/SandScreenShell.tsx
+msgid "Idle"
+msgstr ""
+
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "If you heard that, voice is ready."
 msgstr "如果听到了，说明语音已就绪。"
