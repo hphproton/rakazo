@@ -25,6 +25,29 @@ export async function loadComputerScreen(options: {
   return result.url;
 }
 
+const NOVNC_CAPABILITY = /\/novnc\/session\/(view|control)\/(\d+)\./;
+
+/**
+ * Keep a sealed noVNC URL that still has time left so a thread refresh does not
+ * change the iframe src. A policy change, a near expiry, or any other URL takes
+ * the new value.
+ */
+export function reuseScreenUrl(
+  current: string | null,
+  next: string | null,
+  now = Date.now(),
+): string | null {
+  if (!next) return null;
+  if (!current) return next;
+  const currentMatch = current.match(NOVNC_CAPABILITY);
+  const nextMatch = next.match(NOVNC_CAPABILITY);
+  if (!currentMatch || !nextMatch) return next;
+  if (currentMatch[1] !== nextMatch[1]) return next;
+  const expires = Number(currentMatch[2]);
+  if (!Number.isFinite(expires) || expires - now <= 60_000) return next;
+  return current;
+}
+
 export function embeddableScreenUrl(url: string | null): string | null {
   if (!url) return null;
   try {

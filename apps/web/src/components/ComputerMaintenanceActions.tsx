@@ -37,7 +37,7 @@ export function ComputerMaintenanceActions({
   const [confirmReset, setConfirmReset] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!computer) return null;
+  if (!computer || computer.kind === "sand") return null;
 
   const busy = Boolean(computer.busyBotName) || computer.state === "booting";
   const showRecover =
