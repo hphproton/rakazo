@@ -2,7 +2,13 @@ import { SCREEN_TARGET_ENDPOINT } from "@rakazo/core/node/screen-capability";
 import type { PrismaClient } from "@rakazo/db";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import { addScreenProxyCapability, mountScreenTarget } from "./screen-proxy.js";
+import {
+  addScreenProxyCapability,
+  keepSandScreenSeal,
+  mountScreenTarget,
+  sandScreenSealKey,
+  takeSandScreenSeal,
+} from "./screen-proxy.js";
 
 const secret = "fake-screen-secret";
 const scope = {
@@ -114,5 +120,52 @@ describe("screen capability lifecycle authorization", () => {
     expect(addScreenProxyCapability("local://preview", secret, "https://app.example", scope)).toBe(
       "local://preview",
     );
+  });
+});
+
+describe("sand screen seals", () => {
+  const key = sandScreenSealKey({
+    computerId: "computer-sand",
+    interactive: false,
+    botGeneration: 1,
+    computerGeneration: 1,
+    controlLeaseId: null,
+    upstream: "http://127.0.0.1:6080/vnc.html?view_only=true",
+  });
+
+  it("reuses a seal until it is close to expiry", () => {
+    const now = 1_700_000_000_000;
+    const url = addScreenProxyCapability(
+      "http://127.0.0.1:6080/vnc.html?view_only=true",
+      secret,
+      "http://127.0.0.1:5173",
+      scope,
+      now,
+    );
+    keepSandScreenSeal(key, url);
+    expect(takeSandScreenSeal(key, now + 1_000)).toBe(url);
+    expect(takeSandScreenSeal(key, now + 60 * 60_000 - 30_000)).toBeNull();
+  });
+
+  it("keeps a separate seal when the seat policy changes", () => {
+    const now = 1_800_000_000_000;
+    const url = addScreenProxyCapability(
+      "http://127.0.0.1:6080/vnc.html?view_only=true",
+      secret,
+      "http://127.0.0.1:5173",
+      scope,
+      now,
+    );
+    keepSandScreenSeal(key, url);
+    const control = sandScreenSealKey({
+      computerId: "computer-sand",
+      interactive: true,
+      botGeneration: 1,
+      computerGeneration: 1,
+      controlLeaseId: null,
+      upstream: "http://127.0.0.1:6080/vnc.html?view_only=false",
+    });
+    expect(takeSandScreenSeal(control, now + 1_000)).toBeNull();
+    expect(takeSandScreenSeal(key, now + 1_000)).toBe(url);
   });
 });

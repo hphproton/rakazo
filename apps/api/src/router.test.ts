@@ -1069,14 +1069,18 @@ describe("computer screen url", () => {
     controlRunId: null,
   };
 
-  const callScreenUrl = async (connectScreen: () => Promise<unknown>, updateMany = vi.fn()) => {
+  const callScreenUrl = async (
+    connectScreen: () => Promise<unknown>,
+    updateMany = vi.fn(),
+    kind = "e2b",
+  ) => {
     const prisma = {
       bot: {
         findFirst: vi.fn().mockResolvedValue({
           id: "bot-1",
           screenGeneration: 2,
           thread: { id: "thread-1" },
-          computer: computerRow,
+          computer: { ...computerRow, kind },
         }),
       },
       computer: { updateMany },
@@ -1125,6 +1129,28 @@ describe("computer screen url", () => {
       },
       target: { hostname: "screen.example", interactive: false },
     });
+  });
+
+  it("reuses one sealed noVNC token for sand and mints a new token for other providers", async () => {
+    const connectScreen = async () => ({
+      url: "https://screen.example/vnc.html?token=fake-token",
+    });
+    const sandUrl = async () => {
+      const { response } = await callScreenUrl(connectScreen, vi.fn(), "sand");
+      const { json } = await response.json();
+      return json.url as string;
+    };
+    const first = await sandUrl();
+    const second = await sandUrl();
+    expect(first).toContain("/novnc/session/view/");
+    expect(second).toBe(first);
+
+    const otherUrl = async () => {
+      const { response } = await callScreenUrl(connectScreen);
+      const { json } = await response.json();
+      return json.url as string;
+    };
+    expect(await otherUrl()).not.toBe(await otherUrl());
   });
 
   it("returns desktop provider screen URLs without sealing them", async () => {

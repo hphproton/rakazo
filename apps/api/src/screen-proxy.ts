@@ -10,6 +10,45 @@ import type { PrismaClient } from "@rakazo/db";
 import type { Hono } from "hono";
 import { requestBodyLimit } from "./request-body-limit.js";
 
+const SAND_SCREEN_REUSE_MS = 60_000;
+const sandScreenSeals = new Map<string, { url: string; expiresAt: number }>();
+
+export function sandScreenSealKey(input: {
+  computerId: string;
+  interactive: boolean;
+  botGeneration: number;
+  computerGeneration: number;
+  controlLeaseId: string | null;
+  upstream: string;
+}): string {
+  return [
+    input.computerId,
+    input.interactive ? "control" : "view",
+    input.botGeneration,
+    input.computerGeneration,
+    input.controlLeaseId ?? "",
+    input.upstream,
+  ].join("\0");
+}
+
+/** Return the sand seal for this seat while it still has time left. */
+export function takeSandScreenSeal(key: string, now = Date.now()): string | null {
+  const cached = sandScreenSeals.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt - now <= SAND_SCREEN_REUSE_MS) {
+    sandScreenSeals.delete(key);
+    return null;
+  }
+  return cached.url;
+}
+
+export function keepSandScreenSeal(key: string, url: string): void {
+  const match = url.match(/\/novnc\/session\/(?:view|control)\/(\d+)\./);
+  const expiresAt = match ? Number(match[1]) : Number.NaN;
+  if (!Number.isFinite(expiresAt)) return;
+  sandScreenSeals.set(key, { url, expiresAt });
+}
+
 export function addScreenProxyCapability(
   url: string,
   secret: string,

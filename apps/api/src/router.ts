@@ -229,7 +229,12 @@ import {
 } from "./onboarding.js";
 import { listRoutineRuns } from "./routine-runs.js";
 import { listSpaceRuns } from "./runs.js";
-import { addScreenProxyCapability } from "./screen-proxy.js";
+import {
+  addScreenProxyCapability,
+  keepSandScreenSeal,
+  sandScreenSealKey,
+  takeSandScreenSeal,
+} from "./screen-proxy.js";
 import { querySpaceSearch } from "./search.js";
 import { withSerializableRetry } from "./serializable-retry.js";
 import type { UpdaterProxyConfig } from "./server-update.js";
@@ -2933,19 +2938,39 @@ export function createRouter(deps: RouterDeps) {
           });
         if (!session?.url) return { url: null };
         scheduleComputerSleep(deps.jobs, bot.computer.id);
-        const viewUrl = withViewOnly(
-          session.url,
-          !(hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id),
-        );
-        return {
-          url: addScreenProxyCapability(viewUrl, deps.env.screenProxySecret, deps.env.webOrigin, {
-            botId: bot.id,
-            computerId: computer.id,
-            botGeneration: bot.screenGeneration,
-            computerGeneration: computer.screenGeneration,
-            controlLeaseId: computer.controlLeaseId,
-          }),
+        const interactive =
+          hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id;
+        const viewUrl = withViewOnly(session.url, !interactive);
+        const scope = {
+          botId: bot.id,
+          computerId: computer.id,
+          botGeneration: bot.screenGeneration,
+          computerGeneration: computer.screenGeneration,
+          controlLeaseId: computer.controlLeaseId,
         };
+        const sealKey =
+          computer.kind === "sand"
+            ? sandScreenSealKey({
+                computerId: computer.id,
+                interactive,
+                botGeneration: bot.screenGeneration,
+                computerGeneration: computer.screenGeneration,
+                controlLeaseId: computer.controlLeaseId,
+                upstream: viewUrl,
+              })
+            : null;
+        if (sealKey) {
+          const cached = takeSandScreenSeal(sealKey);
+          if (cached) return { url: cached };
+        }
+        const url = addScreenProxyCapability(
+          viewUrl,
+          deps.env.screenProxySecret,
+          deps.env.webOrigin,
+          scope,
+        );
+        if (sealKey) keepSandScreenSeal(sealKey, url);
+        return { url };
       }),
       heartbeat: authed.computer.heartbeat.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
