@@ -3750,6 +3750,8 @@ export function ShellPage() {
                     url={embeddedScreenUrl}
                     state={computer.state}
                     screenError={Boolean(computerScreenError)}
+                    screenWidth={computer.screenWidth}
+                    screenHeight={computer.screenHeight}
                     fallback={
                       computerScreenError ??
                       computerPlaceholder(
@@ -4518,6 +4520,8 @@ export function ShellPage() {
           url={embeddedScreenUrl}
           state={computer.state}
           screenError={Boolean(computerScreenError)}
+          screenWidth={computer.screenWidth}
+          screenHeight={computer.screenHeight}
           onClose={() => setComputerOpen(false)}
           frameStyle={{
             height: computerViewport ? `${computerViewport.height}px` : "100dvh",

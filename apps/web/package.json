@@ -16,6 +16,7 @@
   "dependencies": {
     "@lingui/core": "6.6.0",
     "@lingui/react": "6.6.0",
+    "@novnc/novnc": "1.7.0",
     "@orpc/client": "1.15.0",
     "@orpc/contract": "1.15.0",
     "@rakazo/chat-ui": "workspace:*",

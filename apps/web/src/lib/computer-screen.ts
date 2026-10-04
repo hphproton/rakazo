@@ -50,16 +50,19 @@ export function reuseScreenUrl(
 
 export type SandViewerConnection = "connected" | "reconnecting" | "stale";
 
+/** Seat desktop used when a sand computer has not reported its own size. */
+export const SAND_SCREEN_WIDTH = 1280;
+export const SAND_SCREEN_HEIGHT = 800;
+
 /**
- * Viewer state a human can see without reading the RFB socket: the computer
- * state, the sealed URL's expiry, a screen error, and whether the iframe
- * document has loaded.
+ * Viewer state from the computer, the sealed URL's expiry, a screen error,
+ * and whether the in-app RFB socket is up.
  */
 export function sandViewerConnection(input: {
   url: string | null;
   state: "stopped" | "booting" | "running" | "suspended" | "error" | undefined;
   screenError: boolean;
-  frameLoaded: boolean;
+  live: boolean;
   now?: number;
 }): SandViewerConnection {
   const now = input.now ?? Date.now();
@@ -68,30 +71,62 @@ export function sandViewerConnection(input: {
   }
   const expires = Number(input.url?.match(NOVNC_CAPABILITY)?.[2]);
   if (Number.isFinite(expires) && expires - now <= 60_000) return "stale";
-  if (!input.url || input.state === "booting" || input.screenError || !input.frameLoaded) {
+  if (!input.url || input.state === "booting" || input.screenError || !input.live) {
     return "reconnecting";
   }
   return "connected";
 }
 
-/**
- * Same sealed capability. The iframe adds reconnect so a dropped RFB socket
- * retries, and show_dot=false so the connection-quality dot stays off.
- * Stock noVNC has no query flag that removes its control bar, and covering
- * that bar would block the desktop.
- */
-export function sandViewerFrameUrl(url: string | null): string | null {
-  if (!url) return null;
+/** The sealed page's websockify path, on the same origin, as a WebSocket URL. */
+export function sandScreenSocketUrl(screenUrl: string | null, base: string): string | null {
+  if (!screenUrl) return null;
   try {
-    const parsed = new URL(url, "http://127.0.0.1");
-    if (!parsed.pathname.includes("/novnc/session/")) return url;
-    parsed.searchParams.set("reconnect", "true");
-    parsed.searchParams.set("show_dot", "false");
-    if (url.startsWith("/")) return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-    return parsed.toString();
+    const page = new URL(screenUrl, base);
+    if (page.protocol !== "http:" && page.protocol !== "https:") return null;
+    if (!page.pathname.includes("/novnc/session/")) return null;
+    const pathParam = page.searchParams.get("path");
+    const socket = pathParam ? new URL(pathParam, page) : new URL("websockify", page);
+    if (socket.origin !== page.origin) return null;
+    if (!socket.pathname.endsWith("/websockify")) return null;
+    socket.protocol = page.protocol === "https:" ? "wss:" : "ws:";
+    return socket.toString();
   } catch {
-    return url;
+    return null;
   }
+}
+
+/** View unless the sealed capability explicitly allows control. */
+export function sandScreenViewOnly(screenUrl: string | null): boolean {
+  if (!screenUrl) return true;
+  try {
+    return new URL(screenUrl, "http://127.0.0.1").searchParams.get("view_only") !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Largest box of the desktop's aspect ratio that fits in the panel.
+ * A 1280×800 seat letterboxes or pillarboxes instead of stretching.
+ */
+export function sandScreenFrameSize(input: {
+  containerWidth: number;
+  containerHeight: number;
+  screenWidth?: number;
+  screenHeight?: number;
+}): { width: number; height: number } {
+  const screenWidth = positiveSize(input.screenWidth) ?? SAND_SCREEN_WIDTH;
+  const screenHeight = positiveSize(input.screenHeight) ?? SAND_SCREEN_HEIGHT;
+  if (input.containerWidth <= 0 || input.containerHeight <= 0) return { width: 0, height: 0 };
+  const scale = Math.min(input.containerWidth / screenWidth, input.containerHeight / screenHeight);
+  return {
+    width: Math.floor(screenWidth * scale),
+    height: Math.floor(screenHeight * scale),
+  };
+}
+
+function positiveSize(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 export function embeddableScreenUrl(url: string | null): string | null {
