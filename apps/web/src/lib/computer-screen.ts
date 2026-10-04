@@ -74,3 +74,56 @@ export function screenIframeSandbox(url: string | null) {
     return undefined;
   }
 }
+
+const SEALED_SESSION = /^(\/novnc\/session\/(?:view|control)\/[^/]+)(?:\/|$)/;
+
+/**
+ * WebSocket for an in-app RFB client. The sealed page and this socket share
+ * one capability directory, the same directory the terminal socket uses.
+ * A path query that leaves that directory is ignored. The provider token
+ * stays inside the capability and is not copied onto the socket.
+ */
+export function sandScreenSocketUrl(screenUrl: string | null, base: string): string | null {
+  if (!screenUrl) return null;
+  let page: URL;
+  try {
+    page = new URL(screenUrl, base);
+  } catch {
+    return null;
+  }
+  if (page.protocol !== "http:" && page.protocol !== "https:") return null;
+  const session = page.pathname.match(SEALED_SESSION);
+  if (!session) return null;
+  const directory = `${session[1]}/`;
+  const sibling = new URL("websockify", new URL(directory, page));
+  let socket = sibling;
+  const pathParam = page.searchParams.get("path");
+  if (pathParam) {
+    try {
+      const requested = new URL(pathParam, page);
+      if (
+        requested.origin === page.origin &&
+        requested.pathname.startsWith(directory) &&
+        requested.pathname.endsWith("/websockify")
+      ) {
+        socket = requested;
+      }
+    } catch {
+      socket = sibling;
+    }
+  }
+  socket.protocol = page.protocol === "https:" ? "wss:" : "ws:";
+  socket.search = "";
+  socket.hash = "";
+  return socket.toString();
+}
+
+/** View-only unless the sealed capability allows control and the surface is interactive. */
+export function sandScreenViewOnly(screenUrl: string, interactive: boolean): boolean {
+  if (!interactive) return true;
+  try {
+    return new URL(screenUrl, "http://127.0.0.1").searchParams.get("view_only") !== "false";
+  } catch {
+    return true;
+  }
+}

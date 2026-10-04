@@ -152,6 +152,7 @@ import {
 import { ComputerUpdateProgress } from "../components/ComputerUpdateProgress";
 import { CallCard } from "../components/call/CallCard";
 import { VoiceChatCard } from "../components/call/VoiceChatCard";
+import { ComputerLiveScreen } from "../components/computer/ComputerLiveScreen";
 import { ComputerWorkspace } from "../components/computer/ComputerWorkspace";
 import { MessageHoverMetadata } from "../components/MessageHoverMetadata";
 import {
@@ -181,12 +182,8 @@ import {
 } from "../lib/browser-notifications";
 import { startCall, useCallSession } from "../lib/call-session";
 import { newClientId } from "../lib/client-id";
-import {
-  embeddableScreenUrl,
-  loadComputerScreen,
-  reuseScreenUrl,
-  screenIframeSandbox,
-} from "../lib/computer-screen";
+import { computerPlaceholder } from "../lib/computer-placeholder";
+import { embeddableScreenUrl, loadComputerScreen, reuseScreenUrl } from "../lib/computer-screen";
 import { publishComputerCommand } from "../lib/computer-workspace";
 import { desktopBridge } from "../lib/desktop";
 import { scheduleFocusPrompt } from "../lib/focus-prompt";
@@ -3753,13 +3750,12 @@ export function ShellPage() {
                   ) : computer?.kind === "desktop" ? (
                     <DesktopKindEmptyState className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80" />
                   ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
-                    <iframe
+                    <ComputerLiveScreen
+                      kind={computer.kind}
+                      url={embeddedScreenUrl}
                       title={t`Bot screen preview`}
-                      src={embeddedScreenUrl}
-                      sandbox={screenIframeSandbox(embeddedScreenUrl)}
-                      className="h-full w-full border-0 bg-black"
                       allow="clipboard-read; clipboard-write"
-                      style={{ pointerEvents: "none" }}
+                      pointerEvents="none"
                     />
                   ) : (
                     <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80">
@@ -4610,15 +4606,12 @@ export function ShellPage() {
                   <DesktopKindEmptyState className="grid h-full place-items-center px-8 text-center text-sm text-muted-foreground/80" />
                 ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
                   <>
-                    <iframe
+                    <ComputerLiveScreen
+                      kind={computer.kind}
+                      url={embeddedScreenUrl}
                       title={t`Bot screen`}
-                      src={embeddedScreenUrl}
-                      sandbox={screenIframeSandbox(embeddedScreenUrl)}
-                      className="h-full w-full border-0 bg-black"
                       allow="clipboard-read; clipboard-write; fullscreen"
-                      style={{
-                        pointerEvents: recordingSkill || !hasControl ? "none" : "auto",
-                      }}
+                      pointerEvents={recordingSkill || !hasControl ? "none" : "auto"}
                     />
                     {computerBot ? (
                       <TeachCaptureOverlay
@@ -4633,9 +4626,15 @@ export function ShellPage() {
                 ) : (
                   <div className="grid h-full place-items-center text-sm text-muted-foreground/80">
                     {computerScreenError ??
-                      (computer?.state === "suspended"
-                        ? t`Computer is asleep`
-                        : computerLabel(computer?.mode, computerBot.name))}
+                      (computer?.kind === "sand"
+                        ? computerPlaceholder(
+                            computer.state,
+                            booting,
+                            computerLabel(computer.mode, computerBot.name),
+                          )
+                        : computer?.state === "suspended"
+                          ? t`Computer is asleep`
+                          : computerLabel(computer?.mode, computerBot.name))}
                   </div>
                 )}
               </ComputerWorkspace>
@@ -6767,18 +6766,6 @@ function DesktopKindEmptyState({ className }: { className?: string }) {
       </Trans>
     </div>
   );
-}
-
-function computerPlaceholder(
-  state: ComputerStatus["state"] | undefined,
-  booting: boolean,
-  label: string,
-) {
-  if (state === "booting" || booting) return t`Booting live desktop…`;
-  if (state === "running") return label;
-  if (state === "suspended") return t`Computer is asleep. Open it to wake.`;
-  if (state === "error") return t`Computer failed to boot`;
-  return t`Computer is stopped`;
 }
 
 function computerLabel(mode: ComputerStatus["mode"] | undefined, botName: string) {

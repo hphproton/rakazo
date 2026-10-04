@@ -3,6 +3,8 @@ import {
   embeddableScreenUrl,
   loadComputerScreen,
   reuseScreenUrl,
+  sandScreenSocketUrl,
+  sandScreenViewOnly,
   screenIframeSandbox,
 } from "./computer-screen";
 
@@ -127,6 +129,56 @@ describe("embeddableScreenUrl", () => {
     expect(embeddableScreenUrl("https://screen.example:6080/vnc.html")).toBe(
       "https://screen.example:6080/vnc.html",
     );
+  });
+});
+
+describe("sandScreenSocketUrl", () => {
+  const sealed = (policy: "view" | "control", token = "sealed-token") =>
+    `https://app.example/novnc/session/${policy}/1710000000000.${token}/vnc.html?autoconnect=true&resize=scale&view_only=${policy === "control" ? "false" : "true"}&path=/novnc/session/${policy}/1710000000000.${token}/websockify`;
+
+  it("uses the sealed session websockify and not the vnc.html page", () => {
+    expect(sandScreenSocketUrl(sealed("view"), "https://app.example/app")).toBe(
+      "wss://app.example/novnc/session/view/1710000000000.sealed-token/websockify",
+    );
+    expect(sandScreenSocketUrl(sealed("control"), "https://app.example/app")).toBe(
+      "wss://app.example/novnc/session/control/1710000000000.sealed-token/websockify",
+    );
+  });
+
+  it("keeps a relative websockify path inside the sealed directory", () => {
+    expect(
+      sandScreenSocketUrl(
+        "http://127.0.0.1:5173/novnc/session/view/1710000000000.token/embed.html?path=websockify",
+        "http://127.0.0.1:5173/",
+      ),
+    ).toBe("ws://127.0.0.1:5173/novnc/session/view/1710000000000.token/websockify");
+  });
+
+  it("ignores a path query that leaves the sealed session", () => {
+    const page =
+      "https://app.example/novnc/session/view/1710000000000.token/vnc.html?path=https%3A%2F%2Fevil.example%2Fwebsockify";
+    expect(sandScreenSocketUrl(page, "https://app.example/")).toBe(
+      "wss://app.example/novnc/session/view/1710000000000.token/websockify",
+    );
+  });
+
+  it("does not invent a socket for a page that is not a sealed noVNC session", () => {
+    expect(
+      sandScreenSocketUrl("https://screen.example/vnc.html", "https://app.example/"),
+    ).toBeNull();
+    expect(sandScreenSocketUrl(null, "https://app.example/")).toBeNull();
+  });
+});
+
+describe("sandScreenViewOnly", () => {
+  it("stays view-only until the surface is interactive and the seal allows control", () => {
+    const control =
+      "https://app.example/novnc/session/control/1.token/vnc.html?view_only=false&path=/novnc/session/control/1.token/websockify";
+    const view =
+      "https://app.example/novnc/session/view/1.token/vnc.html?view_only=true&path=/novnc/session/view/1.token/websockify";
+    expect(sandScreenViewOnly(control, false)).toBe(true);
+    expect(sandScreenViewOnly(view, true)).toBe(true);
+    expect(sandScreenViewOnly(control, true)).toBe(false);
   });
 });
 
