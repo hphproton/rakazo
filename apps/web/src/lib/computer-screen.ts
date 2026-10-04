@@ -48,6 +48,52 @@ export function reuseScreenUrl(
   return current;
 }
 
+export type SandViewerConnection = "connected" | "reconnecting" | "stale";
+
+/**
+ * Viewer state a human can see without reading the RFB socket: the computer
+ * state, the sealed URL's expiry, a screen error, and whether the iframe
+ * document has loaded.
+ */
+export function sandViewerConnection(input: {
+  url: string | null;
+  state: "stopped" | "booting" | "running" | "suspended" | "error" | undefined;
+  screenError: boolean;
+  frameLoaded: boolean;
+  now?: number;
+}): SandViewerConnection {
+  const now = input.now ?? Date.now();
+  if (input.state === "stopped" || input.state === "suspended" || input.state === "error") {
+    return "stale";
+  }
+  const expires = Number(input.url?.match(NOVNC_CAPABILITY)?.[2]);
+  if (Number.isFinite(expires) && expires - now <= 60_000) return "stale";
+  if (!input.url || input.state === "booting" || input.screenError || !input.frameLoaded) {
+    return "reconnecting";
+  }
+  return "connected";
+}
+
+/**
+ * Same sealed capability. The iframe adds reconnect so a dropped RFB socket
+ * retries, and show_dot=false so the connection-quality dot stays off.
+ * Stock noVNC has no query flag that removes its control bar, and covering
+ * that bar would block the desktop.
+ */
+export function sandViewerFrameUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url, "http://127.0.0.1");
+    if (!parsed.pathname.includes("/novnc/session/")) return url;
+    parsed.searchParams.set("reconnect", "true");
+    parsed.searchParams.set("show_dot", "false");
+    if (url.startsWith("/")) return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function embeddableScreenUrl(url: string | null): string | null {
   if (!url) return null;
   try {

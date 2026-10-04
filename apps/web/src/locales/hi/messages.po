@@ -725,6 +725,7 @@ msgstr "बॉट"
 msgid "Bot"
 msgstr "बॉट"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Bot screen"
 msgstr "बॉट स्क्रीन"
@@ -916,6 +917,7 @@ msgstr ""
 msgid "Close chart"
 msgstr "चार्ट बंद करें"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Close computer"
 msgstr "कंप्यूटर बंद करें"
@@ -1088,6 +1090,7 @@ msgstr "इस प्रोवाइडर को अपने व्यक्�
 msgid "Connect Treg"
 msgstr "Treg कनेक्ट करें"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/components/integrations/IntegrationSetup.tsx
 #: src/pages/McpOAuthCallback.tsx
 #: src/pages/MemorySettingsOverlay.tsx
@@ -1159,6 +1162,10 @@ msgstr ""
 #: src/pages/Shell.tsx
 msgid "Copy"
 msgstr "कॉपी करें"
+
+#: src/components/computer/SandScreenShell.tsx
+msgid "Copy link"
+msgstr ""
 
 #: src/pages/ScratchpadSection.tsx
 msgid "Could not add"
@@ -2896,6 +2903,10 @@ msgstr ""
 msgid "Open <0>{0}</0> to finish signing in."
 msgstr ""
 
+#: src/components/computer/SandScreenShell.tsx
+msgid "Open full"
+msgstr ""
+
 #: src/pages/Shell.tsx
 msgid "Open in full window"
 msgstr "पूरी विंडो में खोलें"
@@ -3106,6 +3117,7 @@ msgstr "OAuth पुनः कनेक्ट करें"
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
+#: src/components/computer/SandScreenShell.tsx
 msgid "Reconnecting"
 msgstr "पुनः कनेक्ट हो रहा है"
 
@@ -3693,6 +3705,10 @@ msgstr "यह उत्तर बोलकर सुनाएं"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Speech model"
 msgstr "वाक् मॉडल"
+
+#: src/components/computer/SandScreenShell.tsx
+msgid "Stale"
+msgstr ""
 
 #: src/components/teach/TeachComputerOverlay.tsx
 msgid "Start recording"
