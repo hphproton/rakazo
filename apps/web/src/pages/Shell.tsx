@@ -184,6 +184,7 @@ import { newClientId } from "../lib/client-id";
 import {
   embeddableScreenUrl,
   loadComputerScreen,
+  nextScreenUrl,
   screenIframeSandbox,
 } from "../lib/computer-screen";
 import { publishComputerCommand } from "../lib/computer-workspace";
@@ -1064,7 +1065,7 @@ export function ShellPage() {
         (activeBotId.current === id || computerBotIdRef.current === id) &&
         computerVisible.current,
       commit: (screen) => {
-        setScreenUrl(screen.url);
+        setScreenUrl((current) => nextScreenUrl(current, screen.url));
         setComputerError(screen.error);
         setComputerErrorFromScreen(Boolean(screen.error));
         cacheComputerFor(id, { screenUrl: screen.url });

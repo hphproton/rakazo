@@ -49,9 +49,19 @@ export interface SandHost {
 }
 
 export class SandHostError extends Error {
-  constructor(service: string, method: string, status: number) {
-    super(`sand ${service}/${method} failed: ${status}`);
+  readonly status: number;
+  readonly code?: "EISDIR";
+
+  constructor(service: string, method: string, status: number, detail?: string) {
+    const trimmed = detail?.replace(/\s+/g, " ").trim();
+    super(
+      trimmed
+        ? `sand ${service}/${method} failed: ${status}, ${trimmed}`
+        : `sand ${service}/${method} failed: ${status}`,
+    );
     this.name = "SandHostError";
+    this.status = status;
+    if (trimmed && /\bEISDIR\b/.test(trimmed)) this.code = "EISDIR";
   }
 }
 
@@ -293,9 +303,52 @@ export class ConnectSandHost implements SandHost {
     } catch (error) {
       throw scrubToken(error, this.token);
     }
-    if (!response.ok) throw new SandHostError(service, method, response.status);
+    if (!response.ok) {
+      throw new SandHostError(
+        service,
+        method,
+        response.status,
+        await sandFailureDetail(response, this.token),
+      );
+    }
     return response;
   }
+}
+
+async function sandFailureDetail(
+  response: Response,
+  token: string | undefined,
+): Promise<string | undefined> {
+  let text = "";
+  try {
+    text = (await response.text()).trim();
+  } catch {
+    return undefined;
+  }
+  if (!text || text.startsWith("<")) return undefined;
+  let detail = text;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "string") {
+      detail = parsed.trim();
+    } else {
+      const record = asRecord(parsed);
+      const nested = asRecord(record.error);
+      const message =
+        typeof record.message === "string"
+          ? record.message
+          : typeof nested.message === "string"
+            ? nested.message
+            : undefined;
+      if (!message?.trim()) return undefined;
+      detail = message.trim();
+    }
+  } catch {
+    // Plain-text daemon errors, including EISDIR, stay in the tool error.
+  }
+  if (token && detail.includes(token)) detail = detail.replaceAll(token, "[redacted]");
+  const compact = detail.replace(/\s+/g, " ").trim();
+  return compact ? compact.slice(0, 200) : undefined;
 }
 
 function scrubToken(error: unknown, token: string | undefined): Error {

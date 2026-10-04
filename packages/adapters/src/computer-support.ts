@@ -153,6 +153,31 @@ function isTeamRootPath(value: string): boolean {
   );
 }
 
+/** True when a file read failed because the path is a directory. */
+export function isDirectoryReadFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if ("code" in error && error.code === "EISDIR") return true;
+  if (!(error instanceof Error)) return false;
+  return /\bEISDIR\b/.test(error.message) || /\bis a directory\b/i.test(error.message);
+}
+
+/**
+ * Directory reads must stay inside the tool result. Throwing aborts the turn
+ * and the bot never replies. List the directory when that works; otherwise
+ * refuse with an error the model can continue from.
+ */
+export async function directoryReadToolResult<T>(
+  error: unknown,
+  list: () => Promise<T>,
+): Promise<{ entries: T } | { error: string } | undefined> {
+  if (!isDirectoryReadFailure(error)) return undefined;
+  try {
+    return { entries: await list() };
+  } catch {
+    return { error: "path is a directory" };
+  }
+}
+
 function stripVirtualWorkspaceRoot(value: string): string | null {
   const portable = value.replace(/\\/g, "/");
   if (portable === "/") return "";

@@ -1,3 +1,5 @@
+import { retainScreenSource } from "@rakazo/core";
+
 export interface ComputerScreenResult {
   url: string | null;
   error: string | null;
@@ -23,6 +25,20 @@ export async function loadComputerScreen(options: {
   if (!options.isCurrent()) return null;
   options.commit(result);
   return result.url;
+}
+
+/**
+ * Keep the iframe on the connected noVNC URL when a refresh only rotates the
+ * capability token. A null result still clears the embed.
+ */
+export function nextScreenUrl(
+  current: string | null,
+  incoming: string | null,
+  now = Date.now(),
+): string | null {
+  if (!incoming) return null;
+  if (!current) return incoming;
+  return retainScreenSource(current, incoming, now);
 }
 
 export function embeddableScreenUrl(url: string | null): string | null {

@@ -1,5 +1,6 @@
 import type { AdapterContext, ProcessEvent, SandboxProvider } from "@rakazo/adapter-kit";
 import { describe, expect, it, vi } from "vitest";
+import { directoryReadToolResult } from "./computer-support.js";
 import { SAND_HAND_REFUSAL } from "./sand-hand.js";
 import type {
   SandComputerAction,
@@ -438,6 +439,100 @@ describe("sand host router", () => {
       urls.some((url) => url.includes("createAgent") || url.includes("ensureForeverBox")),
     ).toBe(false);
     expect(urls.some((url) => url.includes(":1/") || url.includes("display=:1"))).toBe(false);
+  });
+
+  it("lists a directory when ReadBinaryFile fails with EISDIR", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/agent.v1.ControlService/ReadBinaryFile")) {
+        return Response.json(
+          { message: "exec-daemon EISDIR on path /workspace/agent-tools" },
+          { status: 400 },
+        );
+      }
+      if (url.endsWith("/agent.v1.ControlService/ListDirectory")) {
+        return Response.json({
+          entries: [
+            {
+              name: "tool.md",
+              path: `${SAND_WORKSPACE}/agent-tools/tool.md`,
+              type: "FILE",
+              sizeBytes: 12,
+            },
+          ],
+        });
+      }
+      return new Response("no", { status: 404 });
+    });
+    const sandbox = provider(new ConnectSandHost({ fetch: fetchMock }));
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    let failure: unknown;
+    try {
+      await sandbox.readFile(computer, "agent-tools", ctx);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "EISDIR",
+      message:
+        "sand ControlService/ReadBinaryFile failed: 400, exec-daemon EISDIR on path /workspace/agent-tools",
+    });
+    await expect(
+      directoryReadToolResult(failure, () => sandbox.listFiles(computer, "agent-tools", ctx)),
+    ).resolves.toEqual({
+      entries: [{ path: "agent-tools/tool.md", kind: "file", size: 12 }],
+    });
+  });
+
+  it("leaves a non-directory read failure for the caller to throw", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ message: "permission denied" }, { status: 400 }),
+    );
+    const sandbox = provider(new ConnectSandHost({ token: "test-sand-token", fetch: fetchMock }));
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    let failure: unknown;
+    try {
+      await sandbox.readFile(computer, "secrets.txt", ctx);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      message: "sand ControlService/ReadBinaryFile failed: 400, permission denied",
+    });
+    await expect(
+      directoryReadToolResult(failure, () => {
+        throw new Error("list should not run");
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("reads EISDIR from a connect error envelope", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        { error: { message: "exec-daemon EISDIR on path /workspace/agent-tools" } },
+        { status: 400 },
+      ),
+    );
+    const host = new ConnectSandHost({ fetch: fetchMock });
+    await expect(
+      host.readFile(AGENT_A, `${SAND_WORKSPACE}/agent-tools`, ctx.signal),
+    ).rejects.toMatchObject({
+      code: "EISDIR",
+      message:
+        "sand ControlService/ReadBinaryFile failed: 400, exec-daemon EISDIR on path /workspace/agent-tools",
+    });
+  });
+
+  it("drops the router token from a directory read error", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ message: "exec-daemon EISDIR test-sand-token" }, { status: 400 }),
+    );
+    const host = new ConnectSandHost({ token: "test-sand-token", fetch: fetchMock });
+    await expect(
+      host.readFile(AGENT_A, `${SAND_WORKSPACE}/agent-tools`, ctx.signal),
+    ).rejects.toThrow(
+      "sand ControlService/ReadBinaryFile failed: 400, exec-daemon EISDIR [redacted]",
+    );
   });
 
   it("hides the router token when the request fails", async () => {

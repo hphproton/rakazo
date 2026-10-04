@@ -202,6 +202,7 @@ import {
 } from "./computer-lifecycle.js";
 import { withComputerScreenAvailability } from "./computer-screens.js";
 import {
+  directoryReadToolResult,
   displayBotWorkspacePath,
   resolveBotWorkspaceCwd,
   resolveBotWorkspacePath,
@@ -2559,6 +2560,24 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 return {
                   error: "file is too large for model context",
                   path: filePath,
+                };
+              }
+              // ReadBinaryFile on a directory (EISDIR) used to throw out of the
+              // turn, so the bot produced no reply. List it, or refuse in-tool.
+              const directory = await directoryReadToolResult(error, () =>
+                deps.sandbox.listFiles(computer, storedPath, context),
+              );
+              if (directory && "error" in directory) {
+                return { error: directory.error, path: filePath };
+              }
+              if (directory) {
+                return {
+                  path: filePath,
+                  directory: true,
+                  entries: directory.entries.map((entry) => ({
+                    ...entry,
+                    path: displayBotWorkspacePath(computerMode, bot.id, filePath, entry.path),
+                  })),
                 };
               }
               throw error;

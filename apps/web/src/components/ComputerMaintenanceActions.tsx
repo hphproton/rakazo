@@ -17,6 +17,7 @@ import {
 } from "@rakazo/ui-web";
 import { MoreHorizontal } from "lucide-react";
 import { useState } from "react";
+import { computerMaintenanceActions } from "../lib/computer-chrome";
 import { computerUpdates } from "../lib/computer-updates";
 import { rpc } from "../lib/rpc";
 
@@ -40,13 +41,10 @@ export function ComputerMaintenanceActions({
   if (!computer) return null;
 
   const busy = Boolean(computer.busyBotName) || computer.state === "booting";
-  const showRecover =
-    computer.state === "error" ||
-    computer.state === "running" ||
-    computer.state === "suspended" ||
-    computer.state === "stopped";
-  const showReset = showRecover;
-  const showUpdate = computer.canUpdate;
+  const menu = computerMaintenanceActions(computer);
+  const showRecover = menu.recover;
+  const showReset = menu.reset;
+  const showUpdate = menu.update;
   const hasActions = showRecover || showReset || showUpdate;
   if (!hasActions) return null;
 

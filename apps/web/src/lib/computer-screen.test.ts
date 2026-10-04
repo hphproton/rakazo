@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { embeddableScreenUrl, loadComputerScreen, screenIframeSandbox } from "./computer-screen";
+import {
+  embeddableScreenUrl,
+  loadComputerScreen,
+  nextScreenUrl,
+  screenIframeSandbox,
+} from "./computer-screen";
 
 describe("computer screen requests", () => {
   it("shows connection failures and lets a successful retry clear them", async () => {
@@ -77,6 +82,24 @@ describe("computer screen requests", () => {
       fallbackError: "Could not connect",
     });
     expect(commit).toHaveBeenCalledExactlyOnceWith({ url: null, error: "Could not connect" });
+  });
+});
+
+describe("nextScreenUrl", () => {
+  const now = 1_710_000_000_000;
+  const view = (token: string, expiresAt = now + 60 * 60_000) =>
+    `https://app.example/novnc/session/view/${expiresAt}.${token}/vnc.html?autoconnect=true&resize=scale&view_only=true&path=%2Fnovnc%2Fsession%2Fview%2F${expiresAt}.${token}%2Fwebsockify`;
+  const control = (token: string) =>
+    `https://app.example/novnc/session/control/${now + 60 * 60_000}.${token}/vnc.html?autoconnect=true&resize=scale&view_only=false&path=%2Fnovnc%2Fsession%2Fcontrol%2F${now + 60 * 60_000}.${token}%2Fwebsockify`;
+
+  it("keeps the connected iframe when a refresh only rotates the capability token", () => {
+    expect(nextScreenUrl(view("aaa"), view("bbb"), now)).toBe(view("aaa"));
+  });
+
+  it("reloads when view becomes control and clears when the screen is gone", () => {
+    expect(nextScreenUrl(view("aaa"), control("ccc"), now)).toBe(control("ccc"));
+    expect(nextScreenUrl(view("aaa"), null, now)).toBeNull();
+    expect(nextScreenUrl(null, view("aaa"), now)).toBe(view("aaa"));
   });
 });
 

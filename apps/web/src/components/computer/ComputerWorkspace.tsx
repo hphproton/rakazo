@@ -4,6 +4,7 @@ import { Button, cn } from "@rakazo/ui-web";
 import { Folder, Globe, SquareTerminal, X } from "lucide-react";
 import type { PointerEvent, ReactNode, RefObject } from "react";
 import { lazy, Suspense, useCallback, useRef, useState } from "react";
+import { computerWorkspaceDockVisible } from "../../lib/computer-chrome";
 import { FilesApp } from "./FilesApp";
 
 // xterm is only needed once someone opens the terminal.
@@ -65,7 +66,9 @@ export function ComputerWorkspace({
     [],
   );
 
-  if (!dock) return <div className="relative h-full min-h-0">{children}</div>;
+  if (!computerWorkspaceDockVisible(computer?.kind, dock)) {
+    return <div className="relative h-full min-h-0">{children}</div>;
+  }
 
   return (
     <div ref={desktop} className="relative h-full min-h-0 overflow-hidden">
