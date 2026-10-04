@@ -48,93 +48,6 @@ export function reuseScreenUrl(
   return current;
 }
 
-export type SandViewerConnection = "connected" | "reconnecting" | "stale";
-
-/** Seat desktop used when a sand computer has not reported its own size. */
-export const SAND_SCREEN_WIDTH = 1280;
-export const SAND_SCREEN_HEIGHT = 800;
-
-/**
- * Viewer state from the computer, the sealed URL's expiry, a screen error,
- * and whether the in-app RFB socket is up.
- */
-export function sandViewerConnection(input: {
-  url: string | null;
-  state: "stopped" | "booting" | "running" | "suspended" | "error" | undefined;
-  screenError: boolean;
-  live: boolean;
-  now?: number;
-}): SandViewerConnection {
-  const now = input.now ?? Date.now();
-  if (input.state === "stopped" || input.state === "suspended" || input.state === "error") {
-    return "stale";
-  }
-  const expires = Number(input.url?.match(NOVNC_CAPABILITY)?.[2]);
-  if (Number.isFinite(expires) && expires - now <= 60_000) return "stale";
-  if (!input.url || input.state === "booting" || input.screenError || !input.live) {
-    return "reconnecting";
-  }
-  return "connected";
-}
-
-/** The sealed page's websockify path, on the same origin, as a WebSocket URL. */
-export function sandScreenSocketUrl(screenUrl: string | null, base: string): string | null {
-  if (!screenUrl) return null;
-  try {
-    const page = new URL(screenUrl, base);
-    if (page.protocol !== "http:" && page.protocol !== "https:") return null;
-    if (!page.pathname.includes("/novnc/session/")) return null;
-    const pathParam = page.searchParams.get("path");
-    const socket = pathParam ? new URL(pathParam, page) : new URL("websockify", page);
-    if (socket.origin !== page.origin) return null;
-    if (!socket.pathname.endsWith("/websockify")) return null;
-    socket.protocol = page.protocol === "https:" ? "wss:" : "ws:";
-    return socket.toString();
-  } catch {
-    return null;
-  }
-}
-
-/** View unless the sealed capability explicitly allows control. */
-export function sandScreenViewOnly(screenUrl: string | null): boolean {
-  if (!screenUrl) return true;
-  try {
-    return new URL(screenUrl, "http://127.0.0.1").searchParams.get("view_only") !== "false";
-  } catch {
-    return true;
-  }
-}
-
-/**
- * Largest box of the desktop's aspect ratio that fits the container.
- * A matching ratio fills the container. Any other ratio letterboxes.
- */
-export function sandScreenFrameSize(input: {
-  containerWidth: number;
-  containerHeight: number;
-  screenWidth?: number;
-  screenHeight?: number;
-}): { width: number; height: number } {
-  const screenWidth = positiveSize(input.screenWidth) ?? SAND_SCREEN_WIDTH;
-  const screenHeight = positiveSize(input.screenHeight) ?? SAND_SCREEN_HEIGHT;
-  if (input.containerWidth <= 0 || input.containerHeight <= 0) return { width: 0, height: 0 };
-  const scale = Math.min(input.containerWidth / screenWidth, input.containerHeight / screenHeight);
-  return {
-    width: fittedEdge(screenWidth * scale, input.containerWidth),
-    height: fittedEdge(screenHeight * scale, input.containerHeight),
-  };
-}
-
-/** Fill the container when rounding leaves less than a pixel of bar. */
-function fittedEdge(scaled: number, container: number) {
-  if (container - scaled < 1) return container;
-  return Math.floor(scaled);
-}
-
-function positiveSize(value: number | undefined) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 export function embeddableScreenUrl(url: string | null): string | null {
   if (!url) return null;
   try {
@@ -159,5 +72,58 @@ export function screenIframeSandbox(url: string | null) {
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+const SEALED_SESSION = /^(\/novnc\/session\/(?:view|control)\/[^/]+)(?:\/|$)/;
+
+/**
+ * WebSocket for an in-app RFB client. The sealed page and this socket share
+ * one capability directory, the same directory the terminal socket uses.
+ * A path query that leaves that directory is ignored. The provider token
+ * stays inside the capability and is not copied onto the socket.
+ */
+export function sandScreenSocketUrl(screenUrl: string | null, base: string): string | null {
+  if (!screenUrl) return null;
+  let page: URL;
+  try {
+    page = new URL(screenUrl, base);
+  } catch {
+    return null;
+  }
+  if (page.protocol !== "http:" && page.protocol !== "https:") return null;
+  const session = page.pathname.match(SEALED_SESSION);
+  if (!session) return null;
+  const directory = `${session[1]}/`;
+  const sibling = new URL("websockify", new URL(directory, page));
+  let socket = sibling;
+  const pathParam = page.searchParams.get("path");
+  if (pathParam) {
+    try {
+      const requested = new URL(pathParam, page);
+      if (
+        requested.origin === page.origin &&
+        requested.pathname.startsWith(directory) &&
+        requested.pathname.endsWith("/websockify")
+      ) {
+        socket = requested;
+      }
+    } catch {
+      socket = sibling;
+    }
+  }
+  socket.protocol = page.protocol === "https:" ? "wss:" : "ws:";
+  socket.search = "";
+  socket.hash = "";
+  return socket.toString();
+}
+
+/** View-only unless the sealed capability allows control and the surface is interactive. */
+export function sandScreenViewOnly(screenUrl: string, interactive: boolean): boolean {
+  if (!interactive) return true;
+  try {
+    return new URL(screenUrl, "http://127.0.0.1").searchParams.get("view_only") !== "false";
+  } catch {
+    return true;
   }
 }

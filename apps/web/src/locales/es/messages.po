@@ -701,7 +701,7 @@ msgstr "URL base"
 msgid "Bearer token"
 msgstr "Token Bearer"
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Booting live desktop…"
 msgstr "Iniciando escritorio en vivo…"
 
@@ -725,7 +725,6 @@ msgstr "Bot"
 msgid "Bot"
 msgstr "Bot"
 
-#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Bot screen"
 msgstr "Pantalla del bot"
@@ -917,7 +916,6 @@ msgstr ""
 msgid "Close chart"
 msgstr "Cerrar gráfico"
 
-#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Close computer"
 msgstr "Cerrar computadora"
@@ -1009,7 +1007,7 @@ msgstr "Completado"
 msgid "Computer"
 msgstr "Computadora"
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Computer failed to boot"
 msgstr "La computadora no pudo iniciarse"
 
@@ -1017,11 +1015,11 @@ msgstr "La computadora no pudo iniciarse"
 msgid "Computer is asleep"
 msgstr "La computadora está en reposo"
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Computer is asleep. Open it to wake."
 msgstr "La computadora está en reposo. Ábrela para despertarla."
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Computer is stopped"
 msgstr "La computadora está detenida"
 
@@ -1090,7 +1088,6 @@ msgstr "Conecta este proveedor para usarlo como tu modelo personal."
 msgid "Connect Treg"
 msgstr "Conectar Treg"
 
-#: src/components/computer/SandScreenShell.tsx
 #: src/components/integrations/IntegrationSetup.tsx
 #: src/pages/McpOAuthCallback.tsx
 #: src/pages/MemorySettingsOverlay.tsx
@@ -2877,7 +2874,6 @@ msgstr "el día 1 a las {0}"
 msgid "Only empty spaces can be deleted. Delete its bots and groups first."
 msgstr ""
 
-#: src/components/computer/SandPreviewCard.tsx
 #: src/pages/ScratchpadSection.tsx
 #: src/pages/Shell.tsx
 msgid "Open"
@@ -2900,7 +2896,6 @@ msgstr ""
 msgid "Open <0>{0}</0> to finish signing in."
 msgstr ""
 
-#: src/components/computer/SandPreviewCard.tsx
 #: src/pages/Shell.tsx
 msgid "Open in full window"
 msgstr "Abrir en ventana completa"
@@ -3111,7 +3106,6 @@ msgstr "Reconectar OAuth"
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
-#: src/components/computer/SandScreenShell.tsx
 msgid "Reconnecting"
 msgstr "Reconectando"
 
@@ -3699,10 +3693,6 @@ msgstr "Leer esta respuesta"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Speech model"
 msgstr "Modelo de habla"
-
-#: src/components/computer/SandScreenShell.tsx
-msgid "Stale"
-msgstr ""
 
 #: src/components/teach/TeachComputerOverlay.tsx
 msgid "Start recording"

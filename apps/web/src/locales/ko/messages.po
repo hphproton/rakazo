@@ -701,7 +701,7 @@ msgstr "서버 주소"
 msgid "Bearer token"
 msgstr "Bearer 토큰"
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Booting live desktop…"
 msgstr "라이브 데스크톱 시작 중…"
 
@@ -725,7 +725,6 @@ msgstr "봇"
 msgid "Bot"
 msgstr "Bot"
 
-#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Bot screen"
 msgstr "Bot 화면"
@@ -917,7 +916,6 @@ msgstr ""
 msgid "Close chart"
 msgstr "차트 닫기"
 
-#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Close computer"
 msgstr "컴퓨터 닫기"
@@ -1009,7 +1007,7 @@ msgstr "완료"
 msgid "Computer"
 msgstr "컴퓨터"
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Computer failed to boot"
 msgstr "컴퓨터를 시작하지 못했습니다"
 
@@ -1017,11 +1015,11 @@ msgstr "컴퓨터를 시작하지 못했습니다"
 msgid "Computer is asleep"
 msgstr "컴퓨터가 절전 상태입니다"
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Computer is asleep. Open it to wake."
 msgstr "컴퓨터가 절전 상태입니다. 열어 깨우세요."
 
-#: src/lib/computer-placeholder.ts
+#: src/pages/Shell.tsx
 msgid "Computer is stopped"
 msgstr "컴퓨터가 중지됨"
 
@@ -1090,7 +1088,6 @@ msgstr "이 AI 서비스를 연결하면 내 기본 모델로 사용할 수 있�
 msgid "Connect Treg"
 msgstr "Treg 연결"
 
-#: src/components/computer/SandScreenShell.tsx
 #: src/components/integrations/IntegrationSetup.tsx
 #: src/pages/McpOAuthCallback.tsx
 #: src/pages/MemorySettingsOverlay.tsx
@@ -2877,7 +2874,6 @@ msgstr "매월 1일 {0}에"
 msgid "Only empty spaces can be deleted. Delete its bots and groups first."
 msgstr ""
 
-#: src/components/computer/SandPreviewCard.tsx
 #: src/pages/ScratchpadSection.tsx
 #: src/pages/Shell.tsx
 msgid "Open"
@@ -2900,7 +2896,6 @@ msgstr ""
 msgid "Open <0>{0}</0> to finish signing in."
 msgstr ""
 
-#: src/components/computer/SandPreviewCard.tsx
 #: src/pages/Shell.tsx
 msgid "Open in full window"
 msgstr "전체 창으로 열기"
@@ -3111,7 +3106,6 @@ msgstr "OAuth 다시 연결"
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
-#: src/components/computer/SandScreenShell.tsx
 msgid "Reconnecting"
 msgstr "다시 연결 중"
 
@@ -3699,10 +3693,6 @@ msgstr "이 답변 읽기"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Speech model"
 msgstr "음성 모델"
-
-#: src/components/computer/SandScreenShell.tsx
-msgid "Stale"
-msgstr ""
 
 #: src/components/teach/TeachComputerOverlay.tsx
 msgid "Start recording"

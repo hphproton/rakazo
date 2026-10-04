@@ -152,9 +152,8 @@ import {
 import { ComputerUpdateProgress } from "../components/ComputerUpdateProgress";
 import { CallCard } from "../components/call/CallCard";
 import { VoiceChatCard } from "../components/call/VoiceChatCard";
+import { ComputerLiveScreen } from "../components/computer/ComputerLiveScreen";
 import { ComputerWorkspace } from "../components/computer/ComputerWorkspace";
-import { SandPreviewCard } from "../components/computer/SandPreviewCard";
-import { SandScreenShell } from "../components/computer/SandScreenShell";
 import { MessageHoverMetadata } from "../components/MessageHoverMetadata";
 import {
   LIVE_TOOL_STEP_WINDOW,
@@ -184,12 +183,7 @@ import {
 import { startCall, useCallSession } from "../lib/call-session";
 import { newClientId } from "../lib/client-id";
 import { computerPlaceholder } from "../lib/computer-placeholder";
-import {
-  embeddableScreenUrl,
-  loadComputerScreen,
-  reuseScreenUrl,
-  screenIframeSandbox,
-} from "../lib/computer-screen";
+import { embeddableScreenUrl, loadComputerScreen, reuseScreenUrl } from "../lib/computer-screen";
 import { publishComputerCommand } from "../lib/computer-workspace";
 import { desktopBridge } from "../lib/desktop";
 import { scheduleFocusPrompt } from "../lib/focus-prompt";
@@ -3745,73 +3739,56 @@ export function ShellPage() {
             ) : null}
             {panel === "computer" && active ? (
               <div>
-                {computer?.kind === "sand" ? (
-                  <SandPreviewCard
-                    open={computerOpen}
-                    state={computer.state}
-                    booting={booting}
-                    label={computerLabel(computer.mode, active.name)}
-                    caption={t`${active.name}'s screen`}
-                    screenError={computerScreenError}
-                    onOpen={() => void openComputer()}
-                  />
-                ) : (
-                  <>
-                    <div
-                      data-testid="computer-preview"
-                      className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-background"
-                    >
-                      {computerOpen ? (
-                        <div className="grid h-full place-items-center text-sm text-muted-foreground/80">
-                          <Trans>Open in full window</Trans>
-                        </div>
-                      ) : computer?.kind === "desktop" ? (
-                        <DesktopKindEmptyState className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80" />
-                      ) : computer?.state === "running" &&
-                        embeddedScreenUrl &&
-                        !computerScreenError ? (
-                        <iframe
-                          title={t`Bot screen preview`}
-                          src={embeddedScreenUrl}
-                          sandbox={screenIframeSandbox(embeddedScreenUrl)}
-                          className="h-full w-full border-0 bg-black"
-                          allow="clipboard-read; clipboard-write"
-                          style={{ pointerEvents: "none" }}
-                        />
-                      ) : (
-                        <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80">
-                          {computerScreenError ??
-                            (computersAreUnavailable(bootstrapMe?.sandboxProvider) ? (
-                              <ComputersUnavailableHint />
-                            ) : (
-                              computerPlaceholder(
-                                computer?.state,
-                                booting,
-                                computerLabel(computer?.mode, active.name),
-                              )
-                            ))}
-                        </div>
-                      )}
-                      {!computerScreenError ? (
-                        <button
-                          type="button"
-                          data-testid="computer-preview-open"
-                          className="absolute inset-0 flex cursor-pointer items-center justify-center bg-overlay/40 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                          aria-label={t`Open`}
-                          onClick={() => void openComputer()}
-                        >
-                          <span className="inline-flex items-center gap-2 rounded-full bg-overlay px-3.5 py-2 text-[14px] text-foreground shadow-md">
-                            <Maximize2 size={15} strokeWidth={1.9} aria-hidden />
-                            <Trans>Open</Trans>
-                          </span>
-                        </button>
-                      ) : null}
+                <div
+                  data-testid="computer-preview"
+                  className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-background"
+                >
+                  {computerOpen ? (
+                    <div className="grid h-full place-items-center text-sm text-muted-foreground/80">
+                      <Trans>Open in full window</Trans>
                     </div>
-                    <p className="mt-2 truncate text-[13.5px] text-muted-foreground" dir="auto">
-                      {t`${active.name}'s screen`}
-                    </p>
-                  </>
-                )}
+                  ) : computer?.kind === "desktop" ? (
+                    <DesktopKindEmptyState className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80" />
+                  ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
+                    <ComputerLiveScreen
+                      kind={computer.kind}
+                      url={embeddedScreenUrl}
+                      title={t`Bot screen preview`}
+                      allow="clipboard-read; clipboard-write"
+                      pointerEvents="none"
+                    />
+                  ) : (
+                    <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80">
+                      {computerScreenError ??
+                        (computersAreUnavailable(bootstrapMe?.sandboxProvider) ? (
+                          <ComputersUnavailableHint />
+                        ) : (
+                          computerPlaceholder(
+                            computer?.state,
+                            booting,
+                            computerLabel(computer?.mode, active.name),
+                          )
+                        ))}
+                    </div>
+                  )}
+                  {!computerScreenError ? (
+                    <button
+                      type="button"
+                      data-testid="computer-preview-open"
+                      className="absolute inset-0 flex cursor-pointer items-center justify-center bg-overlay/40 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                      aria-label={t`Open`}
+                      onClick={() => void openComputer()}
+                    >
+                      <span className="inline-flex items-center gap-2 rounded-full bg-overlay px-3.5 py-2 text-[14px] text-foreground shadow-md">
+                        <Maximize2 size={15} strokeWidth={1.9} aria-hidden />
+                        <Trans>Open</Trans>
+                      </span>
+                    </button>
+                  ) : null}
+                </div>
+                <p className="mt-2 truncate text-[13.5px] text-muted-foreground" dir="auto">
+                  {t`${active.name}'s screen`}
+                </p>
                 <RoutineListHeader
                   onCreate={() => {
                     setRoutineDraft(emptyRoutineDraft());
@@ -4497,7 +4474,7 @@ export function ShellPage() {
         ) : null}
       </Suspense>
 
-      {booting && computer?.kind !== "sand" ? (
+      {booting ? (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-[22px] bg-background/95">
           <div className="text-[19px] font-medium text-foreground">
             <Trans>Booting up {computerBot?.name ?? active?.name}’s computer</Trans>
@@ -4506,26 +4483,6 @@ export function ShellPage() {
             <div className="h-full w-2/3 rounded-full bg-primary" />
           </div>
         </div>
-      ) : computerOpen && computerBot && computer && computer.kind === "sand" ? (
-        <SandScreenShell
-          botName={computerBot.name}
-          url={embeddedScreenUrl}
-          state={computer.state}
-          screenError={Boolean(computerScreenError)}
-          screenWidth={computer.screenWidth}
-          screenHeight={computer.screenHeight}
-          onClose={() => setComputerOpen(false)}
-          frameStyle={{
-            height: computerViewport ? `${computerViewport.height}px` : "100dvh",
-            top: computerViewport ? `${computerViewport.offsetTop}px` : undefined,
-          }}
-          fallback={
-            computerScreenError ??
-            (computer.state === "suspended"
-              ? t`Computer is asleep`
-              : computerLabel(computer.mode, computerBot.name))
-          }
-        />
       ) : computerOpen && computerBot ? (
         <div className="fixed inset-0 z-30 bg-background">
           <div
@@ -4649,15 +4606,12 @@ export function ShellPage() {
                   <DesktopKindEmptyState className="grid h-full place-items-center px-8 text-center text-sm text-muted-foreground/80" />
                 ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
                   <>
-                    <iframe
+                    <ComputerLiveScreen
+                      kind={computer.kind}
+                      url={embeddedScreenUrl}
                       title={t`Bot screen`}
-                      src={embeddedScreenUrl}
-                      sandbox={screenIframeSandbox(embeddedScreenUrl)}
-                      className="h-full w-full border-0 bg-black"
                       allow="clipboard-read; clipboard-write; fullscreen"
-                      style={{
-                        pointerEvents: recordingSkill || !hasControl ? "none" : "auto",
-                      }}
+                      pointerEvents={recordingSkill || !hasControl ? "none" : "auto"}
                     />
                     {computerBot ? (
                       <TeachCaptureOverlay
@@ -4672,9 +4626,15 @@ export function ShellPage() {
                 ) : (
                   <div className="grid h-full place-items-center text-sm text-muted-foreground/80">
                     {computerScreenError ??
-                      (computer?.state === "suspended"
-                        ? t`Computer is asleep`
-                        : computerLabel(computer?.mode, computerBot.name))}
+                      (computer?.kind === "sand"
+                        ? computerPlaceholder(
+                            computer.state,
+                            booting,
+                            computerLabel(computer.mode, computerBot.name),
+                          )
+                        : computer?.state === "suspended"
+                          ? t`Computer is asleep`
+                          : computerLabel(computer?.mode, computerBot.name))}
                   </div>
                 )}
               </ComputerWorkspace>

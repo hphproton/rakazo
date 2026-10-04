@@ -1,9 +1,6 @@
 declare module "@novnc/novnc" {
   export interface RfbOptions {
     shared?: boolean;
-    credentials?: { username?: string; password?: string; target?: string };
-    repeaterID?: string;
-    wsProtocols?: string[];
   }
 
   export default class RFB extends EventTarget {
@@ -12,6 +9,7 @@ declare module "@novnc/novnc" {
     scaleViewport: boolean;
     resizeSession: boolean;
     background: string;
+    focusOnClick: boolean;
     disconnect(): void;
   }
 }
