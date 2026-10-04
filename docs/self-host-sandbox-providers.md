@@ -64,7 +64,8 @@ This does not create an agent. It does not point a screen at display `:1` or
 
 Sand desktop hands are observe and the action kinds click, move, down, up,
 type, key, scroll, and wait. `focus`, `open_path`, and `launch_app` are refused.
-There is no pty, snapshot, takeover, extra screen, or page browser.
+There is no pty, snapshot, takeover, extra screen, or page browser. A directory
+is listed or skipped; it is not passed to ReadBinaryFile.
 
 `SAND_HOST_TOKEN` is an optional bearer for that router. The agent selector
 header is `x-sand-agent-id`. Replace that header if the live router picks the

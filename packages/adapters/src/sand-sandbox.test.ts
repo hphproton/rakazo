@@ -7,7 +7,15 @@ import type {
   SandExecRequest,
   SandHost,
 } from "./sand-host.js";
-import { ConnectSandHost, SAND_AGENT_HEADER, sandHostBaseUrl, sandImageMeta } from "./sand-host.js";
+import {
+  ConnectSandHost,
+  isDirectoryReadError,
+  SAND_AGENT_HEADER,
+  SandHostError,
+  SandPathIsDirectoryError,
+  sandHostBaseUrl,
+  sandImageMeta,
+} from "./sand-host.js";
 import { SAND_WORKSPACE, SandSandboxProvider, sandWorkspacePath } from "./sand-sandbox.js";
 import type { SandSeatPolicy, SandSeatRequest } from "./sand-seat.js";
 import {
@@ -287,6 +295,58 @@ describe("sand sandbox provider", () => {
     expect(exported.map((file) => file.path)).toContain("notes/result.txt");
   });
 
+  it("lists a directory instead of calling ReadBinaryFile", async () => {
+    const host = new RecordingHost();
+    const agentTools = `${SAND_WORKSPACE}/agent-tools`;
+    const page = `${agentTools}/page.txt`;
+    host.files.set(page, new TextEncoder().encode("page"));
+    host.listDirectory = async (agentId, path) => {
+      host.calls.push({ method: "listDirectory", agentId, body: path });
+      if (path === SAND_WORKSPACE) {
+        return [
+          { name: "notes", path: `${SAND_WORKSPACE}/notes`, type: "DIRECTORY", sizeBytes: 0 },
+          { name: "agent-tools", path: agentTools, type: "DIRECTORY", sizeBytes: 0 },
+        ];
+      }
+      if (path === agentTools) {
+        return [{ name: "page.txt", path: page, type: "FILE", sizeBytes: 4 }];
+      }
+      if (path === `${SAND_WORKSPACE}/notes`) {
+        return [
+          {
+            name: "result.txt",
+            path: `${SAND_WORKSPACE}/notes/result.txt`,
+            type: "FILE",
+            sizeBytes: 8,
+          },
+        ];
+      }
+      return [];
+    };
+    const sandbox = provider(host);
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(sandbox.readFile(computer, "agent-tools", ctx)).rejects.toThrow(
+      SandPathIsDirectoryError,
+    );
+    await expect(sandbox.readFile(computer, SAND_WORKSPACE, ctx)).rejects.toThrow(
+      "path is a directory",
+    );
+    expect(
+      host.calls.some(
+        (call) =>
+          call.method === "readFile" && (call.body === agentTools || call.body === SAND_WORKSPACE),
+      ),
+    ).toBe(false);
+    expect(new TextDecoder().decode(await sandbox.readFile(computer, page, ctx))).toBe("page");
+    const exported = [];
+    for await (const file of sandbox.exportWorkspace(computer, ctx)) exported.push(file.path);
+    expect(exported).toContain("agent-tools/page.txt");
+    expect(exported).not.toContain("agent-tools");
+    expect(isDirectoryReadError(new SandPathIsDirectoryError())).toBe(true);
+    expect(isDirectoryReadError(new Error("Path is a directory EISDIR"))).toBe(true);
+    expect(isDirectoryReadError(new Error("file exceeds maxBytes"))).toBe(false);
+  });
+
   it("observes and acts through computer use for that agent", async () => {
     const host = new RecordingHost();
     const sandbox = provider(host);
@@ -438,6 +498,37 @@ describe("sand host router", () => {
       urls.some((url) => url.includes("createAgent") || url.includes("ensureForeverBox")),
     ).toBe(false);
     expect(urls.some((url) => url.includes(":1/") || url.includes("display=:1"))).toBe(false);
+  });
+
+  it("turns a directory ReadBinaryFile into a directory error", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/agent.v1.ControlService/ReadBinaryFile")) {
+        return Response.json(
+          { code: "invalid_argument", message: "Path is a directory", node: "EISDIR" },
+          { status: 400 },
+        );
+      }
+      if (url.endsWith("/agent.v1.ControlService/ListDirectory")) {
+        return Response.json({ entries: [] });
+      }
+      return new Response("missing", { status: 404 });
+    });
+    const host = new ConnectSandHost({ fetch: fetchMock });
+    const sandbox = provider(host);
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(
+      host.readFile(AGENT_A, `${SAND_WORKSPACE}/agent-tools`, ctx.signal),
+    ).rejects.toThrow("path is a directory");
+    await expect(sandbox.readFile(computer, "agent-tools", ctx)).rejects.toThrow(
+      SandPathIsDirectoryError,
+    );
+    const other = new ConnectSandHost({
+      fetch: vi.fn(async () => Response.json({ message: "no such file" }, { status: 400 })),
+    });
+    await expect(
+      other.readFile(AGENT_A, `${SAND_WORKSPACE}/missing.txt`, ctx.signal),
+    ).rejects.toThrow(SandHostError);
   });
 
   it("hides the router token when the request fails", async () => {

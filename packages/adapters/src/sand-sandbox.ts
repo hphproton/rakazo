@@ -21,8 +21,8 @@ import {
   normalizeWorkspacePath,
 } from "./computer-support.js";
 import { SAND_HAND_REFUSAL, sandHandRefuses } from "./sand-hand.js";
-import type { SandComputerAction, SandHost } from "./sand-host.js";
-import { sandExecEnv, sandImageMeta } from "./sand-host.js";
+import type { SandComputerAction, SandDirectoryEntry, SandHost } from "./sand-host.js";
+import { SandPathIsDirectoryError, sandExecEnv, sandImageMeta } from "./sand-host.js";
 import type { SandSeatPolicy } from "./sand-seat.js";
 import {
   requireSandSeat,
@@ -196,11 +196,7 @@ export class SandSandboxProvider implements SandboxProvider {
     options?: { maxBytes?: number },
   ): Promise<Uint8Array> {
     const seat = this.seat(computer, context);
-    const bytes = await this.opts.host.readFile(
-      seat.agentId,
-      sandWorkspacePath(path),
-      context.signal,
-    );
+    const bytes = await this.readAbsolute(seat.agentId, sandWorkspacePath(path), context.signal);
     if (options?.maxBytes !== undefined && bytes.byteLength > options.maxBytes) {
       throw new Error("file exceeds maxBytes");
     }
@@ -223,14 +219,19 @@ export class SandSandboxProvider implements SandboxProvider {
     const seat = this.seat(computer, context);
     const files = await this.listTree(seat.agentId, SAND_WORKSPACE, context.signal);
     for (const file of files) {
-      yield {
-        path: file.path,
-        content: await this.opts.host.readFile(
-          seat.agentId,
-          sandWorkspacePath(file.path),
-          context.signal,
-        ),
-      };
+      try {
+        yield {
+          path: file.path,
+          content: await this.readAbsolute(
+            seat.agentId,
+            sandWorkspacePath(file.path),
+            context.signal,
+          ),
+        };
+      } catch (error) {
+        if (error instanceof SandPathIsDirectoryError) continue;
+        throw error;
+      }
     }
   }
 
@@ -253,6 +254,27 @@ export class SandSandboxProvider implements SandboxProvider {
   async stop(_computer: ComputerRef, _context: AdapterContext): Promise<void> {}
 
   async destroy(_computer: ComputerRef, _context: AdapterContext): Promise<void> {}
+
+  private async readAbsolute(agentId: string, absolute: string, signal: AbortSignal) {
+    if (await this.pathIsDirectory(agentId, absolute, signal)) throw new SandPathIsDirectoryError();
+    return this.opts.host.readFile(agentId, absolute, signal);
+  }
+
+  /** A listed directory is not passed to ReadBinaryFile. */
+  private async pathIsDirectory(agentId: string, absolute: string, signal: AbortSignal) {
+    if (absolute === SAND_WORKSPACE) return true;
+    const slash = absolute.lastIndexOf("/");
+    const parent = absolute.slice(0, slash) || SAND_WORKSPACE;
+    const name = absolute.slice(slash + 1);
+    let entries: SandDirectoryEntry[];
+    try {
+      entries = await this.opts.host.listDirectory(agentId, parent, signal);
+    } catch {
+      return false;
+    }
+    const entry = entries.find((item) => item.name === name || item.path === absolute);
+    return entry?.type === "DIRECTORY";
+  }
 
   private seat(computer: ComputerRef, context: AdapterContext) {
     return requireSandSeat(this.opts.policy, {

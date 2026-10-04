@@ -304,6 +304,7 @@ import {
   sandHandRefuses,
   sandHandToolSurface,
 } from "./sand-hand.js";
+import { isDirectoryReadError } from "./sand-host.js";
 import {
   cancelScheduleFromTool,
   compactScheduleInput,
@@ -2560,6 +2561,20 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   error: "file is too large for model context",
                   path: filePath,
                 };
+              }
+              if (isDirectoryReadError(error)) {
+                try {
+                  const entries = await deps.sandbox.listFiles(computer, storedPath, context);
+                  return {
+                    path: filePath,
+                    entries: entries.map((entry) => ({
+                      ...entry,
+                      path: displayBotWorkspacePath(computerMode, bot.id, filePath, entry.path),
+                    })),
+                  };
+                } catch {
+                  return { error: "path is a directory; use list_files", path: filePath };
+                }
               }
               throw error;
             }
