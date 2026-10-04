@@ -106,8 +106,8 @@ export function sandScreenViewOnly(screenUrl: string | null): boolean {
 }
 
 /**
- * Largest box of the desktop's aspect ratio that fits in the panel.
- * A 1280×800 seat letterboxes or pillarboxes instead of stretching.
+ * Largest box of the desktop's aspect ratio that fits the container.
+ * A matching ratio fills the container. Any other ratio letterboxes.
  */
 export function sandScreenFrameSize(input: {
   containerWidth: number;
@@ -120,9 +120,15 @@ export function sandScreenFrameSize(input: {
   if (input.containerWidth <= 0 || input.containerHeight <= 0) return { width: 0, height: 0 };
   const scale = Math.min(input.containerWidth / screenWidth, input.containerHeight / screenHeight);
   return {
-    width: Math.floor(screenWidth * scale),
-    height: Math.floor(screenHeight * scale),
+    width: fittedEdge(screenWidth * scale, input.containerWidth),
+    height: fittedEdge(screenHeight * scale, input.containerHeight),
   };
+}
+
+/** Fill the container when rounding leaves less than a pixel of bar. */
+function fittedEdge(scaled: number, container: number) {
+  if (container - scaled < 1) return container;
+  return Math.floor(scaled);
 }
 
 function positiveSize(value: number | undefined) {

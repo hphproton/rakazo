@@ -3752,6 +3752,7 @@ export function ShellPage() {
                     screenError={Boolean(computerScreenError)}
                     screenWidth={computer.screenWidth}
                     screenHeight={computer.screenHeight}
+                    onOpenFull={() => setComputerOpen(true)}
                     fallback={
                       computerScreenError ??
                       computerPlaceholder(
@@ -3762,7 +3763,7 @@ export function ShellPage() {
                     }
                   />
                 ) : null}
-                {computer && computer.kind === "sand" && !computerOpen ? null : (
+                {computer?.kind === "sand" ? null : (
                   <>
                     <div
                       data-testid="computer-preview"

@@ -183,6 +183,22 @@ describe("sand viewer", () => {
   it("letterboxes a 1280×800 desktop inside the panel", () => {
     expect(
       sandScreenFrameSize({
+        containerWidth: 1600,
+        containerHeight: 1000,
+        screenWidth: 1280,
+        screenHeight: 800,
+      }),
+    ).toEqual({ width: 1600, height: 1000 });
+    expect(
+      sandScreenFrameSize({
+        containerWidth: 343,
+        containerHeight: 214,
+        screenWidth: 1280,
+        screenHeight: 800,
+      }),
+    ).toEqual({ width: 343, height: 214 });
+    expect(
+      sandScreenFrameSize({
         containerWidth: 1000,
         containerHeight: 1000,
         screenWidth: 1280,
