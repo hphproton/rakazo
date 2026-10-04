@@ -701,7 +701,7 @@ msgstr "서버 주소"
 msgid "Bearer token"
 msgstr "Bearer 토큰"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Booting live desktop…"
 msgstr "라이브 데스크톱 시작 중…"
 
@@ -1009,7 +1009,7 @@ msgstr "완료"
 msgid "Computer"
 msgstr "컴퓨터"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer failed to boot"
 msgstr "컴퓨터를 시작하지 못했습니다"
 
@@ -1017,11 +1017,11 @@ msgstr "컴퓨터를 시작하지 못했습니다"
 msgid "Computer is asleep"
 msgstr "컴퓨터가 절전 상태입니다"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is asleep. Open it to wake."
 msgstr "컴퓨터가 절전 상태입니다. 열어 깨우세요."
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is stopped"
 msgstr "컴퓨터가 중지됨"
 
@@ -1162,10 +1162,6 @@ msgstr ""
 #: src/pages/Shell.tsx
 msgid "Copy"
 msgstr "복사"
-
-#: src/components/computer/SandScreenShell.tsx
-msgid "Copy link"
-msgstr ""
 
 #: src/pages/ScratchpadSection.tsx
 msgid "Could not add"
@@ -2881,6 +2877,7 @@ msgstr "매월 1일 {0}에"
 msgid "Only empty spaces can be deleted. Delete its bots and groups first."
 msgstr ""
 
+#: src/components/computer/SandPreviewCard.tsx
 #: src/pages/ScratchpadSection.tsx
 #: src/pages/Shell.tsx
 msgid "Open"
@@ -2903,10 +2900,7 @@ msgstr ""
 msgid "Open <0>{0}</0> to finish signing in."
 msgstr ""
 
-#: src/components/computer/SandScreenShell.tsx
-msgid "Open full"
-msgstr ""
-
+#: src/components/computer/SandPreviewCard.tsx
 #: src/pages/Shell.tsx
 msgid "Open in full window"
 msgstr "전체 창으로 열기"

@@ -153,6 +153,7 @@ import { ComputerUpdateProgress } from "../components/ComputerUpdateProgress";
 import { CallCard } from "../components/call/CallCard";
 import { VoiceChatCard } from "../components/call/VoiceChatCard";
 import { ComputerWorkspace } from "../components/computer/ComputerWorkspace";
+import { SandPreviewCard } from "../components/computer/SandPreviewCard";
 import { SandScreenShell } from "../components/computer/SandScreenShell";
 import { MessageHoverMetadata } from "../components/MessageHoverMetadata";
 import {
@@ -182,6 +183,7 @@ import {
 } from "../lib/browser-notifications";
 import { startCall, useCallSession } from "../lib/call-session";
 import { newClientId } from "../lib/client-id";
+import { computerPlaceholder } from "../lib/computer-placeholder";
 import {
   embeddableScreenUrl,
   loadComputerScreen,
@@ -3743,27 +3745,17 @@ export function ShellPage() {
             ) : null}
             {panel === "computer" && active ? (
               <div>
-                {computer && computer.kind === "sand" && !computerOpen ? (
-                  <SandScreenShell
-                    variant="panel"
-                    botName={active.name}
-                    url={embeddedScreenUrl}
+                {computer?.kind === "sand" ? (
+                  <SandPreviewCard
+                    open={computerOpen}
                     state={computer.state}
-                    screenError={Boolean(computerScreenError)}
-                    screenWidth={computer.screenWidth}
-                    screenHeight={computer.screenHeight}
-                    onOpenFull={() => setComputerOpen(true)}
-                    fallback={
-                      computerScreenError ??
-                      computerPlaceholder(
-                        computer.state,
-                        booting,
-                        computerLabel(computer.mode, active.name),
-                      )
-                    }
+                    booting={booting}
+                    label={computerLabel(computer.mode, active.name)}
+                    caption={t`${active.name}'s screen`}
+                    screenError={computerScreenError}
+                    onOpen={() => void openComputer()}
                   />
-                ) : null}
-                {computer?.kind === "sand" ? null : (
+                ) : (
                   <>
                     <div
                       data-testid="computer-preview"
@@ -4516,7 +4508,6 @@ export function ShellPage() {
         </div>
       ) : computerOpen && computerBot && computer && computer.kind === "sand" ? (
         <SandScreenShell
-          variant="overlay"
           botName={computerBot.name}
           url={embeddedScreenUrl}
           state={computer.state}
@@ -6815,18 +6806,6 @@ function DesktopKindEmptyState({ className }: { className?: string }) {
       </Trans>
     </div>
   );
-}
-
-function computerPlaceholder(
-  state: ComputerStatus["state"] | undefined,
-  booting: boolean,
-  label: string,
-) {
-  if (state === "booting" || booting) return t`Booting live desktop…`;
-  if (state === "running") return label;
-  if (state === "suspended") return t`Computer is asleep. Open it to wake.`;
-  if (state === "error") return t`Computer failed to boot`;
-  return t`Computer is stopped`;
 }
 
 function computerLabel(mode: ComputerStatus["mode"] | undefined, botName: string) {
