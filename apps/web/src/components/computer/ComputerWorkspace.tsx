@@ -42,6 +42,7 @@ export function ComputerWorkspace({
   const running = computer?.state === "running";
   const shellAvailable = running && Boolean(computer?.terminalAvailable);
   const hasScreen = computer?.kind !== "desktop";
+  const stockPanels = computer?.kind !== "sand";
   const screenVisible = collapsed || open.length === 0;
   const apps: Array<{ id: App; label: string; icon: ReactNode }> = [
     { id: "terminal", label: t`Terminal`, icon: <SquareTerminal /> },
@@ -65,7 +66,7 @@ export function ComputerWorkspace({
     [],
   );
 
-  if (!dock) return <div className="relative h-full min-h-0">{children}</div>;
+  if (!dock || !stockPanels) return <div className="relative h-full min-h-0">{children}</div>;
 
   return (
     <div ref={desktop} className="relative h-full min-h-0 overflow-hidden">

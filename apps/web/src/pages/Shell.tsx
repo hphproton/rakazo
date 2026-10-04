@@ -184,6 +184,7 @@ import { newClientId } from "../lib/client-id";
 import {
   embeddableScreenUrl,
   loadComputerScreen,
+  reuseScreenUrl,
   screenIframeSandbox,
 } from "../lib/computer-screen";
 import { publishComputerCommand } from "../lib/computer-workspace";
@@ -1064,10 +1065,13 @@ export function ShellPage() {
         (activeBotId.current === id || computerBotIdRef.current === id) &&
         computerVisible.current,
       commit: (screen) => {
-        setScreenUrl(screen.url);
+        setScreenUrl((current) => {
+          const url = reuseScreenUrl(current, screen.url);
+          cacheComputerFor(id, { screenUrl: url });
+          return url;
+        });
         setComputerError(screen.error);
         setComputerErrorFromScreen(Boolean(screen.error));
-        cacheComputerFor(id, { screenUrl: screen.url });
       },
       fallbackError: t`Could not connect to the computer screen`,
     });

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { embeddableScreenUrl, loadComputerScreen, screenIframeSandbox } from "./computer-screen";
+import {
+  embeddableScreenUrl,
+  loadComputerScreen,
+  reuseScreenUrl,
+  screenIframeSandbox,
+} from "./computer-screen";
 
 describe("computer screen requests", () => {
   it("shows connection failures and lets a successful retry clear them", async () => {
@@ -77,6 +82,32 @@ describe("computer screen requests", () => {
       fallbackError: "Could not connect",
     });
     expect(commit).toHaveBeenCalledExactlyOnceWith({ url: null, error: "Could not connect" });
+  });
+});
+
+describe("reuseScreenUrl", () => {
+  const now = 1_700_000_000_000;
+  const live = (policy: "view" | "control", expires: number, token: string) =>
+    `http://127.0.0.1:5173/novnc/session/${policy}/${expires}.${token}/vnc.html?path=/novnc/session/${policy}/${expires}.${token}/websockify`;
+
+  it("keeps a sealed noVNC url until it is close to expiry", () => {
+    const current = live("view", now + 120_000, "current-token");
+    const next = live("view", now + 300_000, "next-token");
+    expect(reuseScreenUrl(current, next, now)).toBe(current);
+    expect(reuseScreenUrl(current, live("view", now + 300_000, "soon"), now + 70_000)).toBe(
+      live("view", now + 300_000, "soon"),
+    );
+  });
+
+  it("takes a new url when the policy changes or the url is not sealed noVNC", () => {
+    const current = live("view", now + 120_000, "current-token");
+    const control = live("control", now + 300_000, "control-token");
+    expect(reuseScreenUrl(current, control, now)).toBe(control);
+    expect(reuseScreenUrl(current, "https://screen.example/vnc.html", now)).toBe(
+      "https://screen.example/vnc.html",
+    );
+    expect(reuseScreenUrl(null, control, now)).toBe(control);
+    expect(reuseScreenUrl(current, null, now)).toBeNull();
   });
 });
 
