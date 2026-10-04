@@ -49,10 +49,28 @@ export interface SandHost {
 }
 
 export class SandHostError extends Error {
+  readonly status: number;
+
   constructor(service: string, method: string, status: number) {
     super(`sand ${service}/${method} failed: ${status}`);
     this.name = "SandHostError";
+    this.status = status;
   }
+}
+
+/** ReadBinaryFile refuses directories. Callers list or skip them instead. */
+export class SandPathIsDirectoryError extends Error {
+  constructor() {
+    super("path is a directory");
+    this.name = "SandPathIsDirectoryError";
+  }
+}
+
+export function isDirectoryReadError(error: unknown): boolean {
+  return (
+    error instanceof SandPathIsDirectoryError ||
+    (error instanceof Error && /EISDIR|is a directory/i.test(error.message))
+  );
 }
 
 export function sandHostBaseUrl(value: string | undefined): string {
@@ -293,9 +311,19 @@ export class ConnectSandHost implements SandHost {
     } catch (error) {
       throw scrubToken(error, this.token);
     }
-    if (!response.ok) throw new SandHostError(service, method, response.status);
+    if (!response.ok) {
+      if (response.status === 400 && (await responseSaysDirectory(response))) {
+        throw new SandPathIsDirectoryError();
+      }
+      throw new SandHostError(service, method, response.status);
+    }
     return response;
   }
+}
+
+async function responseSaysDirectory(response: Response): Promise<boolean> {
+  const text = await response.text().catch(() => "");
+  return /EISDIR|is a directory/i.test(text.slice(0, 500));
 }
 
 function scrubToken(error: unknown, token: string | undefined): Error {
