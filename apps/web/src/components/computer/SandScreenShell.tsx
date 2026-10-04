@@ -15,7 +15,8 @@ import {
 
 /**
  * Human viewer for a sand screen. The picture is an in-app RFB client on the
- * sealed websockify path. Stock noVNC and other providers stay unchanged.
+ * sealed websockify path. The sidebar picture uses the same 16/10 card as the
+ * stock computer preview. Stock noVNC and other providers stay unchanged.
  */
 export function SandScreenShell({
   variant,
@@ -27,6 +28,7 @@ export function SandScreenShell({
   screenHeight = SAND_SCREEN_HEIGHT,
   fallback,
   onClose,
+  onOpenFull,
   frameStyle,
 }: {
   variant: "overlay" | "panel";
@@ -38,6 +40,8 @@ export function SandScreenShell({
   screenHeight?: number;
   fallback?: ReactNode;
   onClose?: () => void;
+  /** Opens the in-app viewer. The sealed page URL is never loaded. */
+  onOpenFull?: () => void;
   frameStyle?: CSSProperties;
 }) {
   const { t } = useLingui();
@@ -55,11 +59,6 @@ export function SandScreenShell({
     }
   }
 
-  function openFull() {
-    if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
   return (
     <section
       data-testid="sand-screen-shell"
@@ -67,7 +66,7 @@ export function SandScreenShell({
       className={
         variant === "overlay"
           ? "fixed inset-x-0 top-0 z-30 flex flex-col bg-background"
-          : "mb-4 flex h-[70vh] min-h-80 flex-col overflow-hidden rounded-[14px] border border-border bg-background"
+          : "mb-4 overflow-hidden rounded-[14px] border border-border bg-background"
       }
       style={variant === "overlay" ? frameStyle : undefined}
     >
@@ -78,9 +77,18 @@ export function SandScreenShell({
         <span className="shrink-0 text-sm text-muted-foreground">
           {connectionLabel(connection)}
         </span>
-        <Button type="button" variant="ghost" size="sm" disabled={!url} onClick={openFull}>
-          <Trans>Open full</Trans>
-        </Button>
+        {variant === "panel" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-testid="sand-screen-open-full"
+            disabled={!url}
+            onClick={() => onOpenFull?.()}
+          >
+            <Trans>Open full</Trans>
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="ghost"
@@ -103,19 +111,28 @@ export function SandScreenShell({
           </Button>
         ) : null}
       </header>
-      <div className="relative min-h-0 flex-1 bg-black">
-        {showFrame && url ? (
-          <SandScreenFrame
-            url={url}
-            screenWidth={screenWidth}
-            screenHeight={screenHeight}
-            onLive={setLive}
-          />
-        ) : (
-          <div className="grid h-full place-items-center text-sm text-muted-foreground">
-            {fallback}
-          </div>
-        )}
+      <div
+        data-testid="sand-screen-viewport"
+        className={
+          variant === "overlay"
+            ? "relative min-h-0 flex-1 bg-black"
+            : "relative aspect-[16/10] w-full bg-black"
+        }
+      >
+        <div className="absolute inset-0">
+          {showFrame && url ? (
+            <SandScreenFrame
+              url={url}
+              screenWidth={screenWidth}
+              screenHeight={screenHeight}
+              onLive={setLive}
+            />
+          ) : (
+            <div className="grid h-full place-items-center text-sm text-muted-foreground">
+              {fallback}
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
