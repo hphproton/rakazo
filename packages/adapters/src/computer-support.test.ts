@@ -28,6 +28,10 @@ describe("Team Computer bot folders", () => {
     );
     expect(resolveBotWorkspacePath("team", "bot-1", "/root-note.md")).toBe("root-note.md");
     expect(resolveBotWorkspacePath("team", "bot-1", "/shared/brief.md")).toBe("shared/brief.md");
+    expect(resolveBotWorkspacePath("team", "bot-1", "/workspace")).toBe("/workspace");
+    expect(resolveBotWorkspacePath("team", "bot-1", "/workspace/agent-tools")).toBe(
+      "/workspace/agent-tools",
+    );
   });
 
   it("presents the current bot folder as its home without hiding Team paths", () => {

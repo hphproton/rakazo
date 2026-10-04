@@ -1,5 +1,6 @@
 import type { AdapterContext, ProcessEvent, SandboxProvider } from "@rakazo/adapter-kit";
 import { describe, expect, it, vi } from "vitest";
+import { resolveBotWorkspacePath } from "./computer-support.js";
 import { SAND_HAND_REFUSAL } from "./sand-hand.js";
 import type {
   SandComputerAction,
@@ -529,6 +530,101 @@ describe("sand host router", () => {
     await expect(
       other.readFile(AGENT_A, `${SAND_WORKSPACE}/missing.txt`, ctx.signal),
     ).rejects.toThrow(SandHostError);
+  });
+
+  it("keeps a Team /workspace path and maps ENTRY_TYPE_DIRECTORY without ReadBinaryFile", async () => {
+    const reads: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const body = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array)) as {
+        path?: string;
+      };
+      if (url.endsWith("/agent.v1.ControlService/ListDirectory")) {
+        if (body.path === SAND_WORKSPACE) {
+          return Response.json({
+            entries: [
+              {
+                name: "agent-tools",
+                path: `${SAND_WORKSPACE}/agent-tools`,
+                type: "ENTRY_TYPE_DIRECTORY",
+                sizeBytes: 0,
+              },
+            ],
+          });
+        }
+        if (body.path === `${SAND_WORKSPACE}/agent-tools`) {
+          return Response.json({
+            entries: [
+              {
+                name: "page.txt",
+                path: `${SAND_WORKSPACE}/agent-tools/page.txt`,
+                type: "ENTRY_TYPE_FILE",
+                sizeBytes: 4,
+              },
+            ],
+          });
+        }
+        return Response.json({ entries: [] });
+      }
+      if (url.endsWith("/agent.v1.ControlService/ReadBinaryFile")) {
+        reads.push(body.path ?? "");
+        return Response.json({ content: Buffer.from("page").toString("base64") });
+      }
+      return new Response("missing", { status: 404 });
+    });
+    const sandbox = provider(new ConnectSandHost({ fetch: fetchMock }));
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    const stored = resolveBotWorkspacePath("team", "bot-a", "/workspace/agent-tools");
+    expect(sandWorkspacePath(stored)).toBe(`${SAND_WORKSPACE}/agent-tools`);
+    await expect(sandbox.readFile(computer, stored, ctx)).rejects.toThrow(SandPathIsDirectoryError);
+    expect(reads).toEqual([]);
+    await expect(sandbox.listFiles(computer, stored, ctx)).resolves.toEqual([
+      { path: "agent-tools/page.txt", kind: "file", size: 4 },
+    ]);
+  });
+
+  it("treats a listable ReadBinaryFile 400 as a directory", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const body = JSON.parse(new TextDecoder().decode(init?.body as Uint8Array)) as {
+        path?: string;
+      };
+      if (url.endsWith("/agent.v1.ControlService/ListDirectory")) {
+        if (body.path === `${SAND_WORKSPACE}/agent-tools`) {
+          return Response.json({
+            entries: [
+              {
+                name: "page.txt",
+                path: `${SAND_WORKSPACE}/agent-tools/page.txt`,
+                type: "ENTRY_TYPE_FILE",
+                sizeBytes: 1,
+              },
+            ],
+          });
+        }
+        return new Response("missing", { status: 404 });
+      }
+      if (url.endsWith("/agent.v1.ControlService/ReadBinaryFile")) {
+        return Response.json({ code: "invalid_argument" }, { status: 400 });
+      }
+      return new Response("missing", { status: 404 });
+    });
+    const sandbox = provider(new ConnectSandHost({ fetch: fetchMock }));
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(sandbox.readFile(computer, "agent-tools", ctx)).rejects.toThrow(
+      SandPathIsDirectoryError,
+    );
+    const missing = provider(
+      new ConnectSandHost({
+        fetch: vi.fn(async (input: string | URL | Request) => {
+          const url = String(input);
+          if (url.endsWith("/ListDirectory")) return new Response("missing", { status: 404 });
+          return Response.json({ message: "no such file" }, { status: 400 });
+        }),
+      }),
+    );
+    const other = await missing.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(missing.readFile(other, "missing.txt", ctx)).rejects.toThrow(SandHostError);
   });
 
   it("hides the router token when the request fails", async () => {
