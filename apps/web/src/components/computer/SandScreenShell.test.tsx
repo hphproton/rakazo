@@ -25,6 +25,44 @@ vi.mock("@rakazo/ui-web", () => ({
   ),
 }));
 
+class FakeRFB extends EventTarget {
+  static created: FakeRFB[] = [];
+  viewOnly = false;
+  scaleViewport = false;
+  resizeSession = true;
+  background = "";
+  constructor(
+    public target: HTMLElement,
+    public url: string,
+    public options?: { shared?: boolean },
+  ) {
+    super();
+    FakeRFB.created.push(this);
+  }
+  disconnect() {
+    this.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: true } }));
+  }
+}
+
+vi.mock("@novnc/novnc", () => ({ default: FakeRFB }));
+
+class BoxObserver {
+  constructor(private callback: ResizeObserverCallback) {}
+  observe() {
+    this.callback(
+      [
+        {
+          contentRect: { width: 1000, height: 1000 },
+        } as ResizeObserverEntry,
+      ],
+      this as unknown as ResizeObserver,
+    );
+  }
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal("ResizeObserver", BoxObserver);
+
 import { SandScreenShell } from "./SandScreenShell";
 
 const now = 1_700_000_000_000;
@@ -72,30 +110,38 @@ function renderShell(
 
 afterEach(() => {
   document.body.replaceChildren();
+  FakeRFB.created.length = 0;
 });
 
-it("shows the bot name, connection, and the sealed screen", async () => {
+it("shows the bot name and connects the sealed websocket without vnc.html", async () => {
   const view = renderShell();
   await view.draw();
   expect(view.container.textContent).toContain("Atlas");
   expect(view.container.textContent).toContain("Reconnecting");
-  const frame = view.container.querySelector("iframe");
-  expect(frame).not.toBeNull();
-  const src = new URL(frame?.getAttribute("src") ?? "");
-  expect(src.pathname).toContain("/novnc/session/view/");
-  expect(src.pathname).toContain("same-token");
-  expect(src.searchParams.get("reconnect")).toBe("true");
+  expect(view.container.querySelector("iframe")).toBeNull();
+  expect(view.container.textContent).not.toContain("vnc.html");
   expect(view.container.textContent).not.toContain("Recover computer");
   expect(view.container.textContent).not.toContain("Terminal");
   expect(view.container.textContent).not.toContain("You have control");
+  const client = FakeRFB.created.at(-1);
+  expect(client?.url).toBe(
+    `ws://127.0.0.1:5173/novnc/session/view/${now + 120_000}.same-token/websockify`,
+  );
+  expect(client?.options).toEqual({ shared: true });
+  expect(client?.viewOnly).toBe(true);
+  expect(client?.scaleViewport).toBe(true);
+  expect(client?.resizeSession).toBe(false);
+  const frame = view.container.querySelector("[data-testid=sand-screen-frame]");
+  expect(frame?.getAttribute("style")).toContain("width: 1000px");
+  expect(frame?.getAttribute("style")).toContain("height: 625px");
   await act(async () => {
-    frame?.dispatchEvent(new Event("load"));
+    client?.dispatchEvent(new Event("connect"));
   });
   expect(view.container.textContent).toContain("Connected");
   await view.cleanup();
 });
 
-it("opens and copies the sealed url", async () => {
+it("opens and copies the sealed url without using it as the picture", async () => {
   const open = vi.fn();
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("open", open);
@@ -114,6 +160,7 @@ it("opens and copies the sealed url", async () => {
   });
   expect(open).toHaveBeenCalledWith(sealed, "_blank", "noopener,noreferrer");
   expect(writeText).toHaveBeenCalledWith(sealed);
+  expect(view.container.querySelector("iframe")).toBeNull();
   await view.cleanup();
 });
 
@@ -130,6 +177,8 @@ it("marks a stopped sand screen stale and hides the iframe", async () => {
   await view.draw();
   expect(view.container.textContent).toContain("Stale");
   expect(view.container.querySelector("iframe")).toBeNull();
+  expect(view.container.querySelector("[data-testid=sand-screen-frame]")).toBeNull();
+  expect(FakeRFB.created).toHaveLength(0);
   expect(view.container.textContent).toContain("screen unavailable");
   await view.cleanup();
 });

@@ -3,8 +3,10 @@ import {
   embeddableScreenUrl,
   loadComputerScreen,
   reuseScreenUrl,
+  sandScreenFrameSize,
+  sandScreenSocketUrl,
+  sandScreenViewOnly,
   sandViewerConnection,
-  sandViewerFrameUrl,
   screenIframeSandbox,
 } from "./computer-screen";
 
@@ -123,7 +125,7 @@ describe("sand viewer", () => {
         url: sealed,
         state: "running",
         screenError: false,
-        frameLoaded: true,
+        live: true,
         now,
       }),
     ).toBe("connected");
@@ -132,7 +134,7 @@ describe("sand viewer", () => {
         url: null,
         state: "running",
         screenError: false,
-        frameLoaded: false,
+        live: false,
         now,
       }),
     ).toBe("reconnecting");
@@ -141,7 +143,7 @@ describe("sand viewer", () => {
         url: sealed,
         state: "error",
         screenError: true,
-        frameLoaded: true,
+        live: true,
         now,
       }),
     ).toBe("stale");
@@ -150,38 +152,59 @@ describe("sand viewer", () => {
         url: sealed,
         state: "running",
         screenError: false,
-        frameLoaded: true,
+        live: true,
         now: now + 120_000 - 30_000,
       }),
     ).toBe("stale");
   });
 
-  it("adds viewer flags without changing the sealed token", () => {
-    const frame = sandViewerFrameUrl(sealed);
-    expect(frame).not.toBeNull();
-    const sealedUrl = new URL(sealed);
-    const frameUrl = new URL(frame ?? "");
-    expect(frameUrl.pathname).toBe(sealedUrl.pathname);
-    expect(frameUrl.searchParams.get("path")).toBe(sealedUrl.searchParams.get("path"));
-    expect(frameUrl.searchParams.get("reconnect")).toBe("true");
-    expect(frameUrl.searchParams.get("show_dot")).toBe("false");
-    expect(sandViewerFrameUrl("https://screen.example/vnc.html")).toBe(
-      "https://screen.example/vnc.html",
+  it("uses the sealed websockify path and keeps the token", () => {
+    const socket = sandScreenSocketUrl(sealed, "http://127.0.0.1:5173/");
+    expect(socket).toBe(
+      `ws://127.0.0.1:5173/novnc/session/view/${now + 120_000}.same-token/websockify`,
     );
+    const relative = `/novnc/session/view/${now + 120_000}.same-token/vnc.html?autoconnect=true&path=%2Fnovnc%2Fsession%2Fview%2F${now + 120_000}.same-token%2Fwebsockify`;
+    expect(sandScreenSocketUrl(relative, "https://app.example/chat")).toBe(
+      `wss://app.example/novnc/session/view/${now + 120_000}.same-token/websockify`,
+    );
+    expect(
+      sandScreenSocketUrl("https://screen.example/vnc.html", "https://app.example/"),
+    ).toBeNull();
+    expect(
+      sandScreenSocketUrl(
+        "https://app.example/novnc/session/view/1.token/vnc.html?path=https%3A%2F%2Fevil.example%2Fwebsockify",
+        "https://app.example/",
+      ),
+    ).toBeNull();
+    expect(sandScreenViewOnly(sealed)).toBe(true);
+    expect(sandScreenViewOnly(sealed.replace("view_only=true", "view_only=false"))).toBe(false);
   });
 
-  it("keeps a relative sealed url on the same path", () => {
-    const relative = `/novnc/session/view/${now + 120_000}.same-token/vnc.html?autoconnect=true&path=%2Fnovnc%2Fsession%2Fview%2F${now + 120_000}.same-token%2Fwebsockify`;
-    const frame = sandViewerFrameUrl(relative);
-    expect(frame?.startsWith("/novnc/session/")).toBe(true);
-    expect(frame).not.toContain("127.0.0.1");
-    const frameUrl = new URL(frame ?? "", "http://app.example");
-    expect(frameUrl.pathname).toContain("same-token");
-    expect(frameUrl.searchParams.get("path")).toBe(
-      `/novnc/session/view/${now + 120_000}.same-token/websockify`,
-    );
-    expect(frameUrl.searchParams.get("reconnect")).toBe("true");
-    expect(frameUrl.searchParams.get("show_dot")).toBe("false");
+  it("letterboxes a 1280×800 desktop inside the panel", () => {
+    expect(
+      sandScreenFrameSize({
+        containerWidth: 1000,
+        containerHeight: 1000,
+        screenWidth: 1280,
+        screenHeight: 800,
+      }),
+    ).toEqual({ width: 1000, height: 625 });
+    expect(
+      sandScreenFrameSize({
+        containerWidth: 1600,
+        containerHeight: 400,
+        screenWidth: 1280,
+        screenHeight: 800,
+      }),
+    ).toEqual({ width: 640, height: 400 });
+    expect(sandScreenFrameSize({ containerWidth: 0, containerHeight: 800 })).toEqual({
+      width: 0,
+      height: 0,
+    });
+    const fitted = sandScreenFrameSize({ containerWidth: 900, containerHeight: 700 });
+    expect(fitted.width / fitted.height).toBeCloseTo(1280 / 800, 2);
+    expect(fitted.width).toBeLessThanOrEqual(900);
+    expect(fitted.height).toBeLessThanOrEqual(700);
   });
 });
 

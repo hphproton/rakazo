@@ -29,9 +29,10 @@ Reading a directory lists or skips it instead of calling ReadBinaryFile.
 A Team path that already starts with `/workspace` stays on that root.
 A sand screen reuses its sealed noVNC capability across refreshes until that
 capability is close to expiry, or the upstream, view/control policy, generation,
-or control lease changes. The sand viewer is a thin shell: the bot name,
-whether that screen is connected, reconnecting, or stale, and actions that
-open or copy the same sealed URL. Other providers keep the stock computer chrome.
+or control lease changes. The sand viewer is an in-app RFB client on that
+sealed websocket. It keeps the desktop aspect ratio, 1280×800 unless the seat
+reports another size, and letterboxes inside the panel. It does not load the
+stock noVNC page. Other providers keep the stock computer chrome.
 
 Pi runs in the Rakazo API/worker process. It is not installed in, or executed by, E2B. The built-in tools are ordinary Pi tools, not Claude- or MCP-specific tools, so any model exposed through Pi can call them. Screen operation still requires a model that can accept image tool results and reason about screenshots.
 
