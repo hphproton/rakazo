@@ -725,6 +725,7 @@ msgstr "Bot"
 msgid "Bot"
 msgstr "Bot"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Bot screen"
 msgstr "Bot ekranı"
@@ -916,6 +917,7 @@ msgstr ""
 msgid "Close chart"
 msgstr "Grafiği kapat"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Close computer"
 msgstr "Bilgisayarı kapat"
@@ -1088,6 +1090,7 @@ msgstr "Kişisel modelin olarak kullanmak için bu sağlayıcıyı bağla."
 msgid "Connect Treg"
 msgstr "Treg'i bağla"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/components/integrations/IntegrationSetup.tsx
 #: src/pages/McpOAuthCallback.tsx
 #: src/pages/MemorySettingsOverlay.tsx
@@ -1159,6 +1162,10 @@ msgstr ""
 #: src/pages/Shell.tsx
 msgid "Copy"
 msgstr "Kopyala"
+
+#: src/components/computer/SandScreenShell.tsx
+msgid "Copy link"
+msgstr ""
 
 #: src/pages/ScratchpadSection.tsx
 msgid "Could not add"
@@ -2896,6 +2903,10 @@ msgstr ""
 msgid "Open <0>{0}</0> to finish signing in."
 msgstr ""
 
+#: src/components/computer/SandScreenShell.tsx
+msgid "Open full"
+msgstr ""
+
 #: src/pages/Shell.tsx
 msgid "Open in full window"
 msgstr "Tam pencerede aç"
@@ -3106,6 +3117,7 @@ msgstr "OAuth'u yeniden bağla"
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
+#: src/components/computer/SandScreenShell.tsx
 msgid "Reconnecting"
 msgstr "Yeniden bağlanıyor"
 
@@ -3693,6 +3705,10 @@ msgstr "Bu yanıtı seslendir"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Speech model"
 msgstr "Konuşma modeli"
+
+#: src/components/computer/SandScreenShell.tsx
+msgid "Stale"
+msgstr ""
 
 #: src/components/teach/TeachComputerOverlay.tsx
 msgid "Start recording"

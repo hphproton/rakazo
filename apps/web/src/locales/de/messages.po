@@ -725,6 +725,7 @@ msgstr "Bot"
 msgid "Bot"
 msgstr ""
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Bot screen"
 msgstr "Bot-Bildschirm"
@@ -916,6 +917,7 @@ msgstr "{title} schließen"
 msgid "Close chart"
 msgstr "Diagramm schließen"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/pages/Shell.tsx
 msgid "Close computer"
 msgstr "Computer schließen"
@@ -1088,6 +1090,7 @@ msgstr "Verbinde diesen Anbieter, um ihn als persönliches Modell zu verwenden."
 msgid "Connect Treg"
 msgstr "Treg verbinden"
 
+#: src/components/computer/SandScreenShell.tsx
 #: src/components/integrations/IntegrationSetup.tsx
 #: src/pages/McpOAuthCallback.tsx
 #: src/pages/MemorySettingsOverlay.tsx
@@ -1159,6 +1162,10 @@ msgstr ""
 #: src/pages/Shell.tsx
 msgid "Copy"
 msgstr "Kopieren"
+
+#: src/components/computer/SandScreenShell.tsx
+msgid "Copy link"
+msgstr ""
 
 #: src/pages/ScratchpadSection.tsx
 msgid "Could not add"
@@ -2896,6 +2903,10 @@ msgstr ""
 msgid "Open <0>{0}</0> to finish signing in."
 msgstr ""
 
+#: src/components/computer/SandScreenShell.tsx
+msgid "Open full"
+msgstr ""
+
 #: src/pages/Shell.tsx
 msgid "Open in full window"
 msgstr "In vollständigem Fenster öffnen"
@@ -3106,6 +3117,7 @@ msgstr "OAuth erneut verbinden"
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
+#: src/components/computer/SandScreenShell.tsx
 msgid "Reconnecting"
 msgstr "Verbindung wird wiederhergestellt"
 
@@ -3693,6 +3705,10 @@ msgstr "Diese Antwort vorlesen"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Speech model"
 msgstr "Sprachmodell"
+
+#: src/components/computer/SandScreenShell.tsx
+msgid "Stale"
+msgstr ""
 
 #: src/components/teach/TeachComputerOverlay.tsx
 msgid "Start recording"

@@ -3,6 +3,8 @@ import {
   embeddableScreenUrl,
   loadComputerScreen,
   reuseScreenUrl,
+  sandViewerConnection,
+  sandViewerFrameUrl,
   screenIframeSandbox,
 } from "./computer-screen";
 
@@ -108,6 +110,78 @@ describe("reuseScreenUrl", () => {
     );
     expect(reuseScreenUrl(null, control, now)).toBe(control);
     expect(reuseScreenUrl(current, null, now)).toBeNull();
+  });
+});
+
+describe("sand viewer", () => {
+  const now = 1_700_000_000_000;
+  const sealed = `http://127.0.0.1:5173/novnc/session/view/${now + 120_000}.same-token/vnc.html?autoconnect=true&resize=scale&view_only=true&path=%2Fnovnc%2Fsession%2Fview%2F${now + 120_000}.same-token%2Fwebsockify`;
+
+  it("reports connected, reconnecting, and stale from the seal and the computer", () => {
+    expect(
+      sandViewerConnection({
+        url: sealed,
+        state: "running",
+        screenError: false,
+        frameLoaded: true,
+        now,
+      }),
+    ).toBe("connected");
+    expect(
+      sandViewerConnection({
+        url: null,
+        state: "running",
+        screenError: false,
+        frameLoaded: false,
+        now,
+      }),
+    ).toBe("reconnecting");
+    expect(
+      sandViewerConnection({
+        url: sealed,
+        state: "error",
+        screenError: true,
+        frameLoaded: true,
+        now,
+      }),
+    ).toBe("stale");
+    expect(
+      sandViewerConnection({
+        url: sealed,
+        state: "running",
+        screenError: false,
+        frameLoaded: true,
+        now: now + 120_000 - 30_000,
+      }),
+    ).toBe("stale");
+  });
+
+  it("adds viewer flags without changing the sealed token", () => {
+    const frame = sandViewerFrameUrl(sealed);
+    expect(frame).not.toBeNull();
+    const sealedUrl = new URL(sealed);
+    const frameUrl = new URL(frame ?? "");
+    expect(frameUrl.pathname).toBe(sealedUrl.pathname);
+    expect(frameUrl.searchParams.get("path")).toBe(sealedUrl.searchParams.get("path"));
+    expect(frameUrl.searchParams.get("reconnect")).toBe("true");
+    expect(frameUrl.searchParams.get("show_dot")).toBe("false");
+    expect(sandViewerFrameUrl("https://screen.example/vnc.html")).toBe(
+      "https://screen.example/vnc.html",
+    );
+  });
+
+  it("keeps a relative sealed url on the same path", () => {
+    const relative = `/novnc/session/view/${now + 120_000}.same-token/vnc.html?autoconnect=true&path=%2Fnovnc%2Fsession%2Fview%2F${now + 120_000}.same-token%2Fwebsockify`;
+    const frame = sandViewerFrameUrl(relative);
+    expect(frame?.startsWith("/novnc/session/")).toBe(true);
+    expect(frame).not.toContain("127.0.0.1");
+    const frameUrl = new URL(frame ?? "", "http://app.example");
+    expect(frameUrl.pathname).toContain("same-token");
+    expect(frameUrl.searchParams.get("path")).toBe(
+      `/novnc/session/view/${now + 120_000}.same-token/websockify`,
+    );
+    expect(frameUrl.searchParams.get("reconnect")).toBe("true");
+    expect(frameUrl.searchParams.get("show_dot")).toBe("false");
   });
 });
 
