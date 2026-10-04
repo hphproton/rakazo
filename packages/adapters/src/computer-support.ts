@@ -86,6 +86,10 @@ export function resolveBotWorkspacePath(
   requestedPath: string,
 ): string {
   if (scope !== "team") return requestedPath;
+  const portable = requestedPath.replace(/\\/g, "/");
+  // `/workspace` is the sand workspace root. Stripping the slash yields
+  // `workspace/...`, and the sand join then prepends `/workspace` again.
+  if (portable === "/workspace" || portable.startsWith("/workspace/")) return portable;
   const explicitRootPath = stripVirtualWorkspaceRoot(requestedPath);
   const normalized = normalizeWorkspacePath(explicitRootPath ?? requestedPath);
   if (explicitRootPath !== null || isTeamRootPath(normalized)) return normalized;

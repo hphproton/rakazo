@@ -22,7 +22,13 @@ import {
 } from "./computer-support.js";
 import { SAND_HAND_REFUSAL, sandHandRefuses } from "./sand-hand.js";
 import type { SandComputerAction, SandDirectoryEntry, SandHost } from "./sand-host.js";
-import { SandPathIsDirectoryError, sandExecEnv, sandImageMeta } from "./sand-host.js";
+import {
+  isDirectoryReadError,
+  SandHostError,
+  SandPathIsDirectoryError,
+  sandExecEnv,
+  sandImageMeta,
+} from "./sand-host.js";
 import type { SandSeatPolicy } from "./sand-seat.js";
 import {
   requireSandSeat,
@@ -257,7 +263,31 @@ export class SandSandboxProvider implements SandboxProvider {
 
   private async readAbsolute(agentId: string, absolute: string, signal: AbortSignal) {
     if (await this.pathIsDirectory(agentId, absolute, signal)) throw new SandPathIsDirectoryError();
-    return this.opts.host.readFile(agentId, absolute, signal);
+    try {
+      return await this.opts.host.readFile(agentId, absolute, signal);
+    } catch (error) {
+      if (await this.readFailedBecauseDirectory(agentId, absolute, signal, error)) {
+        throw new SandPathIsDirectoryError();
+      }
+      throw error;
+    }
+  }
+
+  /** A ReadBinaryFile 400 on a listable path is a directory, not a failed file read. */
+  private async readFailedBecauseDirectory(
+    agentId: string,
+    absolute: string,
+    signal: AbortSignal,
+    error: unknown,
+  ) {
+    if (isDirectoryReadError(error)) return true;
+    if (!(error instanceof SandHostError) || error.status !== 400) return false;
+    try {
+      await this.opts.host.listDirectory(agentId, absolute, signal);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** A listed directory is not passed to ReadBinaryFile. */

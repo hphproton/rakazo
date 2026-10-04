@@ -407,9 +407,14 @@ function parseDirectoryEntry(value: unknown): SandDirectoryEntry {
 }
 
 function entryType(value: unknown): SandDirectoryEntry["type"] {
-  if (value === "DIRECTORY" || value === 2) return "DIRECTORY";
-  if (value === "SYMLINK" || value === 3) return "SYMLINK";
+  if (value === 2 || isEntryType(value, "DIRECTORY")) return "DIRECTORY";
+  if (value === 3 || isEntryType(value, "SYMLINK")) return "SYMLINK";
   return "FILE";
+}
+
+/** Proto JSON emits `ENTRY_TYPE_DIRECTORY`; some payloads use the short name. */
+function isEntryType(value: unknown, name: string): boolean {
+  return typeof value === "string" && (value === name || value === `ENTRY_TYPE_${name}`);
 }
 
 function computerUsePayload(frame: unknown):
