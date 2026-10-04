@@ -14,12 +14,11 @@ import {
 } from "../../lib/computer-screen";
 
 /**
- * Human viewer for a sand screen. The picture is an in-app RFB client on the
- * sealed websockify path. The sidebar picture uses the same 16/10 card as the
- * stock computer preview. Stock noVNC and other providers stay unchanged.
+ * Full sand viewer. Mounted only while the computer overlay is open. The
+ * picture is an in-app RFB client on the sealed websockify path. Closing
+ * unmounts this shell and disconnects that client. Stock noVNC stays unused.
  */
 export function SandScreenShell({
-  variant,
   botName,
   url,
   state,
@@ -28,10 +27,8 @@ export function SandScreenShell({
   screenHeight = SAND_SCREEN_HEIGHT,
   fallback,
   onClose,
-  onOpenFull,
   frameStyle,
 }: {
-  variant: "overlay" | "panel";
   botName: string;
   url: string | null;
   state: ComputerStatus["state"] | undefined;
@@ -40,8 +37,6 @@ export function SandScreenShell({
   screenHeight?: number;
   fallback?: ReactNode;
   onClose?: () => void;
-  /** Opens the in-app viewer. The sealed page URL is never loaded. */
-  onOpenFull?: () => void;
   frameStyle?: CSSProperties;
 }) {
   const { t } = useLingui();
@@ -50,25 +45,12 @@ export function SandScreenShell({
   const quiet = screenError || state === "stopped" || state === "suspended" || state === "error";
   const showFrame = Boolean(url) && !quiet;
 
-  async function copyLink() {
-    if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // The button stays available. The sealed URL is unchanged.
-    }
-  }
-
   return (
     <section
       data-testid="sand-screen-shell"
       aria-label={botName}
-      className={
-        variant === "overlay"
-          ? "fixed inset-x-0 top-0 z-30 flex flex-col bg-background"
-          : "mb-4 overflow-hidden rounded-[14px] border border-border bg-background"
-      }
-      style={variant === "overlay" ? frameStyle : undefined}
+      className="fixed inset-x-0 top-0 z-30 flex flex-col bg-background"
+      style={frameStyle}
     >
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" dir="auto">
@@ -77,48 +59,18 @@ export function SandScreenShell({
         <span className="shrink-0 text-sm text-muted-foreground">
           {connectionLabel(connection)}
         </span>
-        {variant === "panel" ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-testid="sand-screen-open-full"
-            disabled={!url}
-            onClick={() => onOpenFull?.()}
-          >
-            <Trans>Open full</Trans>
-          </Button>
-        ) : null}
         <Button
           type="button"
           variant="ghost"
-          size="sm"
-          disabled={!url}
-          onClick={() => void copyLink()}
+          size="icon-sm"
+          className="text-muted-foreground"
+          aria-label={t`Close computer`}
+          onClick={onClose}
         >
-          <Trans>Copy link</Trans>
+          <X size={16} strokeWidth={1.8} />
         </Button>
-        {variant === "overlay" ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="text-muted-foreground"
-            aria-label={t`Close computer`}
-            onClick={onClose}
-          >
-            <X size={16} strokeWidth={1.8} />
-          </Button>
-        ) : null}
       </header>
-      <div
-        data-testid="sand-screen-viewport"
-        className={
-          variant === "overlay"
-            ? "relative min-h-0 flex-1 bg-black"
-            : "relative aspect-[16/10] w-full bg-black"
-        }
-      >
+      <div data-testid="sand-screen-viewport" className="relative min-h-0 flex-1 bg-black">
         <div className="absolute inset-0">
           {showFrame && url ? (
             <SandScreenFrame

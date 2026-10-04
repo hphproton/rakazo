@@ -75,8 +75,7 @@ function renderShell(
     url: string | null;
     state: ComputerStatus["state"];
     screenError: boolean;
-    variant: "overlay" | "panel";
-    onOpenFull: () => void;
+    onClose: () => void;
     screenWidth: number;
     screenHeight: number;
   }> = {},
@@ -88,10 +87,10 @@ function renderShell(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  let mounted = true;
   const render = (next: typeof props) =>
     root.render(
       <SandScreenShell
-        variant={next.variant ?? "overlay"}
         botName="Atlas"
         url={next.url === undefined ? sealed : next.url}
         state={next.state ?? "running"}
@@ -99,8 +98,7 @@ function renderShell(
         screenWidth={next.screenWidth}
         screenHeight={next.screenHeight}
         fallback={<div>screen unavailable</div>}
-        onClose={() => undefined}
-        onOpenFull={next.onOpenFull}
+        onClose={next.onClose}
       />,
     );
   return {
@@ -110,8 +108,16 @@ function renderShell(
         render({ ...props, ...next });
       });
     },
-    async cleanup() {
+    async unmount() {
+      if (!mounted) return;
+      mounted = false;
       await act(async () => root.unmount());
+    },
+    async cleanup() {
+      if (mounted) {
+        mounted = false;
+        await act(async () => root.unmount());
+      }
       container.remove();
       vi.useRealTimers();
       vi.unstubAllGlobals();
@@ -125,15 +131,16 @@ afterEach(() => {
   observed = { width: 1000, height: 1000 };
 });
 
-function buttonNamed(container: HTMLElement, label: string) {
-  return [...container.querySelectorAll("button")].find((button) => button.textContent === label);
-}
-
-it("shows the bot name and connects the sealed websocket without vnc.html", async () => {
+it("connects the sealed websocket in the overlay without vnc.html or a tab", async () => {
+  const open = vi.fn();
+  vi.stubGlobal("open", open);
   const view = renderShell();
   await view.draw();
   expect(view.container.textContent).toContain("Atlas");
   expect(view.container.textContent).toContain("Reconnecting");
+  expect(view.container.textContent).not.toMatch(/idle/i);
+  expect(view.container.textContent).not.toContain("Open full");
+  expect(view.container.textContent).not.toContain("Copy link");
   expect(view.container.querySelector("iframe")).toBeNull();
   expect(view.container.textContent).not.toContain("vnc.html");
   expect(view.container.textContent).not.toContain("Recover computer");
@@ -147,6 +154,10 @@ it("shows the bot name and connects the sealed websocket without vnc.html", asyn
   expect(client?.viewOnly).toBe(true);
   expect(client?.scaleViewport).toBe(true);
   expect(client?.resizeSession).toBe(false);
+  const viewport = view.container.querySelector("[data-testid=sand-screen-viewport]");
+  expect(viewport?.className).toContain("flex-1");
+  expect(viewport?.className).not.toContain("aspect-[16/10]");
+  expect(open).not.toHaveBeenCalled();
   const frame = view.container.querySelector("[data-testid=sand-screen-frame]");
   expect(frame?.getAttribute("style")).toContain("width: 1000px");
   expect(frame?.getAttribute("style")).toContain("height: 625px");
@@ -154,87 +165,72 @@ it("shows the bot name and connects the sealed websocket without vnc.html", asyn
     client?.dispatchEvent(new Event("connect"));
   });
   expect(view.container.textContent).toContain("Connected");
+  expect(view.container.textContent).not.toMatch(/idle/i);
   await view.cleanup();
 });
 
-it("sizes the sidebar picture as a 16/10 card and fills it for a 1280×800 seat", async () => {
+it("fills a 16/10 stage for a 1280×800 seat and letterboxes a different bitmap", async () => {
   observed = { width: 1600, height: 1000 };
-  const view = renderShell({ variant: "panel", screenWidth: 1280, screenHeight: 800 });
-  await view.draw();
-  const shell = view.container.querySelector("[data-testid=sand-screen-shell]");
-  const viewport = view.container.querySelector("[data-testid=sand-screen-viewport]");
-  const frame = view.container.querySelector("[data-testid=sand-screen-frame]");
-  expect(shell?.className).not.toContain("70vh");
-  expect(shell?.className).not.toContain("min-h-80");
-  expect(viewport?.className).toContain("aspect-[16/10]");
-  expect(viewport?.className).not.toContain("flex-1");
-  expect(frame?.getAttribute("style")).toContain("width: 1600px");
-  expect(frame?.getAttribute("style")).toContain("height: 1000px");
-  await view.cleanup();
-});
+  const filled = renderShell({ screenWidth: 1280, screenHeight: 800 });
+  await filled.draw();
+  const filledFrame = filled.container.querySelector("[data-testid=sand-screen-frame]");
+  expect(
+    filled.container.querySelector("[data-testid=sand-screen-shell]")?.className,
+  ).not.toContain("70vh");
+  expect(filledFrame?.getAttribute("style")).toContain("width: 1600px");
+  expect(filledFrame?.getAttribute("style")).toContain("height: 1000px");
+  await filled.cleanup();
 
-it("letterboxes inside the 16/10 card only when the bitmap aspect differs", async () => {
   observed = { width: 1600, height: 1000 };
-  const view = renderShell({ variant: "panel", screenWidth: 1280, screenHeight: 720 });
-  await view.draw();
-  const viewport = view.container.querySelector("[data-testid=sand-screen-viewport]");
-  const frame = view.container.querySelector("[data-testid=sand-screen-frame]");
-  expect(viewport?.className).toContain("aspect-[16/10]");
+  const letterboxed = renderShell({ screenWidth: 1280, screenHeight: 720 });
+  await letterboxed.draw();
+  const frame = letterboxed.container.querySelector("[data-testid=sand-screen-frame]");
   expect(frame?.getAttribute("style")).toContain("width: 1600px");
   expect(frame?.getAttribute("style")).toContain("height: 900px");
+  await letterboxed.cleanup();
+});
+
+it("disconnects on close and does not keep the reconnect loop", async () => {
+  const onClose = vi.fn();
+  const view = renderShell({ onClose });
+  await view.draw();
+  expect(FakeRFB.created).toHaveLength(1);
+  const close = view.container.querySelector("[aria-label='Close computer']");
+  await act(async () => {
+    close?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(onClose).toHaveBeenCalledOnce();
+
+  await act(async () => {
+    FakeRFB.created[0]?.dispatchEvent(new Event("disconnect"));
+  });
+  await view.unmount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(FakeRFB.created).toHaveLength(1);
   await view.cleanup();
 });
 
-it("opens the in-app RFB viewer instead of a vnc.html tab", async () => {
-  const open = vi.fn();
-  const onOpenFull = vi.fn();
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  vi.stubGlobal("open", open);
-  Object.assign(navigator, { clipboard: { writeText } });
-  const view = renderShell({ variant: "panel", onOpenFull });
+it("reconnects while the overlay stays open", async () => {
+  const view = renderShell();
   await view.draw();
   await act(async () => {
-    buttonNamed(view.container, "Open full")?.click();
-    buttonNamed(view.container, "Copy link")?.click();
+    FakeRFB.created[0]?.dispatchEvent(new Event("disconnect"));
   });
-  expect(onOpenFull).toHaveBeenCalledOnce();
-  expect(open).not.toHaveBeenCalled();
-  expect(writeText).toHaveBeenCalledWith(sealed);
-  expect(view.container.querySelector("iframe")).toBeNull();
-  expect(view.container.textContent).not.toContain("vnc.html");
-  expect(FakeRFB.created.at(-1)?.url).toBe(
-    `ws://127.0.0.1:5173/novnc/session/view/${now + 120_000}.same-token/websockify`,
-  );
-
-  await view.draw({ variant: "overlay" });
-  const fullViewport = view.container.querySelector("[data-testid=sand-screen-viewport]");
-  expect(open).not.toHaveBeenCalled();
-  expect(fullViewport?.className).toContain("flex-1");
-  expect(fullViewport?.className).not.toContain("aspect-[16/10]");
-  expect(view.container.querySelector("[data-testid=sand-screen-open-full]")).toBeNull();
-  expect(view.container.querySelector("iframe")).toBeNull();
-  expect(view.container.textContent).toContain("Copy link");
-  expect(view.container.textContent).toContain("Reconnecting");
-  expect(view.container.textContent).not.toContain("vnc.html");
-  expect(view.container.textContent).not.toContain("Clipboard");
-  expect(view.container.textContent).not.toContain("noVNC");
-  expect(view.container.querySelector("[data-testid=sand-screen-frame]")).not.toBeNull();
-  expect(FakeRFB.created.at(-1)?.url).not.toContain("vnc.html");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(FakeRFB.created).toHaveLength(2);
+  expect(FakeRFB.created[1]?.url).not.toContain("vnc.html");
   await view.cleanup();
 });
 
-it("keeps the panel shell free of a second close control", async () => {
-  const view = renderShell({ variant: "panel" });
-  await view.draw();
-  expect(view.container.textContent).toContain("Open full");
-  expect(view.container.textContent).not.toContain("Close computer");
-  await view.cleanup();
-});
-
-it("marks a stopped sand screen stale and hides the iframe", async () => {
+it("marks a stopped sand screen stale and does not connect", async () => {
   const view = renderShell({ state: "stopped" });
   await view.draw();
   expect(view.container.textContent).toContain("Stale");
+  expect(view.container.textContent).not.toMatch(/idle/i);
   expect(view.container.querySelector("iframe")).toBeNull();
   expect(view.container.querySelector("[data-testid=sand-screen-frame]")).toBeNull();
   expect(FakeRFB.created).toHaveLength(0);
