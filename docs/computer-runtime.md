@@ -27,6 +27,9 @@ takeover, multiple screens, or a page browser. A model that cannot see keeps
 the filesystem tools and those same refusals; screenshot tools stay hidden.
 Reading a directory lists or skips it instead of calling ReadBinaryFile.
 A Team path that already starts with `/workspace` stays on that root.
+A sand screen reuses its sealed noVNC capability across refreshes until that
+capability is close to expiry, or the upstream, view/control policy, generation,
+or control lease changes.
 
 Pi runs in the Rakazo API/worker process. It is not installed in, or executed by, E2B. The built-in tools are ordinary Pi tools, not Claude- or MCP-specific tools, so any model exposed through Pi can call them. Screen operation still requires a model that can accept image tool results and reason about screenshots.
 
