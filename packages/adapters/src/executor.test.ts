@@ -7,6 +7,7 @@ import {
   createRunExecutor,
   createRunWorkspaceCheckpoint,
   dockerComputerToolInstruction,
+  flushRunWorkspaceCheckpoint,
   loadCurrentTurnImages,
   missingTurnImagesInstruction,
   parseUpdateBotPatch,
@@ -20,6 +21,34 @@ import {
   withRecentTurnImages,
 } from "./executor.js";
 import { serializeModelSecret } from "./pi-oauth.js";
+import { SandHostError } from "./sand-host.js";
+
+describe("sand checkpoint denial", () => {
+  it("keeps the turn when ControlService denies the file listing", async () => {
+    const flush = vi
+      .fn()
+      .mockRejectedValue(new SandHostError("ControlService", "ListDirectory", 403));
+    await expect(flushRunWorkspaceCheckpoint({ flush })).resolves.toBeUndefined();
+    expect(flush).toHaveBeenCalledOnce();
+  });
+
+  it("still fails the turn for a checkpoint error that is not a sand 403", async () => {
+    await expect(
+      flushRunWorkspaceCheckpoint({
+        flush: async () => {
+          throw new Error("disk full");
+        },
+      }),
+    ).rejects.toThrow("disk full");
+    await expect(
+      flushRunWorkspaceCheckpoint({
+        flush: async () => {
+          throw new SandHostError("ControlService", "ListDirectory", 500);
+        },
+      }),
+    ).rejects.toThrow(/500/);
+  });
+});
 
 describe("tool completion audit", () => {
   it("records result metadata without persisting tool contents", () => {

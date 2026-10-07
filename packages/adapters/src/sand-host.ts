@@ -58,6 +58,21 @@ export class SandHostError extends Error {
   }
 }
 
+/** Connect maps exec-daemon EACCES/EPERM to HTTP 403. */
+export function isSandControlDenied(error: unknown): boolean {
+  return error instanceof SandHostError && error.status === 403;
+}
+
+/**
+ * ListDirectory 403 is a permission denial from readdir or from lstat of one
+ * child. The directory may still be name-listable through Exec.
+ */
+export function isSandListDirectoryDenied(error: unknown): boolean {
+  return (
+    isSandControlDenied(error) && error instanceof Error && error.message.includes("ListDirectory")
+  );
+}
+
 /** ReadBinaryFile refuses directories. Callers list or skip them instead. */
 export class SandPathIsDirectoryError extends Error {
   constructor() {
