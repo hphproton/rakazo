@@ -45,7 +45,8 @@ test("shows Hub inbound and outbound as one chip family in one conversation", as
   ).toHaveCount(0);
 
   const sidebar = page.locator("aside").first();
-  await expect(sidebar.getByText("Atlas")).toHaveCount(0);
+  // The open bot's preview quotes the Hub agent. A seat would be a roster name.
+  await expect(sidebar.locator("[data-roster-bot-name]", { hasText: /^Atlas$/ })).toHaveCount(0);
 
   const transcriptBox = await transcript.boundingBox();
   const outboundBox = await outbound.boundingBox();
