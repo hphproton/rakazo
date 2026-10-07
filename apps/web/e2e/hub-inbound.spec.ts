@@ -75,6 +75,13 @@ test("shows Hub inbound and outbound as one chip family in one conversation", as
   await expect(page.getByTestId("peer-conversation-view").getByText(inboundToken)).toBeVisible();
 });
 
+type HubThreadPage = {
+  threadId?: string;
+  botId?: string;
+  messages?: Array<Record<string, unknown>>;
+  thread?: HubThreadPage;
+};
+
 async function installHubOutboundEcho(page: Page, text: string) {
   const outboundId = `hub-outbound-echo-${text}`;
   const inject = async (route: Route) => {
@@ -85,50 +92,69 @@ async function installHubOutboundEcho(page: Page, text: string) {
     } catch {
       before = undefined;
     }
-    const response = await route.fetch();
-    const raw = await response.text();
-    let body: {
-      json?: { threadId?: string; botId?: string; messages?: Array<Record<string, unknown>> };
-    };
     try {
-      body = JSON.parse(raw) as typeof body;
-    } catch {
-      await route.fulfill({ response, body: raw });
-      return;
-    }
-    const pageBody = body.json;
-    const messages = pageBody?.messages;
-    // Older history pages stay untouched so one echo is not copied onto every page.
-    if (before !== undefined || !pageBody || !Array.isArray(messages)) {
-      await route.fulfill({ response, body: raw });
-      return;
-    }
-    if (!messages.some((message) => message.id === outboundId)) {
-      const threadId = typeof pageBody.threadId === "string" ? pageBody.threadId : "thread";
-      const botId =
-        typeof pageBody.botId === "string"
-          ? pageBody.botId
-          : messages.find((message) => typeof message.botId === "string")?.botId;
-      messages.push({
-        id: outboundId,
-        threadId,
-        seq: 1_000_000,
-        role: "bot",
-        blocks: [
-          {
-            kind: "hub_message_sent",
-            hubAgentId: "hub-atlas",
-            name: "Atlas",
-            text,
-            intent: "request",
-          },
-        ],
-        ...(typeof botId === "string" ? { botId } : {}),
-        createdAt: new Date().toISOString(),
+      const response = await route.fetch();
+      const raw = await response.text();
+      let body: { json?: HubThreadPage };
+      try {
+        body = JSON.parse(raw) as typeof body;
+      } catch {
+        await route.fulfill({ response, body: raw });
+        return;
+      }
+      // Older history pages stay untouched so one echo is not copied onto every page.
+      const targets =
+        before !== undefined
+          ? []
+          : [body.json, body.json?.thread].filter((target): target is HubThreadPage =>
+              Boolean(target && Array.isArray(target.messages)),
+            );
+      if (targets.length === 0) {
+        await route.fulfill({ response, body: raw });
+        return;
+      }
+      for (const pageBody of targets) {
+        const messages = pageBody.messages;
+        if (!messages || messages.some((message) => message.id === outboundId)) continue;
+        const threadId = typeof pageBody.threadId === "string" ? pageBody.threadId : "thread";
+        const botId =
+          typeof pageBody.botId === "string"
+            ? pageBody.botId
+            : messages.find((message) => typeof message.botId === "string")?.botId;
+        messages.push({
+          id: outboundId,
+          threadId,
+          seq: 1_000_000,
+          role: "bot",
+          blocks: [
+            {
+              kind: "hub_message_sent",
+              hubAgentId: "hub-atlas",
+              name: "Atlas",
+              text,
+              intent: "request",
+            },
+          ],
+          ...(typeof botId === "string" ? { botId } : {}),
+          createdAt: new Date().toISOString(),
+        });
+      }
+      const headers = response.headers();
+      delete headers["content-length"];
+      delete headers["content-encoding"];
+      await route.fulfill({
+        status: response.status(),
+        headers,
+        body: JSON.stringify(body),
       });
+    } catch (error) {
+      // Reload can cancel an in-flight intercepted request after fetch returns.
+      if (/already handled|Target closed|Request context disposed/i.test(String(error))) return;
+      throw error;
     }
-    await route.fulfill({ response, json: body });
   };
-  await page.route("**/rpc/threads/get", inject);
+  // Reload paints bootstrap.thread and skips threads/get when that thread is the open bot.
+  // One handler for both hydrate RPCs avoids overlapping globs racing on reload.
+  await page.route(/\/rpc\/(bootstrap|threads\/get)(?:\?|$)/, inject);
   await page.route("**/rpc/threads/messages", inject);
 }
