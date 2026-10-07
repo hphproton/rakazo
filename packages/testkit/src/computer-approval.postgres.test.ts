@@ -17,6 +17,9 @@ describe.skipIf(!databaseAvailable)("offline Pi computer approval", () => {
     // Use the existing compatible-endpoint capability declaration so the real
     // executor exposes computer tools without mocking its model vision gate.
     vi.stubEnv("RAKAZO_OPENAI_COMPATIBLE_VISION_MODELS", "offline-fixture");
+    // An unset SANDBOX_DISPLAY_BOTS attaches the lab Chief container and wraps
+    // fake in DisplayContainerSandbox. This journey needs the fake provider.
+    vi.stubEnv("SANDBOX_DISPLAY_BOTS", "");
   });
   afterAll(() => vi.unstubAllEnvs());
 

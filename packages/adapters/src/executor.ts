@@ -304,7 +304,7 @@ import {
   sandHandRefuses,
   sandHandToolSurface,
 } from "./sand-hand.js";
-import { isDirectoryReadError } from "./sand-host.js";
+import { isDirectoryReadError, isSandControlDenied, SandHostError } from "./sand-host.js";
 import {
   cancelScheduleFromTool,
   compactScheduleInput,
@@ -414,6 +414,24 @@ export function createRunWorkspaceCheckpoint(checkpoint: () => Promise<unknown>)
       }
     },
   };
+}
+
+/**
+ * A sand ControlService 403 during checkpoint must not fail the turn. The
+ * previous workspace snapshot stays; the model reply is still persisted.
+ */
+export async function flushRunWorkspaceCheckpoint(checkpoint: {
+  flush(): Promise<unknown>;
+}): Promise<void> {
+  try {
+    await checkpoint.flush();
+  } catch (error) {
+    if (!isSandControlDenied(error)) throw error;
+    getLogger().error(
+      "workspace checkpoint skipped after sand control denied a file call",
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 const SHELL_INTERPRETER_NAMES = /^(?:bash|sh|dash|zsh|ksh|fish)$/;
@@ -2343,7 +2361,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               // Another worker owns the run now; exit without leaving a local pause card.
               return pauseForApproval();
             }
-            await workspaceCheckpoint.flush();
+            await flushRunWorkspaceCheckpoint(workspaceCheckpoint);
             const paused = await deps.events.pauseRunForInput({
               spaceId: run.spaceId,
               threadId: run.threadId,
@@ -2534,18 +2552,28 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }
           if (name === "list_files") {
             const requestedPath = String(args.path ?? "");
-            const entries = await deps.sandbox.listFiles(
-              computer,
-              resolveBotWorkspacePath(computerMode, bot.id, requestedPath),
-              context,
-            );
-            return {
-              path: requestedPath,
-              entries: entries.map((entry) => ({
-                ...entry,
-                path: displayBotWorkspacePath(computerMode, bot.id, requestedPath, entry.path),
-              })),
-            };
+            try {
+              const entries = await deps.sandbox.listFiles(
+                computer,
+                resolveBotWorkspacePath(computerMode, bot.id, requestedPath),
+                context,
+              );
+              return {
+                path: requestedPath,
+                entries: entries.map((entry) => ({
+                  ...entry,
+                  path: displayBotWorkspacePath(computerMode, bot.id, requestedPath, entry.path),
+                })),
+              };
+            } catch (error) {
+              return {
+                error: redactSecrets(
+                  error instanceof Error ? error.message : "could not list directory",
+                  runSecrets,
+                ),
+                path: requestedPath,
+              };
+            }
           }
           if (name === "read_file") {
             const filePath = String(args.path ?? "");
@@ -2575,6 +2603,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 } catch {
                   return { error: "path is a directory; use list_files", path: filePath };
                 }
+              }
+              if (error instanceof SandHostError) {
+                return {
+                  error: redactSecrets(error.message, runSecrets),
+                  path: filePath,
+                };
               }
               throw error;
             }
@@ -3678,7 +3712,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             if (!(await renewRunLease(deps, runId, workerId, fence))) {
               return pauseForSecret();
             }
-            await workspaceCheckpoint.flush();
+            await flushRunWorkspaceCheckpoint(workspaceCheckpoint);
             const paused = await deps.events.pauseRunForInput({
               spaceId: run.spaceId,
               threadId: run.threadId,
@@ -4436,7 +4470,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 id: action.id,
                 label: redactSecrets(action.label, runSecrets),
               }));
-              await workspaceCheckpoint.flush();
+              await flushRunWorkspaceCheckpoint(workspaceCheckpoint);
               const paused = await deps.events.pauseRunForInput({
                 spaceId: run.spaceId,
                 threadId: run.threadId,
@@ -4495,7 +4529,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               await publishMessage(deps, run, "bot", [
                 { kind: "computer", state: "Needs you", text: safeReason },
               ]);
-              await workspaceCheckpoint.flush();
+              await flushRunWorkspaceCheckpoint(workspaceCheckpoint);
               if (!(await holdComputerExecutionLeaseForTakeover(deps.prisma, computerLease))) {
                 throw new Error("Computer lease expired before takeover");
               }
@@ -4548,7 +4582,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 if (messageSegments.length > 0) {
                   await publishMessage(deps, run, "bot", redactBlocks(messageSegments, runSecrets));
                 }
-                await workspaceCheckpoint.flush();
+                await flushRunWorkspaceCheckpoint(workspaceCheckpoint);
                 terminalCheckpointComplete = true;
                 const stuckText = `I got stuck calling ${humanizeToolName(event.name)} with the same input ${toolCallStreak.count} times in a row without making progress, so I stopped early. Try rephrasing this, or ask me to try a different approach.`;
                 const stopped = await deps.events.finalizeRun({
@@ -4733,7 +4767,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             }
           }
 
-          await workspaceCheckpoint.flush();
+          await flushRunWorkspaceCheckpoint(workspaceCheckpoint);
           terminalCheckpointComplete = true;
 
           flushPendingTools();

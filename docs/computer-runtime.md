@@ -26,6 +26,10 @@ move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and
 takeover, multiple screens, or a page browser. A model that cannot see keeps
 the filesystem tools and those same refusals; screenshot tools stay hidden.
 Reading a directory lists or skips it instead of calling ReadBinaryFile.
+A ListDirectory permission denial is listed with `ls` on that seat when the
+names are still readable. If listing is still denied, `list_files` returns
+that error to the model and a checkpoint skip leaves the previous snapshot;
+neither fails the run.
 A Team path that already starts with `/workspace` stays on that root.
 A sand screen reuses its sealed noVNC capability across refreshes until that
 capability is close to expiry, or the upstream, view/control policy, generation,

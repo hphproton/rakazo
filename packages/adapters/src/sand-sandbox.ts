@@ -24,6 +24,7 @@ import { SAND_HAND_REFUSAL, sandHandRefuses } from "./sand-hand.js";
 import type { SandComputerAction, SandDirectoryEntry, SandHost } from "./sand-host.js";
 import {
   isDirectoryReadError,
+  isSandListDirectoryDenied,
   SandHostError,
   SandPathIsDirectoryError,
   sandExecEnv,
@@ -179,7 +180,7 @@ export class SandSandboxProvider implements SandboxProvider {
   ): Promise<ComputerFileEntry[]> {
     const seat = this.seat(computer, context);
     const absolute = sandWorkspacePath(directory);
-    const entries = await this.opts.host.listDirectory(seat.agentId, absolute, context.signal);
+    const entries = await listSandDirectory(this.opts.host, seat.agentId, absolute, context.signal);
     return entries.flatMap((entry) => {
       if (entry.type === "SYMLINK") return [];
       const child = entry.path.startsWith("/")
@@ -283,7 +284,7 @@ export class SandSandboxProvider implements SandboxProvider {
     if (isDirectoryReadError(error)) return true;
     if (!(error instanceof SandHostError) || error.status !== 400) return false;
     try {
-      await this.opts.host.listDirectory(agentId, absolute, signal);
+      await listSandDirectory(this.opts.host, agentId, absolute, signal);
       return true;
     } catch {
       return false;
@@ -298,7 +299,7 @@ export class SandSandboxProvider implements SandboxProvider {
     const name = absolute.slice(slash + 1);
     let entries: SandDirectoryEntry[];
     try {
-      entries = await this.opts.host.listDirectory(agentId, parent, signal);
+      entries = await listSandDirectory(this.opts.host, agentId, parent, signal);
     } catch {
       return false;
     }
@@ -319,7 +320,7 @@ export class SandSandboxProvider implements SandboxProvider {
     directory: string,
     signal: AbortSignal,
   ): Promise<ComputerFileEntry[]> {
-    const entries = await this.opts.host.listDirectory(agentId, directory, signal);
+    const entries = await listSandDirectory(this.opts.host, agentId, directory, signal);
     const files: ComputerFileEntry[] = [];
     for (const entry of entries) {
       if (entry.type === "SYMLINK") continue;
@@ -345,6 +346,76 @@ export function sandWorkspacePath(input: string | undefined): string {
   if (relative.startsWith("/")) throw new Error("path is outside the sand workspace");
   const normalized = normalizeWorkspacePath(relative);
   return normalized ? `${SAND_WORKSPACE}/${normalized}` : SAND_WORKSPACE;
+}
+
+/**
+ * ListDirectory fails the whole RPC when any child lstat returns EACCES, which
+ * Connect exposes as HTTP 403. A readable-but-not-searchable directory still
+ * lists through `ls --file-type` on the same seat (readdir plus d_type).
+ * A directory that ls cannot open rethrows the original 403.
+ */
+async function listSandDirectory(
+  host: SandHost,
+  agentId: string,
+  absolute: string,
+  signal: AbortSignal,
+): Promise<SandDirectoryEntry[]> {
+  try {
+    return await host.listDirectory(agentId, absolute, signal);
+  } catch (error) {
+    if (!isSandListDirectoryDenied(error)) throw error;
+    const listed = await listDirectoryWithLs(host, agentId, absolute, signal);
+    if (!listed) throw error;
+    return listed;
+  }
+}
+
+async function listDirectoryWithLs(
+  host: SandHost,
+  agentId: string,
+  absolute: string,
+  signal: AbortSignal,
+): Promise<SandDirectoryEntry[] | undefined> {
+  let stdout = "";
+  let code: number | undefined;
+  for await (const event of host.exec(
+    agentId,
+    {
+      argv: ["ls", "-1", "--file-type", "--", absolute],
+      cwd: SAND_WORKSPACE,
+      env: {},
+      timeoutMs: boundedSandboxCommandTimeoutMs(undefined),
+    },
+    signal,
+  )) {
+    if (event.type === "stdout") stdout += event.data;
+    if (event.type === "exit") code = event.code;
+  }
+  if (code !== 0) return undefined;
+  return parseLsFileTypeListing(absolute, stdout);
+}
+
+function parseLsFileTypeListing(directory: string, stdout: string): SandDirectoryEntry[] {
+  const root = directory.endsWith("/") ? directory.slice(0, -1) : directory;
+  const entries: SandDirectoryEntry[] = [];
+  for (const raw of stdout.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (!line) continue;
+    const suffix = line.at(-1);
+    const marked =
+      suffix === "/" || suffix === "@" || suffix === "|" || suffix === "=" || suffix === ">";
+    const name = marked ? line.slice(0, -1) : line;
+    if (!name || name === "." || name === "..") continue;
+    const type: SandDirectoryEntry["type"] =
+      suffix === "/" ? "DIRECTORY" : suffix === "@" ? "SYMLINK" : "FILE";
+    entries.push({ name, path: `${root}/${name}`, type, sizeBytes: 0 });
+  }
+  entries.sort((a, b) => {
+    if (a.type === "DIRECTORY" && b.type !== "DIRECTORY") return -1;
+    if (a.type !== "DIRECTORY" && b.type === "DIRECTORY") return 1;
+    return a.name.localeCompare(b.name);
+  });
+  return entries;
 }
 
 function workspaceRelative(absolute: string): string {

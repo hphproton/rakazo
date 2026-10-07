@@ -288,12 +288,87 @@ describe("sand sandbox provider", () => {
     expect(await sandbox.listFiles(computer, "notes", ctx)).toEqual([
       { path: "notes/result.txt", kind: "file", size: 8 },
     ]);
+    expect(host.calls.some((call) => call.method === "exec" && lsArgv(call.body))).toBe(false);
     expect(
       new TextDecoder().decode(await sandbox.readFile(computer, "notes/result.txt", ctx)),
     ).toBe("portable");
     const exported = [];
     for await (const file of sandbox.exportWorkspace(computer, ctx)) exported.push(file);
     expect(exported.map((file) => file.path)).toContain("notes/result.txt");
+  });
+
+  it("lists a readable directory through ls when ListDirectory returns 403", async () => {
+    const host = new RecordingHost();
+    const notes = `${SAND_WORKSPACE}/notes`;
+    host.files.set(`${notes}/result.txt`, new TextEncoder().encode("portable"));
+    host.files.set(`${SAND_WORKSPACE}/readme.txt`, new TextEncoder().encode("hi"));
+    host.listDirectory = async (agentId, path) => {
+      host.calls.push({ method: "listDirectory", agentId, body: path });
+      throw new SandHostError("ControlService", "ListDirectory", 403);
+    };
+    host.exec = async function* (agentId, request) {
+      host.calls.push({ method: "exec", agentId, body: request });
+      const target = request.argv.at(-1);
+      if (target === SAND_WORKSPACE) {
+        yield { type: "stdout", data: "notes/\nsecret@\nreadme.txt\n" };
+        yield { type: "exit", code: 0 };
+        return;
+      }
+      if (target === notes) {
+        yield { type: "stdout", data: "result.txt\n" };
+        yield { type: "exit", code: 0 };
+        return;
+      }
+      yield { type: "stderr", data: "ls: cannot open directory: Permission denied\n" };
+      yield { type: "exit", code: 2 };
+    };
+    const sandbox = provider(host);
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(sandbox.listFiles(computer, SAND_WORKSPACE, ctx)).resolves.toEqual([
+      { path: "notes", kind: "dir", size: 0 },
+      { path: "readme.txt", kind: "file", size: 0 },
+    ]);
+    const exported = [];
+    for await (const file of sandbox.exportWorkspace(computer, ctx)) exported.push(file.path);
+    expect(exported).toEqual(["notes/result.txt", "readme.txt"]);
+    expect(
+      host.calls.filter((call) => call.method === "readFile").map((call) => call.body),
+    ).toEqual([`${notes}/result.txt`, `${SAND_WORKSPACE}/readme.txt`]);
+  });
+
+  it("keeps ListDirectory 403 when ls cannot open the directory", async () => {
+    const host = new RecordingHost();
+    host.listDirectory = async (agentId, path) => {
+      host.calls.push({ method: "listDirectory", agentId, body: path });
+      throw new SandHostError("ControlService", "ListDirectory", 403);
+    };
+    host.exec = async function* (agentId, request) {
+      host.calls.push({ method: "exec", agentId, body: request });
+      yield { type: "stderr", data: "ls: cannot open directory: Permission denied\n" };
+      yield { type: "exit", code: 2 };
+    };
+    const sandbox = provider(host);
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(sandbox.listFiles(computer, "shared", ctx)).rejects.toThrow(
+      "sand ControlService/ListDirectory failed: 403",
+    );
+    await expect(async () => {
+      for await (const _file of sandbox.exportWorkspace(computer, ctx)) {
+        // A denied root listing throws before the first file.
+      }
+    }).rejects.toThrow("sand ControlService/ListDirectory failed: 403");
+  });
+
+  it("does not shell out when ListDirectory fails for another status", async () => {
+    const host = new RecordingHost();
+    host.listDirectory = async (agentId, path) => {
+      host.calls.push({ method: "listDirectory", agentId, body: path });
+      throw new SandHostError("ControlService", "ListDirectory", 404);
+    };
+    const sandbox = provider(host);
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    await expect(sandbox.listFiles(computer, "missing", ctx)).rejects.toThrow(/404/);
+    expect(host.calls.some((call) => call.method === "exec")).toBe(false);
   });
 
   it("lists a directory instead of calling ReadBinaryFile", async () => {
@@ -637,6 +712,12 @@ describe("sand host router", () => {
     );
   });
 });
+
+function lsArgv(body: unknown): boolean {
+  return Array.isArray((body as { argv?: unknown }).argv)
+    ? (body as { argv: string[] }).argv[0] === "ls"
+    : false;
+}
 
 function frame(flags: number, value: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(value));
