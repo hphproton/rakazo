@@ -6,7 +6,7 @@ Rakazo keeps the agent runtime and the computer runtime separate:
 chat/API -> one Pi agent session -> Rakazo computer tools -> SandboxProvider -> E2B / Daytona / Box
                                                    |-> Docker
                                                    |-> desktop/fake
-                                                   |-> sand (sand-host router, one agent id)
+                                                   |-> sand (seat map, or a Team desktop on 101-150)
 
 SandboxProvider workspace <-> AgentHomeStore <-> Rakazo-owned DATA_DIR
 ```
@@ -16,9 +16,11 @@ Hands are shell, files, and computer-use on that agent. A Rakazo bot id is not
 an agent id. `SANDBOX_SAND_SEAT_MAP` accepts a bot id or a computer home key.
 A dedicated computer uses the bot id. A Team Computer uses `team-` plus the
 space id, and a bot id entry on that computer is used first. Unmapped ids are
-refused. A stored ref from another provider, including `fake-<home key>`, does
+refused at provision. A stored ref from another provider, including `fake-<home key>`, does
 not block the map. A different sand agent UUID still refuses. It does not create
-an agent or attach display `:1` or `:3`. The pod
+an agent or attach display `:1` or `:3`. A Team B member with a desktop row
+uses display index 101–150 through `x-sand-display` and `x-sand-window-owner`
+on `http://127.0.0.1:1339`. Bots without a row keep the seat map. The pod
 workspace is `/workspace`, shared by sand windows, and it is not a Team B
 container. Sand hands are `computer_observe` plus `computer_act` kinds click,
 move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and

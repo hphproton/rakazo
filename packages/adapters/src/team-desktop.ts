@@ -1,0 +1,656 @@
+import { randomBytes } from "node:crypto";
+import type { PrismaClient } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
+
+/** Host seats stay in 2..100. Team B desktops use only this band. */
+export const TEAM_DESKTOP_MIN_INDEX = 101;
+export const TEAM_DESKTOP_MAX_INDEX = 150;
+
+/** Chat group whose members receive a desktop. Team A is not this name. */
+export const TEAM_B_GROUP_NAME = "Team B";
+
+export const TEAM_DESKTOP_ROUTER_URL = "http://127.0.0.1:1339";
+
+export const TEAM_DESKTOP_DEFAULT_IDLE_MINUTES = 30;
+export const TEAM_DESKTOP_DEFAULT_RECONCILE_SECONDS = 120;
+export const TEAM_DESKTOP_DEFAULT_MAX_RUNNING = 4;
+export const TEAM_DESKTOP_ENSURE_TIMEOUT_MS = 15_000;
+
+const POLL_MS = 200;
+
+export const TEAM_DESKTOP_FORK_ROOTS = [
+  "/tmp",
+  "/home/box/.config/google-chrome",
+  "/home/box/.config/chromium",
+] as const;
+
+export type TeamDesktopState = "reserved" | "running" | "stopped" | "releasing";
+
+export interface TeamDesktopRecord {
+  botId: string;
+  displayIndex: number;
+  ownerToken: string;
+  state: TeamDesktopState;
+  lastUsedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Client-visible row. The owner token is never included. */
+export interface TeamDesktopStatus {
+  botId: string;
+  displayIndex: number;
+  state: TeamDesktopState;
+  lastUsedAt: string | null;
+}
+
+/** In-process route for the sand adapter. Do not log `ownerToken`. */
+export interface TeamDesktopBinding {
+  displayIndex: number;
+  ownerToken: string;
+}
+
+export interface TeamDesktopStore {
+  getByBot(botId: string): Promise<TeamDesktopRecord | null>;
+  list(): Promise<TeamDesktopRecord[]>;
+  insert(row: TeamDesktopRecord): Promise<void>;
+  update(
+    botId: string,
+    patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt">>,
+  ): Promise<void>;
+  delete(botId: string): Promise<void>;
+}
+
+/**
+ * Probes and commands for one display index in 101–150.
+ * Implementations must refuse every other index before touching the host.
+ */
+export interface TeamDesktopHost {
+  xSocketExists(displayIndex: number): Promise<boolean>;
+  tokenFileExists(displayIndex: number): Promise<boolean>;
+  portListening(port: number): Promise<boolean>;
+  /** TCP 127.0.0.1:(14000+N) accepts and `xdpyinfo -display :N` exits 0. */
+  windowAlive(displayIndex: number): Promise<boolean>;
+  startWindow(displayIndex: number, ownerToken: string): Promise<void>;
+  stopWindow(displayIndex: number): Promise<void>;
+  /** Delete only this index's leftovers, and only when no process holds them. */
+  purge(displayIndex: number): Promise<void>;
+}
+
+export interface TeamDesktopAllocator {
+  reserve(botId: string): Promise<TeamDesktopStatus>;
+  ensure(botId: string): Promise<TeamDesktopBinding>;
+  stop(botId: string): Promise<TeamDesktopStatus>;
+  release(botId: string): Promise<void>;
+  status(botId: string): Promise<TeamDesktopStatus | null>;
+  resolve(botId: string): Promise<TeamDesktopBinding | undefined>;
+  reconcile(): Promise<void>;
+  reconcileIfDue(): Promise<void>;
+  syncMembership(memberBotIds: readonly string[]): Promise<void>;
+}
+
+export class TeamDesktopError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TeamDesktopError";
+  }
+}
+
+export class TeamDesktopExhaustedError extends TeamDesktopError {
+  constructor() {
+    super("No free Team desktop in 101-150.");
+    this.name = "TeamDesktopExhaustedError";
+  }
+}
+
+export class TeamDesktopLimitError extends TeamDesktopError {
+  constructor(maxRunning: number) {
+    super(
+      `Team desktop limit reached (${maxRunning} running). No idle desktop is available to stop.`,
+    );
+    this.name = "TeamDesktopLimitError";
+  }
+}
+
+export class TeamDesktopMissingError extends TeamDesktopError {
+  constructor(botId: string) {
+    super(`No Team desktop is reserved for ${botId}.`);
+    this.name = "TeamDesktopMissingError";
+  }
+}
+
+export class TeamDesktopConflictError extends Error {
+  constructor() {
+    super("team desktop unique conflict");
+    this.name = "TeamDesktopConflictError";
+  }
+}
+
+export function assertTeamDesktopIndex(displayIndex: number): void {
+  if (
+    !Number.isInteger(displayIndex) ||
+    displayIndex < TEAM_DESKTOP_MIN_INDEX ||
+    displayIndex > TEAM_DESKTOP_MAX_INDEX
+  ) {
+    throw new TeamDesktopError(`Team desktop index ${displayIndex} is outside 101-150.`);
+  }
+}
+
+export function teamDesktopPorts(displayIndex: number): {
+  cdp: number;
+  exec: number;
+  vnc: number;
+  pty: number;
+} {
+  assertTeamDesktopIndex(displayIndex);
+  return {
+    cdp: 9222 + displayIndex,
+    exec: 14000 + displayIndex,
+    vnc: 5900 + displayIndex,
+    pty: 13600 + displayIndex,
+  };
+}
+
+/** Viewer for display N. The query value is the index, not the owner token. */
+export function teamDesktopViewerUrl(displayIndex: number): string {
+  assertTeamDesktopIndex(displayIndex);
+  return `http://127.0.0.1:6081?token=${displayIndex}`;
+}
+
+/**
+ * `/tmp` names that belong to display N: colon leftovers (`:101` but not `:1010`
+ * or `:10`) plus the X lock and socket file names.
+ */
+export function isTeamDesktopTmpLeftover(name: string, displayIndex: number): boolean {
+  if (!Number.isInteger(displayIndex) || displayIndex < 101 || displayIndex > 150) return false;
+  if (name === `.X${displayIndex}-lock` || name === `X${displayIndex}`) return true;
+  // `:101` matches; `:1010` and `:10` do not. The character before the colon may be a digit (`xfwm4:101`).
+  const pattern = new RegExp(`:${displayIndex}(?:[^0-9]|$)`);
+  return pattern.test(name);
+}
+
+/** Paths purge may delete for this index. Nothing outside 101–150, and not `/tmp` itself. */
+export function teamDesktopPurgePaths(displayIndex: number, tmpNames: readonly string[]): string[] {
+  assertTeamDesktopIndex(displayIndex);
+  const paths = new Set<string>([`/tmp/.X11-unix/X${displayIndex}`, `/tmp/.X${displayIndex}-lock`]);
+  for (const name of tmpNames) {
+    if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
+      continue;
+    }
+    if (isTeamDesktopTmpLeftover(name, displayIndex)) paths.add(`/tmp/${name}`);
+  }
+  for (const root of TEAM_DESKTOP_FORK_ROOTS) {
+    paths.add(`${root}/Fork-${displayIndex}`);
+  }
+  return [...paths];
+}
+
+export function teamBMemberBotIds(
+  groups: readonly { name: string; botIds: readonly string[] }[],
+): string[] {
+  const ids: string[] = [];
+  for (const group of groups) {
+    if (group.name.trim() !== TEAM_B_GROUP_NAME) continue;
+    ids.push(...group.botIds);
+  }
+  return [...new Set(ids)];
+}
+
+export function teamDesktopConfigFromEnv(source: NodeJS.ProcessEnv = process.env): {
+  idleMinutes: number;
+  reconcileSeconds: number;
+  maxRunning: number;
+} {
+  return {
+    idleMinutes: positiveInteger(
+      source.TEAM_DESKTOP_IDLE_MINUTES,
+      TEAM_DESKTOP_DEFAULT_IDLE_MINUTES,
+    ),
+    reconcileSeconds: positiveInteger(
+      source.TEAM_DESKTOP_RECONCILE_SECONDS,
+      TEAM_DESKTOP_DEFAULT_RECONCILE_SECONDS,
+    ),
+    maxRunning: positiveInteger(source.TEAM_DESKTOP_MAX_RUNNING, TEAM_DESKTOP_DEFAULT_MAX_RUNNING),
+  };
+}
+
+export function createTeamDesktopAllocator(options: {
+  store: TeamDesktopStore;
+  host: TeamDesktopHost;
+  idleMinutes?: number;
+  maxRunning?: number;
+  reconcileSeconds?: number;
+  ensureTimeoutMs?: number;
+  pollMs?: number;
+  now?: () => Date;
+  sleep?: (ms: number) => Promise<void>;
+}): TeamDesktopAllocator {
+  const idleMinutes = options.idleMinutes ?? TEAM_DESKTOP_DEFAULT_IDLE_MINUTES;
+  const maxRunning = options.maxRunning ?? TEAM_DESKTOP_DEFAULT_MAX_RUNNING;
+  const reconcileSeconds = options.reconcileSeconds ?? TEAM_DESKTOP_DEFAULT_RECONCILE_SECONDS;
+  const ensureTimeoutMs = options.ensureTimeoutMs ?? TEAM_DESKTOP_ENSURE_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? POLL_MS;
+  const now = options.now ?? (() => new Date());
+  const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const store = options.store;
+  const host = options.host;
+  let tail: Promise<unknown> = Promise.resolve();
+  let lastReconcileAt = 0;
+
+  function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = tail.then(fn, fn);
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  function idleCutoff(): number {
+    return now().getTime() - idleMinutes * 60_000;
+  }
+
+  function isIdle(row: TeamDesktopRecord): boolean {
+    return (row.lastUsedAt?.getTime() ?? 0) <= idleCutoff();
+  }
+
+  return {
+    reserve(botId) {
+      return exclusive(() => reserveBody(botId));
+    },
+    ensure(botId) {
+      return exclusive(() => ensureBody(botId));
+    },
+    stop(botId) {
+      return exclusive(async () => {
+        const status = await stopBody(botId);
+        if (!status) throw new TeamDesktopMissingError(botId);
+        return status;
+      });
+    },
+    release(botId) {
+      return exclusive(() => releaseBody(botId));
+    },
+    status(botId) {
+      return store.getByBot(botId).then((row) => (row ? toStatus(row) : null));
+    },
+    async resolve(botId) {
+      const row = await store.getByBot(botId);
+      if (!row || row.state === "releasing") return undefined;
+      return { displayIndex: row.displayIndex, ownerToken: row.ownerToken };
+    },
+    reconcile() {
+      return exclusive(() => reconcileBody());
+    },
+    reconcileIfDue() {
+      return exclusive(async () => {
+        const due = now().getTime() - lastReconcileAt >= reconcileSeconds * 1000;
+        if (!due) return;
+        await reconcileBody();
+      });
+    },
+    syncMembership(memberBotIds) {
+      return exclusive(() => syncBody(memberBotIds));
+    },
+  };
+
+  async function reserveBody(botId: string): Promise<TeamDesktopStatus> {
+    const existing = await store.getByBot(botId);
+    if (existing) return toStatus(existing);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const displayIndex = await pickIndex();
+      const ownerToken = randomBytes(32).toString("base64url");
+      const createdAt = now();
+      try {
+        await store.insert({
+          botId,
+          displayIndex,
+          ownerToken,
+          state: "reserved",
+          lastUsedAt: null,
+          createdAt,
+          updatedAt: createdAt,
+        });
+        getLogger().info("team desktop reserved", { botId, displayIndex });
+        return {
+          botId,
+          displayIndex,
+          state: "reserved",
+          lastUsedAt: null,
+        };
+      } catch (error) {
+        if (!isUniqueConflict(error)) throw scrubbed(error, [ownerToken]);
+        const winner = await store.getByBot(botId);
+        if (winner) return toStatus(winner);
+      }
+    }
+    throw new TeamDesktopExhaustedError();
+  }
+
+  async function ensureBody(botId: string): Promise<TeamDesktopBinding> {
+    const row = await requireRow(botId);
+    if (row.state === "releasing") {
+      throw new TeamDesktopError("Team desktop is being released.");
+    }
+    await makeRoom(botId);
+    const current = await requireRow(botId);
+    if (!(await alive(current.displayIndex))) {
+      try {
+        await host.startWindow(current.displayIndex, current.ownerToken);
+      } catch (error) {
+        throw scrubbed(error, [current.ownerToken]);
+      }
+      const started = now().getTime();
+      while (!(await alive(current.displayIndex))) {
+        if (now().getTime() - started >= ensureTimeoutMs) {
+          throw new TeamDesktopError(`Team desktop ${current.displayIndex} did not become ready.`);
+        }
+        await sleep(pollMs);
+      }
+    }
+    const usedAt = now();
+    await store.update(botId, { state: "running", lastUsedAt: usedAt });
+    getLogger().info("team desktop running", { botId, displayIndex: current.displayIndex });
+    return { displayIndex: current.displayIndex, ownerToken: current.ownerToken };
+  }
+
+  async function makeRoom(botId: string): Promise<void> {
+    const rows = await store.list();
+    const self = rows.find((row) => row.botId === botId);
+    if (self?.state === "running") return;
+    while (true) {
+      const running = (await store.list()).filter(
+        (row) => row.state === "running" && row.botId !== botId,
+      );
+      if (running.length < maxRunning) return;
+      const idle = running
+        .filter((row) => isIdle(row))
+        .sort((a, b) => (a.lastUsedAt?.getTime() ?? 0) - (b.lastUsedAt?.getTime() ?? 0));
+      const victim = idle[0];
+      if (!victim) throw new TeamDesktopLimitError(maxRunning);
+      await stopBody(victim.botId);
+    }
+  }
+
+  async function markStopped(row: TeamDesktopRecord): Promise<void> {
+    try {
+      await host.stopWindow(row.displayIndex);
+    } catch (error) {
+      getLogger().error(
+        "team desktop stop for a dead window failed",
+        scrubbed(error, [row.ownerToken]),
+      );
+    }
+    try {
+      await host.purge(row.displayIndex);
+    } catch (error) {
+      getLogger().error(
+        "team desktop purge for a dead window failed",
+        scrubbed(error, [row.ownerToken]),
+      );
+    }
+    await store.update(row.botId, { state: "stopped" });
+    getLogger().info("team desktop stopped", { botId: row.botId, displayIndex: row.displayIndex });
+  }
+
+  async function stopBody(botId: string): Promise<TeamDesktopStatus | null> {
+    const row = await store.getByBot(botId);
+    if (!row) return null;
+    if (!inRange(row.displayIndex)) {
+      getLogger().error("team desktop row is outside 101-150", {
+        botId,
+        displayIndex: row.displayIndex,
+      });
+      return toStatus(row);
+    }
+    try {
+      await host.stopWindow(row.displayIndex);
+      await host.purge(row.displayIndex);
+    } catch (error) {
+      throw scrubbed(error, [row.ownerToken]);
+    }
+    await store.update(botId, { state: "stopped" });
+    getLogger().info("team desktop stopped", { botId, displayIndex: row.displayIndex });
+    return toStatus({ ...row, state: "stopped" });
+  }
+
+  async function releaseBody(botId: string): Promise<void> {
+    const row = await store.getByBot(botId);
+    if (!row) return;
+    await store.update(botId, { state: "releasing" });
+    if (inRange(row.displayIndex)) {
+      try {
+        await host.stopWindow(row.displayIndex);
+      } catch (error) {
+        getLogger().error(
+          "team desktop stop during release failed",
+          scrubbed(error, [row.ownerToken]),
+        );
+      }
+      try {
+        await host.purge(row.displayIndex);
+      } catch (error) {
+        getLogger().error(
+          "team desktop purge during release failed",
+          scrubbed(error, [row.ownerToken]),
+        );
+      }
+    }
+    await store.delete(botId);
+    getLogger().info("team desktop released", { botId, displayIndex: row.displayIndex });
+  }
+
+  async function syncBody(memberBotIds: readonly string[]): Promise<void> {
+    const wanted = new Set(memberBotIds);
+    const rows = await store.list();
+    for (const row of rows) {
+      if (!wanted.has(row.botId)) await releaseBody(row.botId);
+    }
+    const held = new Set((await store.list()).map((row) => row.botId));
+    for (const botId of wanted) {
+      if (!held.has(botId)) await reserveBody(botId);
+    }
+  }
+
+  async function reconcileBody(): Promise<void> {
+    lastReconcileAt = now().getTime();
+    const rows = await store.list();
+    const held = new Set<number>();
+    for (const row of rows) {
+      if (inRange(row.displayIndex)) held.add(row.displayIndex);
+    }
+    for (
+      let displayIndex = TEAM_DESKTOP_MIN_INDEX;
+      displayIndex <= TEAM_DESKTOP_MAX_INDEX;
+      displayIndex += 1
+    ) {
+      if (held.has(displayIndex)) continue;
+      if (!(await occupied(displayIndex))) continue;
+      try {
+        await host.stopWindow(displayIndex);
+        await host.purge(displayIndex);
+        getLogger().info("team desktop orphan reaped", { displayIndex });
+      } catch (error) {
+        getLogger().error("team desktop orphan reap failed", scrubbed(error, []));
+      }
+    }
+    const cutoff = idleCutoff();
+    for (const row of await store.list()) {
+      if (!inRange(row.displayIndex)) continue;
+      if (row.state === "releasing") {
+        await releaseBody(row.botId);
+        continue;
+      }
+      if (row.state !== "running") continue;
+      const live = await alive(row.displayIndex);
+      if (!live) {
+        await markStopped(row);
+        continue;
+      }
+      if ((row.lastUsedAt?.getTime() ?? 0) <= cutoff) await stopBody(row.botId);
+    }
+  }
+
+  async function pickIndex(): Promise<number> {
+    const held = new Set((await store.list()).map((row) => row.displayIndex));
+    for (
+      let displayIndex = TEAM_DESKTOP_MIN_INDEX;
+      displayIndex <= TEAM_DESKTOP_MAX_INDEX;
+      displayIndex += 1
+    ) {
+      if (held.has(displayIndex)) continue;
+      if (await host.xSocketExists(displayIndex)) continue;
+      if (await host.tokenFileExists(displayIndex)) continue;
+      const ports = teamDesktopPorts(displayIndex);
+      if (await host.portListening(ports.cdp)) continue;
+      if (await host.portListening(ports.exec)) continue;
+      if (await host.portListening(ports.vnc)) continue;
+      if (await host.portListening(ports.pty)) continue;
+      return displayIndex;
+    }
+    throw new TeamDesktopExhaustedError();
+  }
+
+  async function occupied(displayIndex: number): Promise<boolean> {
+    if (await host.xSocketExists(displayIndex)) return true;
+    if (await host.tokenFileExists(displayIndex)) return true;
+    return host.portListening(teamDesktopPorts(displayIndex).exec);
+  }
+
+  async function alive(displayIndex: number): Promise<boolean> {
+    try {
+      return await host.windowAlive(displayIndex);
+    } catch (error) {
+      getLogger().error("team desktop liveness check failed", scrubbed(error, []));
+      return false;
+    }
+  }
+
+  async function requireRow(botId: string): Promise<TeamDesktopRecord> {
+    const row = await store.getByBot(botId);
+    if (!row) throw new TeamDesktopMissingError(botId);
+    assertTeamDesktopIndex(row.displayIndex);
+    return row;
+  }
+}
+
+export function createPrismaTeamDesktopStore(prisma: PrismaClient): TeamDesktopStore {
+  return {
+    async getByBot(botId) {
+      const row = await prisma.teamDesktop.findUnique({ where: { botId } });
+      return row ? toRecord(row) : null;
+    },
+    async list() {
+      const rows = await prisma.teamDesktop.findMany();
+      return rows.map(toRecord);
+    },
+    async insert(row) {
+      try {
+        await prisma.teamDesktop.create({ data: row });
+      } catch (error) {
+        if (isUniqueConflict(error)) throw new TeamDesktopConflictError();
+        throw error;
+      }
+    },
+    async update(botId, patch) {
+      await prisma.teamDesktop.update({ where: { botId }, data: patch });
+    },
+    async delete(botId) {
+      await prisma.teamDesktop.deleteMany({ where: { botId } });
+    },
+  };
+}
+
+export async function listTeamBMemberBotIds(prisma: PrismaClient): Promise<string[]> {
+  const groups = await prisma.chatGroup.findMany({
+    where: { archivedAt: null, name: { contains: TEAM_B_GROUP_NAME } },
+    select: { name: true, members: { select: { botId: true } } },
+  });
+  return teamBMemberBotIds(
+    groups.map((group) => ({
+      name: group.name,
+      botIds: group.members.map((member) => member.botId),
+    })),
+  );
+}
+
+/** Reserve current Team B members and release everyone else. Does not start windows. */
+export async function syncTeamBDesktops(
+  prisma: PrismaClient,
+  desktops: Pick<TeamDesktopAllocator, "syncMembership">,
+): Promise<void> {
+  await desktops.syncMembership(await listTeamBMemberBotIds(prisma));
+}
+
+function toStatus(row: TeamDesktopRecord): TeamDesktopStatus {
+  return {
+    botId: row.botId,
+    displayIndex: row.displayIndex,
+    state: row.state,
+    lastUsedAt: row.lastUsedAt ? row.lastUsedAt.toISOString() : null,
+  };
+}
+
+function toRecord(row: {
+  botId: string;
+  displayIndex: number;
+  ownerToken: string;
+  state: string;
+  lastUsedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): TeamDesktopRecord {
+  return {
+    botId: row.botId,
+    displayIndex: row.displayIndex,
+    ownerToken: row.ownerToken,
+    state: parseState(row.state),
+    lastUsedAt: row.lastUsedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function parseState(state: string): TeamDesktopState {
+  if (state === "reserved" || state === "running" || state === "stopped" || state === "releasing") {
+    return state;
+  }
+  throw new TeamDesktopError("Team desktop state is invalid.");
+}
+
+function inRange(displayIndex: number): boolean {
+  return displayIndex >= TEAM_DESKTOP_MIN_INDEX && displayIndex <= TEAM_DESKTOP_MAX_INDEX;
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value?.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isUniqueConflict(error: unknown): boolean {
+  return (
+    error instanceof TeamDesktopConflictError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "P2002")
+  );
+}
+
+function scrubbed(error: unknown, secrets: readonly string[]): Error {
+  const message = error instanceof Error ? error.message : "team desktop operation failed";
+  const wrapped = new TeamDesktopError(scrubSecrets(message, secrets));
+  if (error instanceof Error && error.stack) {
+    wrapped.stack = scrubSecrets(error.stack, secrets);
+  }
+  return wrapped;
+}
+
+function scrubSecrets(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length < 8) continue;
+    out = out.split(secret).join("[redacted]");
+  }
+  return out;
+}

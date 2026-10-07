@@ -2,6 +2,7 @@ import {
   resolveCloudAgentProvider,
   resolveDeploymentModel,
   resolveSandboxProvider,
+  teamDesktopConfigFromEnv,
 } from "@rakazo/adapters";
 import {
   resolveAuthSecret,
@@ -95,6 +96,12 @@ export interface AppEnv {
   updaterToken: string | undefined;
   /** Current application image tag; used for compose manual-upgrade command selection. */
   imageTag: string | undefined;
+  /** Stop a running Team B desktop after this many unused minutes. */
+  teamDesktopIdleMinutes: number;
+  /** How often the worker reaps orphan desktops in 101–150. */
+  teamDesktopReconcileSeconds: number;
+  /** Simultaneous running Team B desktops. The longest-idle one stops when this is exceeded. */
+  teamDesktopMaxRunning: number;
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
@@ -104,6 +111,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
   const deploymentModel = resolveDeploymentModel(source);
   const updaterUrl = optional(source.RAKAZO_UPDATER_URL);
   const updaterToken = optional(source.RAKAZO_UPDATER_TOKEN);
+  const teamDesktops = teamDesktopConfigFromEnv(source);
   return {
     nodeEnv: source.NODE_ENV ?? "",
     databaseUrl: required(source, "DATABASE_URL"),
@@ -183,6 +191,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     updaterUrl,
     updaterToken,
     imageTag: optional(source.RAKAZO_IMAGE_TAG),
+    teamDesktopIdleMinutes: teamDesktops.idleMinutes,
+    teamDesktopReconcileSeconds: teamDesktops.reconcileSeconds,
+    teamDesktopMaxRunning: teamDesktops.maxRunning,
   };
 }
 

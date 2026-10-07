@@ -35,6 +35,25 @@ describe("loadEnv", () => {
     expect(env.wakeupDriver).toBe("memory");
   });
 
+  it("defaults Team desktop idle, reconcile, and the running cap", () => {
+    const env = loadEnv(base);
+    expect(env.teamDesktopIdleMinutes).toBe(30);
+    expect(env.teamDesktopReconcileSeconds).toBe(120);
+    expect(env.teamDesktopMaxRunning).toBe(4);
+    expect(
+      loadEnv({
+        ...base,
+        TEAM_DESKTOP_IDLE_MINUTES: "5",
+        TEAM_DESKTOP_RECONCILE_SECONDS: "30",
+        TEAM_DESKTOP_MAX_RUNNING: "2",
+      }),
+    ).toMatchObject({
+      teamDesktopIdleMinutes: 5,
+      teamDesktopReconcileSeconds: 30,
+      teamDesktopMaxRunning: 2,
+    });
+  });
+
   it("loads an optional hub directory signing key", () => {
     expect(loadEnv(base).hubDirectorySigningKey).toBeUndefined();
     expect(

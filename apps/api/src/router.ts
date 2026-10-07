@@ -28,6 +28,7 @@ import type {
   MemoryProviderResolver,
   PiOAuthLogins,
   RemoteConnectorDependencies,
+  TeamDesktopAllocator,
 } from "@rakazo/adapters";
 import {
   ackHubInbox,
@@ -100,6 +101,11 @@ import {
   selectDefaultCredentialId,
   serializeModelSecret,
   storeBotSecret,
+  syncTeamBDesktops,
+  TeamDesktopError,
+  TeamDesktopExhaustedError,
+  TeamDesktopLimitError,
+  TeamDesktopMissingError,
   takeoverLeaseMs,
   toComputerRef,
   touchRunningComputer,
@@ -569,6 +575,8 @@ export interface RouterDeps {
     integrationsCatalogUrl?: string;
     mcpAllowPrivateEndpoint?: boolean;
   };
+  /** Team B desktop allocator. Absent in router unit tests that do not allocate. */
+  teamDesktops?: TeamDesktopAllocator;
 }
 
 /** Bound for one provider sandbox destroy during Space deletion. Providers may
@@ -601,6 +609,33 @@ function mapSpaceLifecycleError(error: unknown): unknown {
     return new ORPCError("BAD_REQUEST", { message: error.message });
   }
   return error;
+}
+
+function mapTeamDesktopError(error: unknown): unknown {
+  if (error instanceof TeamDesktopMissingError) {
+    return new ORPCError("NOT_FOUND", { message: error.message });
+  }
+  if (
+    error instanceof TeamDesktopLimitError ||
+    error instanceof TeamDesktopExhaustedError ||
+    error instanceof TeamDesktopError
+  ) {
+    return new ORPCError("BAD_REQUEST", { message: error.message });
+  }
+  return error;
+}
+
+async function refreshTeamDesktops(deps: RouterDeps): Promise<void> {
+  if (!deps.teamDesktops) return;
+  await syncTeamBDesktops(deps.prisma, deps.teamDesktops);
+}
+
+async function ownedBotId(deps: RouterDeps, actor: Actor, botId: string): Promise<void> {
+  const bot = await deps.prisma.bot.findFirst({
+    where: { id: botId, spaceId: actor.spaceId, userId: actor.userId },
+    select: { id: true },
+  });
+  if (!bot) throw new IsolationError();
 }
 
 const BOT_SECRET_INPUT_ERRORS = [
@@ -1666,6 +1701,7 @@ export function createRouter(deps: RouterDeps) {
       }),
       remove: authed.bots.remove.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId, { includeArchived: true });
+        await deps.teamDesktops?.release(bot.id);
         await destroyBot(
           {
             prisma: deps.prisma,
@@ -1734,7 +1770,9 @@ export function createRouter(deps: RouterDeps) {
     groups: {
       create: authed.groups.create.handler(async ({ context, input }) => {
         try {
-          return await groupRepos.createGroup(context.actor, input);
+          const group = await groupRepos.createGroup(context.actor, input);
+          await refreshTeamDesktops(deps);
+          return group;
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
@@ -1781,6 +1819,7 @@ export function createRouter(deps: RouterDeps) {
           if (!section) throw new IsolationError();
         }
         const updated = await groupRepos.updateGroup(context.actor, input);
+        await refreshTeamDesktops(deps);
         await Promise.all(
           updated.cancelledRunIds.map((runId) =>
             deps.jobs.cancel(runJobKey(runId)).catch(() => undefined),
@@ -1826,10 +1865,12 @@ export function createRouter(deps: RouterDeps) {
         // Expire the leases only after teardown: while they were live, no other run could claim
         // these screens.
         await groupRepos.releaseArchivedRunLeases(archived.cancelledRunIds);
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       restore: authed.groups.restore.handler(async ({ context, input }) => {
         await groupRepos.restoreGroup(context.actor, input.groupId);
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       remove: authed.groups.remove.handler(async ({ context, input }) => {
@@ -1846,7 +1887,40 @@ export function createRouter(deps: RouterDeps) {
           if (result.status === "rejected")
             getLogger().error("group artifact cleanup", result.reason);
         }
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
+      }),
+    },
+    teamDesktops: {
+      status: authed.teamDesktops.status.handler(async ({ context, input }) => {
+        await ownedBotId(deps, context.actor, input.botId);
+        if (!deps.teamDesktops) return null;
+        return deps.teamDesktops.status(input.botId);
+      }),
+      ensure: authed.teamDesktops.ensure.handler(async ({ context, input }) => {
+        await ownedBotId(deps, context.actor, input.botId);
+        if (!deps.teamDesktops) {
+          throw new ORPCError("BAD_REQUEST", { message: "Team desktops are not configured." });
+        }
+        try {
+          await deps.teamDesktops.ensure(input.botId);
+          const status = await deps.teamDesktops.status(input.botId);
+          if (!status) throw new TeamDesktopMissingError(input.botId);
+          return status;
+        } catch (error) {
+          throw mapTeamDesktopError(error);
+        }
+      }),
+      stop: authed.teamDesktops.stop.handler(async ({ context, input }) => {
+        await ownedBotId(deps, context.actor, input.botId);
+        if (!deps.teamDesktops) {
+          throw new ORPCError("BAD_REQUEST", { message: "Team desktops are not configured." });
+        }
+        try {
+          return await deps.teamDesktops.stop(input.botId);
+        } catch (error) {
+          throw mapTeamDesktopError(error);
+        }
       }),
     },
     botSections: {
@@ -1870,7 +1944,7 @@ export function createRouter(deps: RouterDeps) {
     hub: {
       syncMembers: authed.hub.syncMembers.handler(async ({ context, input }) => {
         try {
-          return await syncHubMembers(
+          const synced = await syncHubMembers(
             hubRosterStore(deps.prisma, repos, context.actor),
             input.members,
             {
@@ -1878,6 +1952,8 @@ export function createRouter(deps: RouterDeps) {
               signingKey: deps.env.hubDirectorySigningKey,
             },
           );
+          await refreshTeamDesktops(deps);
+          return synced;
         } catch (error) {
           if (error instanceof HubRosterError) {
             throw new ORPCError("BAD_REQUEST", { message: error.message });

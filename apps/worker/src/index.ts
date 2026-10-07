@@ -11,11 +11,14 @@ import {
   createCloudAgentConnection,
   createConnectorStack,
   createJobReconciler,
+  createLinuxTeamDesktopHost,
   createMessagingContextLoader,
   createPostgresReconciliationLeadership,
+  createPrismaTeamDesktopStore,
   createRunExecutor,
   createRunSandbox,
   createRunSecretWriter,
+  createTeamDesktopAllocator,
   createWebProvider,
   databaseCapacityBackoffMs,
   EncryptedSecretStore,
@@ -45,6 +48,8 @@ import {
   ScriptedAgentRuntime,
   SpaceMemoryProviderResolver,
   sandboxProviderOptionsFromEnv,
+  syncTeamBDesktops,
+  teamDesktopConfigFromEnv,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey, resolveSupervisorToken } from "@rakazo/core";
 import {
@@ -87,12 +92,22 @@ async function main() {
   // Same resolver the API uses, so both processes agree on provider, model and key.
   const { key: deploymentModelKey } = resolveDeploymentModel();
   const sandboxProvider = resolveSandboxProvider(process.env);
+  const teamDesktopEnv = teamDesktopConfigFromEnv(process.env);
+  const teamDesktops = createTeamDesktopAllocator({
+    store: createPrismaTeamDesktopStore(prisma),
+    host: createLinuxTeamDesktopHost(),
+    idleMinutes: teamDesktopEnv.idleMinutes,
+    maxRunning: teamDesktopEnv.maxRunning,
+    reconcileSeconds: teamDesktopEnv.reconcileSeconds,
+  });
+  await syncTeamBDesktops(prisma, teamDesktops);
   const sandbox = createRunSandbox(sandboxProvider, {
     ...sandboxProviderOptionsFromEnv(process.env),
     supervisorUrl: process.env.SANDBOX_SUPERVISOR_URL ?? "http://127.0.0.1:7091",
     supervisorToken: sandboxProvider === "docker" ? resolveSupervisorToken(process.env) : undefined,
     dataDir,
     prisma,
+    teamDesktops,
   });
   const allowPrivateEndpoint = process.env.MCP_ALLOW_PRIVATE_ENDPOINT === "true";
   const mcpOAuth = new McpOAuthBroker(prisma, secrets, {}, allowPrivateEndpoint);
@@ -247,6 +262,7 @@ async function main() {
     leadership: createPostgresReconciliationLeadership(pool),
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+    reconcileTeamDesktops: () => teamDesktops.reconcileIfDue(),
   });
   reconciler.start();
 

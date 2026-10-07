@@ -1,13 +1,22 @@
 import type { ProcessEvent } from "@rakazo/adapter-kit";
 import { SandDisplayForbiddenError, sandScreenSelectsForbiddenDisplay } from "./sand-seat.js";
+import { TEAM_DESKTOP_ROUTER_URL, teamDesktopViewerUrl } from "./team-desktop.js";
 
 /**
  * Header the sand-host router is assumed to use when it picks an agent's
- * exec-daemon. Discard this if the live router selects the agent another way.
+ * exec-daemon. The router ignores this header. Team desktops send
+ * `x-sand-display` and `x-sand-window-owner` instead.
  * This client does not call createAgent or ensureForeverBox.
  */
 export const SAND_AGENT_HEADER = "x-sand-agent-id";
+export const SAND_DISPLAY_HEADER = "x-sand-display";
+export const SAND_WINDOW_OWNER_HEADER = "x-sand-window-owner";
 export const SAND_HOST_DEFAULT_URL = "http://127.0.0.1:1339";
+
+export interface SandWindowRoute {
+  displayIndex: number;
+  ownerToken: string;
+}
 
 const BLOCKED_EXEC_ENV = new Set(["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"]);
 
@@ -140,16 +149,34 @@ export class ConnectSandHost implements SandHost {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
   private readonly fetchImpl: typeof fetch;
+  private readonly display: SandWindowRoute | undefined;
   private nextId = 1;
 
-  constructor(opts: { baseUrl?: string; token?: string; fetch?: typeof fetch } = {}) {
-    this.baseUrl = sandHostBaseUrl(opts.baseUrl);
+  constructor(
+    opts: {
+      baseUrl?: string;
+      token?: string;
+      fetch?: typeof fetch;
+      display?: SandWindowRoute;
+    } = {},
+  ) {
+    this.display = opts.display;
+    this.baseUrl = opts.display ? TEAM_DESKTOP_ROUTER_URL : sandHostBaseUrl(opts.baseUrl);
     this.token = opts.token?.trim() || undefined;
     this.fetchImpl = opts.fetch ?? fetch;
   }
 
+  /** Same bearer and fetch, forced onto the display router. */
+  withDisplay(display: SandWindowRoute): ConnectSandHost {
+    return new ConnectSandHost({
+      token: this.token,
+      fetch: this.fetchImpl,
+      display,
+    });
+  }
+
   screenUrl(_agentId: string): string | null {
-    return null;
+    return this.display ? teamDesktopViewerUrl(this.display.displayIndex) : null;
   }
 
   async capabilities(agentId: string, signal: AbortSignal) {
@@ -311,8 +338,13 @@ export class ConnectSandHost implements SandHost {
     const headers: Record<string, string> = {
       "content-type": contentType,
       "connect-protocol-version": "1",
-      [SAND_AGENT_HEADER]: agentId,
     };
+    if (this.display) {
+      headers[SAND_DISPLAY_HEADER] = String(this.display.displayIndex);
+      headers[SAND_WINDOW_OWNER_HEADER] = this.display.ownerToken;
+    } else {
+      headers[SAND_AGENT_HEADER] = agentId;
+    }
     if (this.token) headers.authorization = `Bearer ${this.token}`;
     let response: Response;
     try {
@@ -324,7 +356,7 @@ export class ConnectSandHost implements SandHost {
         signal,
       });
     } catch (error) {
-      throw scrubToken(error, this.token);
+      throw scrubToken(error, this.token, this.display?.ownerToken);
     }
     if (!response.ok) {
       if (response.status === 400 && (await responseSaysDirectory(response))) {
@@ -341,9 +373,10 @@ async function responseSaysDirectory(response: Response): Promise<boolean> {
   return /EISDIR|is a directory/i.test(text.slice(0, 500));
 }
 
-function scrubToken(error: unknown, token: string | undefined): Error {
+function scrubToken(error: unknown, ...secrets: Array<string | undefined>): Error {
   if (!(error instanceof Error)) return new Error("sand host request failed");
-  if (token && error.message.includes(token)) return new Error("sand host request failed");
+  const hidden = secrets.some((secret) => secret && error.message.includes(secret));
+  if (hidden) return new Error("sand host request failed");
   return error;
 }
 

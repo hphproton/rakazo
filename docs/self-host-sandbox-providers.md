@@ -67,9 +67,12 @@ type, key, scroll, and wait. `focus`, `open_path`, and `launch_app` are refused.
 There is no pty, snapshot, takeover, extra screen, or page browser. A directory
 is listed or skipped; it is not passed to ReadBinaryFile.
 
-`SAND_HOST_TOKEN` is an optional bearer for that router. The agent selector
-header is `x-sand-agent-id`. Replace that header if the live router picks the
-agent another way.
+`SAND_HOST_TOKEN` is an optional bearer. A bot with no Team desktop row still
+sends `x-sand-agent-id` to `SAND_HOST_URL`. The router ignores that header. A
+bot with a Team desktop row is sent to `http://127.0.0.1:1339` with
+`x-sand-display` and `x-sand-window-owner`, including when `SAND_HOST_URL`
+points at one exec daemon. Its viewer is `http://127.0.0.1:6081?token=N`,
+where N is the display index.
 
 ## `none`
 

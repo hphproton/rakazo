@@ -12,6 +12,8 @@ import {
   ConnectSandHost,
   isDirectoryReadError,
   SAND_AGENT_HEADER,
+  SAND_DISPLAY_HEADER,
+  SAND_WINDOW_OWNER_HEADER,
   SandHostError,
   SandPathIsDirectoryError,
   sandHostBaseUrl,
@@ -710,6 +712,95 @@ describe("sand host router", () => {
     await expect(host.capabilities(AGENT_A, ctx.signal)).rejects.toThrow(
       "sand host request failed",
     );
+  });
+
+  it("sends a Team desktop through the router and leaves a bot without a row on the seat map", async () => {
+    const urls: string[] = [];
+    const seen: Array<Record<string, string | null>> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+      const headers = new Headers(init?.headers);
+      seen.push({
+        display: headers.get(SAND_DISPLAY_HEADER),
+        owner: headers.get(SAND_WINDOW_OWNER_HEADER),
+        agent: headers.get(SAND_AGENT_HEADER),
+        authorization: headers.get("authorization"),
+      });
+      if (url.endsWith("/agent.v1.ControlService/Exec")) {
+        return new Response(
+          Buffer.concat([
+            frame(0, { stdoutEvent: { data: "ok\n" } }),
+            frame(0, { exitEvent: { exitCode: 0 } }),
+            frame(2, {}),
+          ]),
+        );
+      }
+      return new Response("no", { status: 404 });
+    });
+    const ownerToken = "fixture-owner-token";
+    let ensured = 0;
+    const sandbox = new SandSandboxProvider({
+      policy: new FixedSeatPolicy({ "bot-a": AGENT_A, "bot-b": AGENT_B }),
+      host: new ConnectSandHost({
+        baseUrl: "http://127.0.0.1:14020",
+        token: "test-sand-token",
+        fetch: fetchMock,
+      }),
+      teamDesktops: {
+        async resolve(botId) {
+          if (botId !== "bot-a") return undefined;
+          return { displayIndex: 121, ownerToken };
+        },
+        async ensure(botId) {
+          ensured += 1;
+          expect(botId).toBe("bot-a");
+          return { displayIndex: 121, ownerToken };
+        },
+      },
+    });
+    const team = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    expect(team.providerRef).toBe(AGENT_A);
+    expect(ensured).toBe(0);
+    const teamContext = { ...ctx, botId: "bot-a" };
+    for await (const event of sandbox.execute(
+      team,
+      { argv: ["echo", "desk"], cwd: SAND_WORKSPACE },
+      teamContext,
+    )) {
+      if (event.type === "exit") expect(event.code).toBe(0);
+    }
+    expect(ensured).toBe(1);
+    expect(urls[0]).toBe("http://127.0.0.1:1339/agent.v1.ControlService/Exec");
+    expect(urls.some((url) => url.includes("14020"))).toBe(false);
+    expect(seen[0]).toEqual({
+      display: "121",
+      owner: ownerToken,
+      agent: null,
+      authorization: "Bearer test-sand-token",
+    });
+    expect((await sandbox.connectScreen(team, { view: "stream" }, teamContext)).url).toBe(
+      "http://127.0.0.1:6081?token=121",
+    );
+    expect(ensured).toBe(1);
+
+    const seat = await sandbox.provision({ botId: "bot-b", homePath: "/tmp" }, ctx);
+    expect(seat.providerRef).toBe(AGENT_B);
+    for await (const event of sandbox.execute(
+      seat,
+      { argv: ["echo", "seat"], cwd: SAND_WORKSPACE },
+      { ...ctx, botId: "bot-b" },
+    )) {
+      if (event.type === "exit") expect(event.code).toBe(0);
+    }
+    expect(ensured).toBe(1);
+    expect(urls.at(-1)).toBe("http://127.0.0.1:14020/agent.v1.ControlService/Exec");
+    expect(seen.at(-1)).toEqual({
+      display: null,
+      owner: null,
+      agent: AGENT_B,
+      authorization: "Bearer test-sand-token",
+    });
   });
 });
 
