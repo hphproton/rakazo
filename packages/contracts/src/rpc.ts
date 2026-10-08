@@ -107,6 +107,13 @@ import { RoutineHistorySchema, RoutineRunCursorSchema, RunsListOutputSchema } fr
 import { SearchQueryOutputSchema } from "./search.js";
 
 const botId = z.object({ botId: Id });
+
+const TeamDesktopStatusSchema = z.object({
+  botId: Id,
+  displayIndex: z.number().int().min(101).max(150),
+  state: z.enum(["reserved", "running", "stopped", "releasing"]),
+  lastUsedAt: z.string().nullable(),
+});
 const groupId = z.object({ groupId: Id });
 
 const threadTarget = z
@@ -947,6 +954,15 @@ export const appContract = {
     remove: oc
       .input(z.object({ botId: Id, name: StoredBotSecretName }))
       .output(z.object({ ok: z.literal(true) })),
+  },
+  /**
+   * Internal Team B desktop controls. No owner token is returned.
+   * The stop-desktop UI stays parked.
+   */
+  teamDesktops: {
+    status: oc.input(botId).output(TeamDesktopStatusSchema.nullable()),
+    ensure: oc.input(botId).output(TeamDesktopStatusSchema),
+    stop: oc.input(botId).output(TeamDesktopStatusSchema),
   },
 };
 

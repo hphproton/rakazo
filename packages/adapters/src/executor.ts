@@ -347,6 +347,7 @@ import {
 } from "./takeover-resume.js";
 import { TASK_CATALOG_GUIDANCE, taskCatalogFromTool } from "./task-catalog.js";
 import { getActiveTeachingSession, parsePlaybook } from "./teaching-session.js";
+import { teamDesktopCapacityMessage } from "./team-desktop.js";
 import {
   attachWorkspaceFileToThread,
   currentTurnFilesInstruction,
@@ -2610,6 +2611,8 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   path: filePath,
                 };
               }
+              const capacity = teamDesktopCapacityMessage(error);
+              if (capacity) return { error: redactSecrets(capacity, runSecrets), path: filePath };
               throw error;
             }
             if (bytes.byteLength > MAX_MODEL_FILE_BYTES) {
@@ -2647,9 +2650,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 context,
               );
             } catch (error) {
-              await recordComputerAction("write_file", filePath, {
-                error: error instanceof Error ? error.message : "could not write file",
-              });
+              const capacity = teamDesktopCapacityMessage(error);
+              const message =
+                capacity ?? (error instanceof Error ? error.message : "could not write file");
+              await recordComputerAction("write_file", filePath, { error: message });
+              if (capacity) return { error: redactSecrets(capacity, runSecrets), path: filePath };
               throw error;
             }
             await recordComputerAction("write_file", filePath, { bytes: content.byteLength });

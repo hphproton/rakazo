@@ -28,6 +28,7 @@ import type {
   MemoryProviderResolver,
   PiOAuthLogins,
   RemoteConnectorDependencies,
+  TeamDesktopAllocator,
 } from "@rakazo/adapters";
 import {
   ackHubInbox,
@@ -100,6 +101,11 @@ import {
   selectDefaultCredentialId,
   serializeModelSecret,
   storeBotSecret,
+  syncTeamBDesktops,
+  TeamDesktopError,
+  TeamDesktopExhaustedError,
+  TeamDesktopLimitError,
+  TeamDesktopMissingError,
   takeoverLeaseMs,
   toComputerRef,
   touchRunningComputer,
@@ -569,6 +575,8 @@ export interface RouterDeps {
     integrationsCatalogUrl?: string;
     mcpAllowPrivateEndpoint?: boolean;
   };
+  /** Team B desktop allocator. Absent in router unit tests that do not allocate. */
+  teamDesktops?: TeamDesktopAllocator;
 }
 
 /** Bound for one provider sandbox destroy during Space deletion. Providers may
@@ -601,6 +609,37 @@ function mapSpaceLifecycleError(error: unknown): unknown {
     return new ORPCError("BAD_REQUEST", { message: error.message });
   }
   return error;
+}
+
+function mapTeamDesktopError(error: unknown): unknown {
+  if (error instanceof TeamDesktopMissingError) {
+    return new ORPCError("NOT_FOUND", { message: error.message });
+  }
+  if (
+    error instanceof TeamDesktopLimitError ||
+    error instanceof TeamDesktopExhaustedError ||
+    error instanceof TeamDesktopError
+  ) {
+    return new ORPCError("BAD_REQUEST", { message: error.message });
+  }
+  return error;
+}
+
+async function refreshTeamDesktops(deps: RouterDeps): Promise<void> {
+  if (!deps.teamDesktops) return;
+  try {
+    await syncTeamBDesktops(deps.prisma, deps.teamDesktops);
+  } catch (error) {
+    getLogger().error("team desktop membership sync failed", error);
+  }
+}
+
+async function ownedBotId(deps: RouterDeps, actor: Actor, botId: string): Promise<void> {
+  const bot = await deps.prisma.bot.findFirst({
+    where: { id: botId, spaceId: actor.spaceId, userId: actor.userId },
+    select: { id: true },
+  });
+  if (!bot) throw new IsolationError();
 }
 
 const BOT_SECRET_INPUT_ERRORS = [
@@ -1379,6 +1418,7 @@ export function createRouter(deps: RouterDeps) {
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
+        await refreshTeamDesktops(deps);
         await enqueueBotIntroRun(deps, context.actor, bot).catch((error) => {
           getLogger().error("bot intro run enqueue", error);
         });
@@ -1421,6 +1461,7 @@ export function createRouter(deps: RouterDeps) {
             })),
           });
         }
+        await refreshTeamDesktops(deps);
         return duplicate;
       }),
       reorder: authed.bots.reorder.handler(async ({ context, input }) => {
@@ -1571,7 +1612,9 @@ export function createRouter(deps: RouterDeps) {
         const currentMode = bot.computer.scope === "dedicated" ? "dedicated" : "team";
         if (currentMode === input.mode) {
           try {
-            return await repos.setBotComputer(context.actor, bot.id, input.mode);
+            const updated = await repos.setBotComputer(context.actor, bot.id, input.mode);
+            await refreshTeamDesktops(deps);
+            return updated;
           } catch (error) {
             throw mapSpaceLifecycleError(error);
           }
@@ -1620,7 +1663,9 @@ export function createRouter(deps: RouterDeps) {
               },
             });
           }
-          return await repos.setBotComputer(context.actor, bot.id, input.mode);
+          const updated = await repos.setBotComputer(context.actor, bot.id, input.mode);
+          await refreshTeamDesktops(deps);
+          return updated;
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         } finally {
@@ -1644,6 +1689,7 @@ export function createRouter(deps: RouterDeps) {
           bot,
           computerContext(context.actor, bot.id, "archive"),
         );
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       restore: authed.bots.restore.handler(async ({ context, input }) => {
@@ -1662,10 +1708,19 @@ export function createRouter(deps: RouterDeps) {
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       remove: authed.bots.remove.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId, { includeArchived: true });
+        // Release before destroy. Deleting the bot cascades the desktop row and would skip stop and purge.
+        if (deps.teamDesktops) {
+          try {
+            await deps.teamDesktops.release(bot.id);
+          } catch (error) {
+            getLogger().error("team desktop release before bot remove failed", error);
+          }
+        }
         await destroyBot(
           {
             prisma: deps.prisma,
@@ -1686,6 +1741,7 @@ export function createRouter(deps: RouterDeps) {
           },
           { deleteMemories: input.deleteMemories },
         );
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       rotateWebhookSecret: authed.bots.rotateWebhookSecret.handler(async ({ context, input }) => {
@@ -1734,7 +1790,8 @@ export function createRouter(deps: RouterDeps) {
     groups: {
       create: authed.groups.create.handler(async ({ context, input }) => {
         try {
-          return await groupRepos.createGroup(context.actor, input);
+          const group = await groupRepos.createGroup(context.actor, input);
+          return group;
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
@@ -1849,6 +1906,38 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
     },
+    teamDesktops: {
+      status: authed.teamDesktops.status.handler(async ({ context, input }) => {
+        await ownedBotId(deps, context.actor, input.botId);
+        if (!deps.teamDesktops) return null;
+        return deps.teamDesktops.status(input.botId);
+      }),
+      ensure: authed.teamDesktops.ensure.handler(async ({ context, input }) => {
+        await ownedBotId(deps, context.actor, input.botId);
+        if (!deps.teamDesktops) {
+          throw new ORPCError("BAD_REQUEST", { message: "Team desktops are not configured." });
+        }
+        try {
+          await deps.teamDesktops.ensure(input.botId);
+          const status = await deps.teamDesktops.status(input.botId);
+          if (!status) throw new TeamDesktopMissingError(input.botId);
+          return status;
+        } catch (error) {
+          throw mapTeamDesktopError(error);
+        }
+      }),
+      stop: authed.teamDesktops.stop.handler(async ({ context, input }) => {
+        await ownedBotId(deps, context.actor, input.botId);
+        if (!deps.teamDesktops) {
+          throw new ORPCError("BAD_REQUEST", { message: "Team desktops are not configured." });
+        }
+        try {
+          return await deps.teamDesktops.stop(input.botId);
+        } catch (error) {
+          throw mapTeamDesktopError(error);
+        }
+      }),
+    },
     botSections: {
       list: authed.botSections.list.handler(async ({ context }) =>
         repos.listBotSections(context.actor),
@@ -1870,7 +1959,7 @@ export function createRouter(deps: RouterDeps) {
     hub: {
       syncMembers: authed.hub.syncMembers.handler(async ({ context, input }) => {
         try {
-          return await syncHubMembers(
+          const synced = await syncHubMembers(
             hubRosterStore(deps.prisma, repos, context.actor),
             input.members,
             {
@@ -1878,6 +1967,8 @@ export function createRouter(deps: RouterDeps) {
               signingKey: deps.env.hubDirectorySigningKey,
             },
           );
+          await refreshTeamDesktops(deps);
+          return synced;
         } catch (error) {
           if (error instanceof HubRosterError) {
             throw new ORPCError("BAD_REQUEST", { message: error.message });

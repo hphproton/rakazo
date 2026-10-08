@@ -7,6 +7,7 @@ import {
 } from "./computer-screens.js";
 import { ManagedSandboxEmulator } from "./e2b-emulator.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
+import { TeamDesktopExhaustedError, TeamDesktopLimitError } from "./team-desktop.js";
 
 const writer = {
   operationId: "1",
@@ -112,6 +113,26 @@ describe("Team Computer parallel screens", () => {
       }),
     ).resolves.toEqual({ error: expect.stringMatching(/temporarily busy/) });
     expect(isComputerScreenUnavailable(new Error("cannot allocate another screen"))).toBe(true);
+  });
+
+  it("returns team desktop exhaustion and the running cap as tool output", async () => {
+    await expect(
+      withComputerScreenAvailability(async () => {
+        throw new TeamDesktopExhaustedError();
+      }),
+    ).resolves.toEqual({ error: "No free Team desktop in 101-150." });
+    await expect(
+      withComputerScreenAvailability(async () => {
+        throw new TeamDesktopLimitError(4);
+      }),
+    ).resolves.toEqual({
+      error: "Team desktop limit reached (4 running). No idle desktop is available to stop.",
+    });
+    await expect(
+      withComputerScreenAvailability(async () => {
+        throw new Error("disk failed");
+      }),
+    ).rejects.toThrow("disk failed");
   });
 
   it("lets Team bots use independent emulator screens concurrently", async () => {

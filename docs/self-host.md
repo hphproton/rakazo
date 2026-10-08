@@ -32,7 +32,7 @@ run `bash install-images.sh`. Flags may be combined in either order: `--prepare-
 (from the app image, on the internal network only) and pulls `ghcr.io/elie222/rakazo/computer`.
 Signup and local Docker computers work without an E2B account. Optional remote providers: set
 `SANDBOX_PROVIDER` to `e2b`, `daytona`, `createos`, or `box` and add the matching API key.
-`sand` talks to the sand-host router instead. `SANDBOX_SAND_SEAT_MAP` maps a bot id or a team home key (`team-` plus the space id) to an existing sand agent UUID; unmapped ids are refused. The published-images
+`sand` talks to the sand-host router instead. `SANDBOX_SAND_SEAT_MAP` maps a bot id or a team home key (`team-` plus the space id) to an existing sand agent UUID; unmapped ids are refused at provision. When the provider is `sand`, a non-archived bot on a team-scoped computer, other than a Hub roster mirror, uses display 101–150 on `http://127.0.0.1:1339` for hands, shell, and files. A full band leaves the extra bots without a row. Other providers do not allocate. The published-images
 Compose stack requires `SANDBOX_SUPERVISOR_TOKEN` for every provider; leave it empty and `compose up` fails closed.
 
 Optional: set `OPENROUTER_API_KEY` or connect a model in the UI after signup.

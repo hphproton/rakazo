@@ -26,11 +26,14 @@ import {
   createCloudAgentConnection,
   createConnectorStack,
   createJobReconciler,
+  createLinuxTeamDesktopHost,
   createMessagingContextLoader,
   createMessagingTeamChatSender,
+  createPrismaTeamDesktopStore,
   createRunExecutor,
   createRunSandbox,
   createRunSecretWriter,
+  createTeamDesktopAllocator,
   createWebProvider,
   destroyBot,
   EmailEmulator,
@@ -46,6 +49,7 @@ import {
   isPipedreamEnabled,
   LocalAgentHomeStore,
   LocalArtifactStore,
+  listTeamBMemberBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingPlatformsFromEnv,
@@ -63,6 +67,8 @@ import {
   SmtpEmailProvider,
   SpaceMemoryProviderResolver,
   sandboxProviderOptionsFromEnv,
+  syncTeamBDesktops,
+  teamDesktopAllocatorForProvider,
   toTeamChatInbound,
 } from "@rakazo/adapters";
 import { createAuth, isBlockedAuthPath, loopbackTwinOrigins } from "@rakazo/auth";
@@ -247,6 +253,23 @@ export async function createApp(
             throw new Error("Graphile job publisher requires a PostgreSQL pool");
           })(),
       );
+  const teamDesktops = teamDesktopAllocatorForProvider(env.sandboxProvider, () =>
+    createTeamDesktopAllocator({
+      store: createPrismaTeamDesktopStore(prisma),
+      host: createLinuxTeamDesktopHost(),
+      idleMinutes: env.teamDesktopIdleMinutes,
+      maxRunning: env.teamDesktopMaxRunning,
+      reconcileSeconds: env.teamDesktopReconcileSeconds,
+      members: () => listTeamBMemberBotIds(prisma),
+    }),
+  );
+  if (teamDesktops) {
+    try {
+      await syncTeamBDesktops(prisma, teamDesktops);
+    } catch (error) {
+      logger.error("team desktop membership sync failed", error);
+    }
+  }
   const sandbox: SandboxProvider =
     sandboxOverride ??
     createRunSandbox(env.sandboxProvider, {
@@ -261,6 +284,7 @@ export async function createApp(
       boxApiUrl: env.boxApiUrl,
       dataDir: env.dataDir,
       prisma,
+      teamDesktops,
     });
   const mcpOAuth = new McpOAuthBroker(
     prisma,
@@ -462,6 +486,7 @@ export async function createApp(
         notifications,
         reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+        reconcileTeamDesktops: teamDesktops ? () => teamDesktops.reconcileIfDue() : undefined,
       })
     : undefined;
   reconciler?.start();
@@ -510,6 +535,7 @@ export async function createApp(
       integrationsCatalogUrl: env.integrationsCatalogUrl,
       mcpAllowPrivateEndpoint: env.mcpAllowPrivateEndpoint,
     },
+    teamDesktops,
   });
   const rpc = new RPCHandler(router, {
     clientInterceptors: [onError((error, { path }) => logUnexpectedRpcError(error, path))],

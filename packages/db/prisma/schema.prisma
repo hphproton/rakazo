@@ -398,6 +398,7 @@ model Bot {
   mcpServers        BotMcpServer[]
   groupMembers      ChatGroupMember[]
   botSecrets BotSecret[]
+  teamDesktop       TeamDesktop?
 
   externalConversations ExternalConversation[]
 
@@ -425,6 +426,21 @@ model BotSection {
   @@unique([spaceId, userId, name])
   @@index([spaceId, userId, position, createdAt])
   @@map("bot_sections")
+}
+
+/// One Grok Computer desktop for a Team B bot. `ownerToken` is a secret.
+model TeamDesktop {
+  botId        String   @id
+  bot          Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  displayIndex Int      @unique
+  ownerToken   String
+  state        String
+  lastUsedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([state, lastUsedAt])
+  @@map("team_desktops")
 }
 
 model BotDeletion {

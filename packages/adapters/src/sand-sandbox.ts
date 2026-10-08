@@ -23,6 +23,7 @@ import {
 import { SAND_HAND_REFUSAL, sandHandRefuses } from "./sand-hand.js";
 import type { SandComputerAction, SandDirectoryEntry, SandHost } from "./sand-host.js";
 import {
+  ConnectSandHost,
   isDirectoryReadError,
   isSandListDirectoryDenied,
   SandHostError,
@@ -36,15 +37,24 @@ import {
   SandDisplayForbiddenError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import type { TeamDesktopBinding } from "./team-desktop.js";
+import { TeamDesktopMissingError, teamDesktopViewerUrl } from "./team-desktop.js";
 
 /** Shared pod workspace for every sand window. Not a Team B container home. */
 export const SAND_WORKSPACE = "/workspace";
+
+export interface TeamDesktopGateway {
+  resolve(botId: string): Promise<TeamDesktopBinding | undefined>;
+  ensure(botId: string): Promise<TeamDesktopBinding>;
+}
 
 export class SandSandboxProvider implements SandboxProvider {
   constructor(
     private readonly opts: {
       policy: SandSeatPolicy;
       host: SandHost;
+      /** Present when this process owns Team B desktop allocation. */
+      teamDesktops?: TeamDesktopGateway;
     },
   ) {}
 
@@ -97,7 +107,6 @@ export class SandSandboxProvider implements SandboxProvider {
     request: CommandRequest,
     context: AdapterContext,
   ): AsyncIterable<ProcessEvent> {
-    const seat = this.seat(computer, context);
     if (request.argv.length === 0) {
       yield { type: "stderr", data: "sand exec requires a command\n" };
       yield { type: "exit", code: 1 };
@@ -108,8 +117,9 @@ export class SandSandboxProvider implements SandboxProvider {
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = AbortSignal.any([context.signal, timeout]);
     try {
-      yield* this.opts.host.exec(
-        seat.agentId,
+      const route = await this.session(computer, context, true);
+      yield* route.host.exec(
+        route.agentId,
         { argv: request.argv, cwd, env: sandExecEnv(request.env), timeoutMs },
         signal,
       );
@@ -134,6 +144,12 @@ export class SandSandboxProvider implements SandboxProvider {
     _request: ScreenRequest,
     context: AdapterContext,
   ): Promise<ScreenSession> {
+    const binding = await this.desktopBinding(computer, context);
+    if (binding) {
+      const url = teamDesktopViewerUrl(binding.displayIndex);
+      if (sandScreenSelectsForbiddenDisplay(url)) throw new SandDisplayForbiddenError();
+      return { url, mimeType: "text/html", close: async () => undefined };
+    }
     const seat = this.seat(computer, context);
     const url = this.opts.host.screenUrl(seat.agentId);
     if (url && sandScreenSelectsForbiddenDisplay(url)) throw new SandDisplayForbiddenError();
@@ -146,14 +162,14 @@ export class SandSandboxProvider implements SandboxProvider {
     _lease: ControlLeaseRef,
     context: AdapterContext,
   ): Promise<void> {
-    const seat = this.seat(computer, context);
-    await this.opts.host.computerUse(seat.agentId, [toSandAction(input)], context.signal);
+    const route = await this.session(computer, context, true);
+    await route.host.computerUse(route.agentId, [toSandAction(input)], context.signal);
   }
 
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
-    const seat = this.seat(computer, context);
-    const result = await this.opts.host.computerUse(
-      seat.agentId,
+    const route = await this.session(computer, context, true);
+    const result = await route.host.computerUse(
+      route.agentId,
       [{ screenshot: {} }],
       context.signal,
     );
@@ -161,10 +177,10 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
-    const seat = this.seat(computer, context);
+    const route = await this.session(computer, context, true);
     const actions = boundedComputerActions(request.actions).map(toSandAction);
     const sent = request.observe === false ? actions : [...actions, { screenshot: {} }];
-    const result = await this.opts.host.computerUse(seat.agentId, sent, context.signal);
+    const result = await route.host.computerUse(route.agentId, sent, context.signal);
     return {
       completed: actions.length,
       ...(request.observe === false
@@ -178,9 +194,9 @@ export class SandSandboxProvider implements SandboxProvider {
     directory: string,
     context: AdapterContext,
   ): Promise<ComputerFileEntry[]> {
-    const seat = this.seat(computer, context);
+    const route = await this.session(computer, context, true);
     const absolute = sandWorkspacePath(directory);
-    const entries = await listSandDirectory(this.opts.host, seat.agentId, absolute, context.signal);
+    const entries = await listSandDirectory(route.host, route.agentId, absolute, context.signal);
     return entries.flatMap((entry) => {
       if (entry.type === "SYMLINK") return [];
       const child = entry.path.startsWith("/")
@@ -202,8 +218,13 @@ export class SandSandboxProvider implements SandboxProvider {
     context: AdapterContext,
     options?: { maxBytes?: number },
   ): Promise<Uint8Array> {
-    const seat = this.seat(computer, context);
-    const bytes = await this.readAbsolute(seat.agentId, sandWorkspacePath(path), context.signal);
+    const route = await this.session(computer, context, true);
+    const bytes = await this.readAbsolute(
+      route.host,
+      route.agentId,
+      sandWorkspacePath(path),
+      context.signal,
+    );
     if (options?.maxBytes !== undefined && bytes.byteLength > options.maxBytes) {
       throw new Error("file exceeds maxBytes");
     }
@@ -211,11 +232,11 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async writeFile(computer: ComputerRef, file: PortableFile, context: AdapterContext) {
-    const seat = this.seat(computer, context);
+    const route = await this.session(computer, context, true);
     const absolute = sandWorkspacePath(file.path);
-    await this.opts.host.writeFile(seat.agentId, absolute, file.content, context.signal);
+    await route.host.writeFile(route.agentId, absolute, file.content, context.signal);
     if (file.executable) {
-      await drainExec(this.opts.host, seat.agentId, ["chmod", "+x", absolute], context.signal);
+      await drainExec(route.host, route.agentId, ["chmod", "+x", absolute], context.signal);
     }
   }
 
@@ -223,14 +244,15 @@ export class SandSandboxProvider implements SandboxProvider {
     computer: ComputerRef,
     context: AdapterContext,
   ): AsyncIterable<PortableFile> {
-    const seat = this.seat(computer, context);
-    const files = await this.listTree(seat.agentId, SAND_WORKSPACE, context.signal);
+    const route = await this.session(computer, context, true);
+    const files = await this.listTree(route.host, route.agentId, SAND_WORKSPACE, context.signal);
     for (const file of files) {
       try {
         yield {
           path: file.path,
           content: await this.readAbsolute(
-            seat.agentId,
+            route.host,
+            route.agentId,
             sandWorkspacePath(file.path),
             context.signal,
           ),
@@ -262,12 +284,19 @@ export class SandSandboxProvider implements SandboxProvider {
 
   async destroy(_computer: ComputerRef, _context: AdapterContext): Promise<void> {}
 
-  private async readAbsolute(agentId: string, absolute: string, signal: AbortSignal) {
-    if (await this.pathIsDirectory(agentId, absolute, signal)) throw new SandPathIsDirectoryError();
+  private async readAbsolute(
+    host: SandHost,
+    agentId: string,
+    absolute: string,
+    signal: AbortSignal,
+  ) {
+    if (await this.pathIsDirectory(host, agentId, absolute, signal)) {
+      throw new SandPathIsDirectoryError();
+    }
     try {
-      return await this.opts.host.readFile(agentId, absolute, signal);
+      return await host.readFile(agentId, absolute, signal);
     } catch (error) {
-      if (await this.readFailedBecauseDirectory(agentId, absolute, signal, error)) {
+      if (await this.readFailedBecauseDirectory(host, agentId, absolute, signal, error)) {
         throw new SandPathIsDirectoryError();
       }
       throw error;
@@ -276,6 +305,7 @@ export class SandSandboxProvider implements SandboxProvider {
 
   /** A ReadBinaryFile 400 on a listable path is a directory, not a failed file read. */
   private async readFailedBecauseDirectory(
+    host: SandHost,
     agentId: string,
     absolute: string,
     signal: AbortSignal,
@@ -284,7 +314,7 @@ export class SandSandboxProvider implements SandboxProvider {
     if (isDirectoryReadError(error)) return true;
     if (!(error instanceof SandHostError) || error.status !== 400) return false;
     try {
-      await listSandDirectory(this.opts.host, agentId, absolute, signal);
+      await listSandDirectory(host, agentId, absolute, signal);
       return true;
     } catch {
       return false;
@@ -292,19 +322,69 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   /** A listed directory is not passed to ReadBinaryFile. */
-  private async pathIsDirectory(agentId: string, absolute: string, signal: AbortSignal) {
+  private async pathIsDirectory(
+    host: SandHost,
+    agentId: string,
+    absolute: string,
+    signal: AbortSignal,
+  ) {
     if (absolute === SAND_WORKSPACE) return true;
     const slash = absolute.lastIndexOf("/");
     const parent = absolute.slice(0, slash) || SAND_WORKSPACE;
     const name = absolute.slice(slash + 1);
     let entries: SandDirectoryEntry[];
     try {
-      entries = await listSandDirectory(this.opts.host, agentId, parent, signal);
+      entries = await listSandDirectory(host, agentId, parent, signal);
     } catch {
       return false;
     }
     const entry = entries.find((item) => item.name === name || item.path === absolute);
     return entry?.type === "DIRECTORY";
+  }
+
+  private async desktopBinding(
+    computer: ComputerRef,
+    context: AdapterContext,
+  ): Promise<TeamDesktopBinding | undefined> {
+    const gateway = this.opts.teamDesktops;
+    if (!gateway) return undefined;
+    return gateway.resolve(context.botId || computer.botId);
+  }
+
+  /**
+   * A wake for a team member reserves on demand and talks to the router.
+   * A missing desktop falls back to the seat map. Exhaustion stays on this call.
+   */
+  private async session(
+    computer: ComputerRef,
+    context: AdapterContext,
+    wake: boolean,
+  ): Promise<{ host: SandHost; agentId: string }> {
+    const gateway = this.opts.teamDesktops;
+    const botId = context.botId || computer.botId;
+    if (gateway && wake) {
+      try {
+        const binding = await gateway.ensure(botId);
+        const host =
+          this.opts.host instanceof ConnectSandHost
+            ? this.opts.host.withDisplay(binding)
+            : this.opts.host;
+        return { host, agentId: botId };
+      } catch (error) {
+        if (!(error instanceof TeamDesktopMissingError)) throw error;
+      }
+    } else if (gateway) {
+      const resolved = await gateway.resolve(botId);
+      if (resolved) {
+        const host =
+          this.opts.host instanceof ConnectSandHost
+            ? this.opts.host.withDisplay(resolved)
+            : this.opts.host;
+        return { host, agentId: botId };
+      }
+    }
+    const seat = this.seat(computer, context);
+    return { host: this.opts.host, agentId: seat.agentId };
   }
 
   private seat(computer: ComputerRef, context: AdapterContext) {
@@ -316,11 +396,12 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   private async listTree(
+    host: SandHost,
     agentId: string,
     directory: string,
     signal: AbortSignal,
   ): Promise<ComputerFileEntry[]> {
-    const entries = await listSandDirectory(this.opts.host, agentId, directory, signal);
+    const entries = await listSandDirectory(host, agentId, directory, signal);
     const files: ComputerFileEntry[] = [];
     for (const entry of entries) {
       if (entry.type === "SYMLINK") continue;
@@ -328,7 +409,7 @@ export class SandSandboxProvider implements SandboxProvider {
         ? sandWorkspacePath(entry.path)
         : sandWorkspacePath(`${directory}/${entry.name}`);
       if (entry.type === "DIRECTORY") {
-        files.push(...(await this.listTree(agentId, absolute, signal)));
+        files.push(...(await this.listTree(host, agentId, absolute, signal)));
         continue;
       }
       files.push({ path: workspaceRelative(absolute), kind: "file", size: entry.sizeBytes });

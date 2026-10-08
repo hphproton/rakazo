@@ -11,6 +11,7 @@ import { E2BSandboxProvider } from "./e2b-sandbox.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { NoneSandboxProvider } from "./none-sandbox.js";
 import { ConnectSandHost } from "./sand-host.js";
+import type { TeamDesktopGateway } from "./sand-sandbox.js";
 import { SandSandboxProvider } from "./sand-sandbox.js";
 import { sandSeatPolicyFromConfig } from "./sand-seat.js";
 
@@ -35,6 +36,8 @@ export interface SandboxProviderOptions {
    * or a path to a file that contains that object. Unset refuses every bot.
    */
   sandSeatMap?: string;
+  /** Team B desktop allocator. Bots without a row keep the seat map. */
+  teamDesktops?: TeamDesktopGateway;
   dataDir?: string;
 }
 
@@ -98,6 +101,7 @@ export function createSandboxProvider(kind: string, opts: SandboxProviderOptions
           baseUrl: opts.sandHostUrl,
           token: opts.sandHostToken,
         }),
+        teamDesktops: opts.teamDesktops,
       });
     default:
       throw new Error(
