@@ -43,7 +43,7 @@ import {
   CodexCatalogCache,
   ComputerBusyError,
   cancelComputerRunWork,
-  checkpointAndRecordComputerWorkspace,
+  checkpointRunningComputer,
   clearInactiveUserComputerControl,
   codexLiveCatalogsForSpace,
   codexLiveListsModel,
@@ -92,6 +92,7 @@ import {
   resolveBotWorkspaceCwd,
   resolveBotWorkspacePath,
   revokeScreenControl,
+  SandSeatUnmappedError,
   sanitizeComposioError,
   savePushToken,
   scheduleComputerControlExpiry,
@@ -1642,8 +1643,12 @@ export function createRouter(deps: RouterDeps) {
             const ctx = computerContext(context.actor, bot.id, "computer.switch");
             const ref = toComputerRef(bot.computer);
             if (bot.computer.state === "running") {
-              await checkpointAndRecordComputerWorkspace(deps, bot.computer, ref, ctx);
-              await deps.sandbox.stop(ref, ctx);
+              await checkpointRunningComputer(deps, bot.computer, ref, ctx);
+              try {
+                await deps.sandbox.stop(ref, ctx);
+              } catch (error) {
+                if (!isSandboxGoneError(error)) throw error;
+              }
             }
             await deps.prisma.computerExecutionLease.deleteMany({
               where: { computerId: bot.computer.id, botId: bot.id },
@@ -2462,7 +2467,7 @@ export function createRouter(deps: RouterDeps) {
             const ctx = computerContext(context.actor, bot.id, "stop");
             const ref = toComputerRef(bot.computer);
             try {
-              await checkpointAndRecordComputerWorkspace(deps, bot.computer, ref, ctx);
+              await checkpointRunningComputer(deps, bot.computer, ref, ctx);
               await deps.sandbox.stop(ref, ctx);
             } catch (error) {
               // The sandbox is already gone: nothing left to checkpoint or stop.
@@ -3025,6 +3030,8 @@ export function createRouter(deps: RouterDeps) {
             if (isComputerScreenUnavailable(error)) {
               throw new ORPCError("CONFLICT", { message: error.message });
             }
+            // A dedicated computer with no seat has no sand screen. Polling it must not 500.
+            if (error instanceof SandSeatUnmappedError) return null;
             return clearGoneSandbox(deps, computer, error);
           });
         if (!session?.url) return { url: null };

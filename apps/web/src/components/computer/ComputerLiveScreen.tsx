@@ -7,8 +7,10 @@ import {
   screenIframeSandbox,
 } from "../../lib/computer-screen";
 
-/** One delayed retry after an unexpected drop. A second drop does not schedule another. */
+/** Delay before another attempt while this frame is still mounted. */
 export const SAND_SCREEN_RETRY_MS = 1_000;
+/** A socket that never finishes the handshake is dropped and tried again. */
+export const SAND_SCREEN_CONNECT_MS = 8_000;
 
 const FRAME_CLASS = "h-full w-full border-0 bg-black";
 /**
@@ -28,8 +30,9 @@ export function liveScreenIsInAppRfb(kind: ComputerStatus["kind"] | undefined) {
  *
  * The sand client connects once per socket. A render that repeats the same
  * sealed URL does not reconnect. vnc.html is not loaded, so a thread refresh
- * cannot reload a viewer document. An unexpected drop retries once; unmount
- * cancels that timer. A running seat with no stream is not described here.
+ * cannot reload a viewer document. A drop or a handshake that never finishes
+ * connects again while this frame stays mounted; unmount cancels that timer.
+ * A running seat with no stream is not described here.
  */
 export function ComputerLiveScreen({
   kind,
@@ -91,8 +94,27 @@ function SandScreenFrame({
     let stopped = false;
     let client: RFB | null = null;
     let retry: number | undefined;
-    let retried = false;
+    let connectTimer: number | undefined;
 
+    const clearConnectTimer = () => {
+      if (connectTimer === undefined) return;
+      window.clearTimeout(connectTimer);
+      connectTimer = undefined;
+    };
+    const schedule = () => {
+      if (stopped || retry !== undefined) return;
+      retry = window.setTimeout(() => {
+        retry = undefined;
+        connect();
+      }, SAND_SCREEN_RETRY_MS);
+    };
+    const drop = (next: RFB) => {
+      if (stopped || client !== next) return;
+      clearConnectTimer();
+      client = null;
+      clientRef.current = null;
+      schedule();
+    };
     const connect = () => {
       if (stopped || client) return;
       void import("@novnc/novnc")
@@ -106,27 +128,52 @@ function SandScreenFrame({
           next.focusOnClick = !viewOnlyRef.current;
           client = next;
           clientRef.current = next;
-          next.addEventListener("disconnect", (event) => {
+          connectTimer = window.setTimeout(() => {
+            connectTimer = undefined;
             if (stopped || client !== next) return;
-            client = null;
-            clientRef.current = null;
-            const detail = (event as CustomEvent<{ clean?: boolean }>).detail;
-            if (detail?.clean !== false || retried) return;
-            retried = true;
-            retry = window.setTimeout(connect, SAND_SCREEN_RETRY_MS);
+            try {
+              next.disconnect();
+            } catch {
+              // A half-open client can throw while tearing down.
+            }
+            drop(next);
+          }, SAND_SCREEN_CONNECT_MS);
+          next.addEventListener("connect", () => {
+            clearConnectTimer();
+            if (host.getBoundingClientRect().width > 0) next.scaleViewport = true;
+          });
+          next.addEventListener("disconnect", () => {
+            drop(next);
           });
         })
         .catch(() => {
-          if (stopped || retried) return;
-          retried = true;
-          retry = window.setTimeout(connect, SAND_SCREEN_RETRY_MS);
+          schedule();
         });
     };
 
+    let seenWidth = 0;
+    let seenHeight = 0;
+    const resize =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(() => {
+            const current = clientRef.current;
+            const box = host.getBoundingClientRect();
+            const width = Math.round(box.width);
+            const height = Math.round(box.height);
+            if (!current || width < 1 || height < 1) return;
+            if (width === seenWidth && height === seenHeight) return;
+            seenWidth = width;
+            seenHeight = height;
+            current.scaleViewport = true;
+          });
+    resize?.observe(host);
     connect();
     return () => {
       stopped = true;
+      clearConnectTimer();
       if (retry !== undefined) window.clearTimeout(retry);
+      resize?.disconnect();
       const current = client;
       client = null;
       clientRef.current = null;

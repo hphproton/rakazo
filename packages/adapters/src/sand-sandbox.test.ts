@@ -1,7 +1,12 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { AdapterContext, ProcessEvent, SandboxProvider } from "@rakazo/adapter-kit";
 import { openScreenCapability, sealScreenCapability } from "@rakazo/core/node/screen-capability";
 import { describe, expect, it, vi } from "vitest";
 import { resolveBotWorkspacePath } from "./computer-support.js";
+import { checkpointRunningComputer } from "./computer-workspace.js";
+import { LocalAgentHomeStore } from "./home.js";
 import { SAND_HAND_REFUSAL } from "./sand-hand.js";
 import type {
   SandComputerAction,
@@ -940,6 +945,60 @@ describe("sand host router", () => {
     expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
       "http://127.0.0.1:6081?token=101",
     );
+  });
+
+  it("checkpoints a running dedicated fake computer with no seat, then prepares on 1339", async () => {
+    const members: string[] = [];
+    const desk = teamMemberDesk(members, new Map());
+    const root = await mkdtemp(path.join(tmpdir(), "rakazo-staff-home-"));
+    const home = new LocalAgentHomeStore(root);
+    const record = { id: "computer-staff", homeKey: "team-space" };
+    const staffContext = { ...ctx, botId: "staff" };
+    const fakeComputer = {
+      id: "computer-staff",
+      botId: "team-space",
+      kind: "fake" as const,
+      providerRef: "fake-staff",
+    };
+    try {
+      await expect(
+        checkpointRunningComputer(
+          { home, sandbox: desk.sandbox, prisma: {} as never },
+          record,
+          fakeComputer,
+          staffContext,
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        checkpointRunningComputer(
+          { home, sandbox: desk.sandbox, prisma: {} as never },
+          record,
+          { ...fakeComputer, kind: "sand" },
+          staffContext,
+        ),
+      ).resolves.toBeNull();
+      expect(desk.urls.some((url) => url.includes("14020"))).toBe(false);
+      expect(desk.store.rows.has("staff")).toBe(false);
+
+      members.push("staff");
+      const computer = await desk.sandbox.provision(
+        { botId: "team-space", homePath: "/tmp", providerRef: "fake-staff" },
+        staffContext,
+      );
+      await prepareAndExec(desk.sandbox, computer, "staff");
+      expect(desk.urls[0]).toBe("http://127.0.0.1:1339/agent.v1.ControlService/GetCapabilities");
+      expect(desk.urls.every((url) => url.startsWith("http://127.0.0.1:1339/"))).toBe(true);
+      expect(desk.urls.some((url) => url.includes("14020"))).toBe(false);
+      expect(desk.seen.every((call) => call.display === "101" && call.agent === null)).toBe(true);
+      const row = desk.store.rows.get("staff");
+      expect(row?.displayIndex).toBeGreaterThanOrEqual(101);
+      expect(row?.displayIndex).toBeLessThanOrEqual(150);
+      expect(
+        (await desk.sandbox.connectScreen(computer, { view: "stream" }, staffContext)).url,
+      ).toBe("http://127.0.0.1:6081?token=101");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

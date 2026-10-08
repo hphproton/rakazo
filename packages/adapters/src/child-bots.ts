@@ -24,7 +24,7 @@ import {
 import { getLogger } from "@rakazo/logging";
 import { BrowserStoppedReleaseError } from "./computer-screens.js";
 import { toComputerRef } from "./computer-support.js";
-import { checkpointAndRecordComputerWorkspace } from "./computer-workspace.js";
+import { checkpointRunningComputer } from "./computer-workspace.js";
 import { resolveAgentHomePath } from "./home.js";
 import { removePiBotSessions } from "./pi-session.js";
 
@@ -323,7 +323,7 @@ export async function archiveBot(
     : null;
   if (currentDedicated?.providerRef && currentDedicated.state === "running") {
     const ref = toComputerRef(currentDedicated);
-    await checkpointAndRecordComputerWorkspace(deps, currentDedicated, ref, context);
+    await checkpointRunningComputer(deps, currentDedicated, ref, context);
     await deps.sandbox.stop(ref, context);
     await deps.prisma.computer.updateMany({
       where: {

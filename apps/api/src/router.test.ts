@@ -3,6 +3,7 @@ import {
   COMPUTER_SCREEN_UNAVAILABLE,
   CodexCatalogCache,
   ComputerScreenUnavailableError,
+  SandSeatUnmappedError,
   screenLeaseIdForRun,
 } from "@rakazo/adapters";
 import type { Actor, Bot } from "@rakazo/contracts";
@@ -1110,6 +1111,23 @@ describe("computer screen url", () => {
     );
     return { response, updateMany };
   };
+
+  it("returns no screen for a dedicated computer with no sand seat", async () => {
+    const updateMany = vi.fn();
+    const { response } = await callScreenUrl(
+      async () => {
+        throw new SandSeatUnmappedError("staff");
+      },
+      updateMany,
+      "fake",
+    );
+    expect(response.status).toBe(200);
+    const { json } = await response.json();
+    expect(json.url).toBeNull();
+    expect(updateMany).not.toHaveBeenCalled();
+    const body = JSON.stringify(json);
+    expect(body).not.toContain("No sand seat");
+  });
 
   it("issues lifecycle-bound capabilities for managed-provider screens too", async () => {
     const { response } = await callScreenUrl(async () => ({
