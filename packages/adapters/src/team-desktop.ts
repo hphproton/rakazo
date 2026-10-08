@@ -2,12 +2,9 @@ import { randomBytes } from "node:crypto";
 import type { PrismaClient } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 
-/** Host seats stay in 2..100. Team B desktops use only this band. */
+/** Host seats stay in 2..100. Team desktops use only this band. */
 export const TEAM_DESKTOP_MIN_INDEX = 101;
 export const TEAM_DESKTOP_MAX_INDEX = 150;
-
-/** Chat group whose members receive a desktop. Team A is not this name. */
-export const TEAM_B_GROUP_NAME = "Team B";
 
 export const TEAM_DESKTOP_ROUTER_URL = "http://127.0.0.1:1339";
 
@@ -185,13 +182,22 @@ export function teamDesktopPurgePaths(displayIndex: number, tmpNames: readonly s
   return [...paths];
 }
 
-export function teamBMemberBotIds(
-  groups: readonly { name: string; botIds: readonly string[] }[],
-): string[] {
+/** A bot counted for a team desktop. Scope is `Bot.computer.scope`. */
+export interface TeamDesktopMember {
+  id: string;
+  archived: boolean;
+  computerScope: string | null;
+}
+
+/**
+ * Non-archived bots whose computer scope is `team`.
+ * A private computer, a missing computer, or an archived bot is not a member.
+ */
+export function teamDesktopMemberBotIds(bots: readonly TeamDesktopMember[]): string[] {
   const ids: string[] = [];
-  for (const group of groups) {
-    if (group.name.trim() !== TEAM_B_GROUP_NAME) continue;
-    ids.push(...group.botIds);
+  for (const bot of bots) {
+    if (bot.archived || bot.computerScope !== "team") continue;
+    ids.push(bot.id);
   }
   return [...new Set(ids)];
 }
@@ -224,6 +230,8 @@ export function createTeamDesktopAllocator(options: {
   pollMs?: number;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
+  /** Current member bot ids. Reconcile re-syncs from this list. */
+  members?: () => Promise<readonly string[]>;
 }): TeamDesktopAllocator {
   const idleMinutes = options.idleMinutes ?? TEAM_DESKTOP_DEFAULT_IDLE_MINUTES;
   const maxRunning = options.maxRunning ?? TEAM_DESKTOP_DEFAULT_MAX_RUNNING;
@@ -234,6 +242,7 @@ export function createTeamDesktopAllocator(options: {
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const store = options.store;
   const host = options.host;
+  const members = options.members;
   let tail: Promise<unknown> = Promise.resolve();
   let lastReconcileAt = 0;
 
@@ -454,6 +463,7 @@ export function createTeamDesktopAllocator(options: {
 
   async function reconcileBody(): Promise<void> {
     lastReconcileAt = now().getTime();
+    if (members) await syncBody(await members());
     const rows = await store.list();
     const held = new Set<number>();
     for (const row of rows) {
@@ -561,20 +571,16 @@ export function createPrismaTeamDesktopStore(prisma: PrismaClient): TeamDesktopS
   };
 }
 
+/** Non-archived bots on a team-scoped computer. Does not read chat groups. */
 export async function listTeamBMemberBotIds(prisma: PrismaClient): Promise<string[]> {
-  const groups = await prisma.chatGroup.findMany({
-    where: { archivedAt: null, name: { contains: TEAM_B_GROUP_NAME } },
-    select: { name: true, members: { select: { botId: true } } },
+  const rows = await prisma.bot.findMany({
+    where: { archivedAt: null, computer: { is: { scope: "team" } } },
+    select: { id: true },
   });
-  return teamBMemberBotIds(
-    groups.map((group) => ({
-      name: group.name,
-      botIds: group.members.map((member) => member.botId),
-    })),
-  );
+  return rows.map((row) => row.id);
 }
 
-/** Reserve current Team B members and release everyone else. Does not start windows. */
+/** Reserve current team-computer bots and release everyone else. Does not start windows. */
 export async function syncTeamBDesktops(
   prisma: PrismaClient,
   desktops: Pick<TeamDesktopAllocator, "syncMembership">,

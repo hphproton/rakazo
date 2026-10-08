@@ -1414,6 +1414,7 @@ export function createRouter(deps: RouterDeps) {
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
+        await refreshTeamDesktops(deps);
         await enqueueBotIntroRun(deps, context.actor, bot).catch((error) => {
           getLogger().error("bot intro run enqueue", error);
         });
@@ -1456,6 +1457,7 @@ export function createRouter(deps: RouterDeps) {
             })),
           });
         }
+        await refreshTeamDesktops(deps);
         return duplicate;
       }),
       reorder: authed.bots.reorder.handler(async ({ context, input }) => {
@@ -1606,7 +1608,9 @@ export function createRouter(deps: RouterDeps) {
         const currentMode = bot.computer.scope === "dedicated" ? "dedicated" : "team";
         if (currentMode === input.mode) {
           try {
-            return await repos.setBotComputer(context.actor, bot.id, input.mode);
+            const updated = await repos.setBotComputer(context.actor, bot.id, input.mode);
+            await refreshTeamDesktops(deps);
+            return updated;
           } catch (error) {
             throw mapSpaceLifecycleError(error);
           }
@@ -1655,7 +1659,9 @@ export function createRouter(deps: RouterDeps) {
               },
             });
           }
-          return await repos.setBotComputer(context.actor, bot.id, input.mode);
+          const updated = await repos.setBotComputer(context.actor, bot.id, input.mode);
+          await refreshTeamDesktops(deps);
+          return updated;
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         } finally {
@@ -1679,6 +1685,7 @@ export function createRouter(deps: RouterDeps) {
           bot,
           computerContext(context.actor, bot.id, "archive"),
         );
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       restore: authed.bots.restore.handler(async ({ context, input }) => {
@@ -1697,10 +1704,12 @@ export function createRouter(deps: RouterDeps) {
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       remove: authed.bots.remove.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId, { includeArchived: true });
+        // Release before destroy. Deleting the bot cascades the desktop row and would skip stop and purge.
         await deps.teamDesktops?.release(bot.id);
         await destroyBot(
           {
@@ -1722,6 +1731,7 @@ export function createRouter(deps: RouterDeps) {
           },
           { deleteMemories: input.deleteMemories },
         );
+        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       rotateWebhookSecret: authed.bots.rotateWebhookSecret.handler(async ({ context, input }) => {
@@ -1771,7 +1781,6 @@ export function createRouter(deps: RouterDeps) {
       create: authed.groups.create.handler(async ({ context, input }) => {
         try {
           const group = await groupRepos.createGroup(context.actor, input);
-          await refreshTeamDesktops(deps);
           return group;
         } catch (error) {
           throw mapSpaceLifecycleError(error);
@@ -1819,7 +1828,6 @@ export function createRouter(deps: RouterDeps) {
           if (!section) throw new IsolationError();
         }
         const updated = await groupRepos.updateGroup(context.actor, input);
-        await refreshTeamDesktops(deps);
         await Promise.all(
           updated.cancelledRunIds.map((runId) =>
             deps.jobs.cancel(runJobKey(runId)).catch(() => undefined),
@@ -1865,12 +1873,10 @@ export function createRouter(deps: RouterDeps) {
         // Expire the leases only after teardown: while they were live, no other run could claim
         // these screens.
         await groupRepos.releaseArchivedRunLeases(archived.cancelledRunIds);
-        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       restore: authed.groups.restore.handler(async ({ context, input }) => {
         await groupRepos.restoreGroup(context.actor, input.groupId);
-        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
       remove: authed.groups.remove.handler(async ({ context, input }) => {
@@ -1887,7 +1893,6 @@ export function createRouter(deps: RouterDeps) {
           if (result.status === "rejected")
             getLogger().error("group artifact cleanup", result.reason);
         }
-        await refreshTeamDesktops(deps);
         return { ok: true as const };
       }),
     },

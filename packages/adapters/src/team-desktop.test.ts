@@ -11,8 +11,8 @@ import {
   type TeamDesktopRecord,
   type TeamDesktopState,
   type TeamDesktopStore,
-  teamBMemberBotIds,
   teamDesktopConfigFromEnv,
+  teamDesktopMemberBotIds,
   teamDesktopPurgePaths,
 } from "./team-desktop.js";
 import { createLinuxTeamDesktopHost } from "./team-desktop-host.js";
@@ -125,6 +125,7 @@ function harness(options?: {
   idleMinutes?: number;
   now?: Date;
   ensureTimeoutMs?: number;
+  members?: () => Promise<readonly string[]>;
 }) {
   const store = new MemoryTeamDesktopStore();
   const host = new FakeTeamDesktopHost();
@@ -135,6 +136,7 @@ function harness(options?: {
     maxRunning: options?.maxRunning,
     idleMinutes: options?.idleMinutes,
     ensureTimeoutMs: options?.ensureTimeoutMs,
+    members: options?.members,
     now: () => now,
     sleep: async () => {
       now = new Date(now.getTime() + 1_000);
@@ -311,19 +313,38 @@ describe("team desktop lifecycle", () => {
 });
 
 describe("team desktop membership", () => {
-  it("reserves a bot synced into Team B and releases a bot that leaves or is deleted", async () => {
+  it("reserves a team-scope bot and releases a private, switched, or archived bot", async () => {
     const { alloc, host, store } = harness();
-    await alloc.syncMembership(teamBMemberBotIds([{ name: "Team B", botIds: ["chief"] }]));
+    await alloc.syncMembership(
+      teamDesktopMemberBotIds([
+        { id: "chief", archived: false, computerScope: "team" },
+        { id: "private", archived: false, computerScope: "dedicated" },
+        { id: "unassigned", archived: false, computerScope: null },
+      ]),
+    );
     expect(row(store, "chief").state).toBe("reserved");
+    expect(store.rows.has("private")).toBe(false);
+    expect(store.rows.has("unassigned")).toBe(false);
     expect(host.starts).toEqual([]);
 
-    await alloc.syncMembership(teamBMemberBotIds([{ name: "Team B", botIds: ["chief", "staff"] }]));
+    await alloc.syncMembership(
+      teamDesktopMemberBotIds([
+        { id: "chief", archived: false, computerScope: "team" },
+        { id: "staff", archived: false, computerScope: "team" },
+        { id: "private", archived: false, computerScope: "dedicated" },
+      ]),
+    );
     const chiefIndex = row(store, "chief").displayIndex;
     const staffIndex = row(store, "staff").displayIndex;
     expect(row(store, "staff").state).toBe("reserved");
     expect(staffIndex).not.toBe(chiefIndex);
 
-    await alloc.syncMembership(teamBMemberBotIds([{ name: "Team B", botIds: ["chief"] }]));
+    await alloc.syncMembership(
+      teamDesktopMemberBotIds([
+        { id: "chief", archived: false, computerScope: "team" },
+        { id: "staff", archived: false, computerScope: "dedicated" },
+      ]),
+    );
     expect(store.rows.has("staff")).toBe(false);
     expect(host.stops).toEqual([staffIndex]);
     expect(host.purges).toEqual([staffIndex]);
@@ -331,18 +352,11 @@ describe("team desktop membership", () => {
     expect(host.stops).not.toContain(chiefIndex);
 
     await alloc.syncMembership(
-      teamBMemberBotIds([
-        { name: "Team A", botIds: ["alpha"] },
-        { name: "Team B", botIds: ["chief"] },
-        { name: "Notes", botIds: ["beta"] },
-      ]),
+      teamDesktopMemberBotIds([{ id: "chief", archived: true, computerScope: "team" }]),
     );
-    expect(store.rows.has("alpha")).toBe(false);
-    expect(store.rows.has("beta")).toBe(false);
-    expect(store.rows.has("chief")).toBe(true);
-
-    await alloc.release("chief");
     expect(store.rows.has("chief")).toBe(false);
+    expect(host.stops).toEqual([staffIndex, chiefIndex]);
+    expect(host.purges).toEqual([staffIndex, chiefIndex]);
     expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
   });
 });
@@ -387,6 +401,27 @@ describe("team desktop reconcile", () => {
     expect(host.purges.every((index) => index >= 101 && index <= 150)).toBe(true);
     expect(idleIndex).toBeGreaterThan(100);
     expect(host.starts.filter((call) => call.displayIndex === 130)).toEqual([]);
+  });
+
+  it("re-syncs team-computer membership before reclaiming orphans", async () => {
+    const wanted = ["live"];
+    const { alloc, host, store } = harness({ members: async () => wanted });
+    await alloc.reserve("live");
+    await alloc.reserve("gone");
+    await alloc.ensure("gone");
+    const goneIndex = row(store, "gone").displayIndex;
+    host.stops.length = 0;
+    host.purges.length = 0;
+
+    await alloc.reconcile();
+
+    expect(store.rows.has("gone")).toBe(false);
+    expect(host.stops).toContain(goneIndex);
+    expect(host.purges).toContain(goneIndex);
+    expect(row(store, "live").state).toBe("reserved");
+    expect(host.starts.every((call) => call.displayIndex !== row(store, "live").displayIndex)).toBe(
+      true,
+    );
   });
 });
 

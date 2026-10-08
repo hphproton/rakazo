@@ -32,6 +32,7 @@ import {
   isPipedreamEnabled,
   LocalAgentHomeStore,
   LocalArtifactStore,
+  listTeamBMemberBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingEnvFromProcess,
@@ -99,6 +100,7 @@ async function main() {
     idleMinutes: teamDesktopEnv.idleMinutes,
     maxRunning: teamDesktopEnv.maxRunning,
     reconcileSeconds: teamDesktopEnv.reconcileSeconds,
+    members: () => listTeamBMemberBotIds(prisma),
   });
   await syncTeamBDesktops(prisma, teamDesktops);
   const sandbox = createRunSandbox(sandboxProvider, {
