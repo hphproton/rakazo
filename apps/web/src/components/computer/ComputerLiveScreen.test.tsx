@@ -6,7 +6,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandScreenSocketUrl } from "../../lib/computer-screen";
-import { ComputerLiveScreen, SAND_SCREEN_RETRY_MS } from "./ComputerLiveScreen";
+import {
+  ComputerLiveScreen,
+  SAND_SCREEN_CONNECT_MS,
+  SAND_SCREEN_RETRY_MS,
+} from "./ComputerLiveScreen";
 
 type MockClient = {
   url: string;
@@ -30,8 +34,15 @@ vi.mock("@novnc/novnc", () => ({
     focusOnClick = true;
     disconnect = vi.fn();
     private readonly handlers = new Map<string, Array<(event: Event) => void>>();
-    constructor(_target: HTMLElement, url: string, options?: { shared?: boolean }) {
+    constructor(target: HTMLElement, url: string, options?: { shared?: boolean }) {
       const self = this;
+      const canvas = document.createElement("canvas");
+      canvas.width = 320;
+      canvas.height = 200;
+      canvas.dataset.screen = "live";
+      target.appendChild(canvas);
+      const removeCanvas = () => canvas.remove();
+      this.disconnect = vi.fn(removeCanvas);
       clients.push({
         url,
         shared: options?.shared === true,
@@ -49,6 +60,7 @@ vi.mock("@novnc/novnc", () => ({
         },
         disconnect: this.disconnect,
         emitDisconnect(clean: boolean) {
+          removeCanvas();
           const event = new CustomEvent("disconnect", { detail: { clean } });
           for (const handler of self.handlers.get("disconnect") ?? []) handler(event);
         },
@@ -93,13 +105,24 @@ async function renderScreen(
   kind: ComputerStatus["kind"],
   url: string,
   pointerEvents: "none" | "auto" = "none",
+  card = false,
 ) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  const node = card ? (
+    <div
+      data-testid="computer-preview"
+      className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-background"
+    >
+      {screen(kind, url, pointerEvents)}
+    </div>
+  ) : (
+    screen(kind, url, pointerEvents)
+  );
   await act(async () => {
-    root.render(screen(kind, url, pointerEvents));
+    root.render(node);
   });
   await act(async () => {
     await Promise.resolve();
@@ -112,7 +135,19 @@ async function renderScreen(
       nextPointer: "none" | "auto" = pointerEvents,
     ) {
       await act(async () => {
-        root.render(screen(nextKind, nextUrl, nextPointer));
+        const next = screen(nextKind, nextUrl, nextPointer);
+        root.render(
+          card ? (
+            <div
+              data-testid="computer-preview"
+              className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-background"
+            >
+              {next}
+            </div>
+          ) : (
+            next
+          ),
+        );
       });
       await act(async () => {
         await Promise.resolve();
@@ -158,33 +193,56 @@ describe("ComputerLiveScreen", () => {
     await view.cleanup();
   });
 
-  it("retries an unexpected drop once and stops, including after unmount", async () => {
+  it("reconnects while the preview stays mounted, including a clean drop", async () => {
     vi.useFakeTimers();
-    const view = await renderScreen("sand", SEALED);
+    const view = await renderScreen("sand", SEALED, "none", true);
     expect(clients).toHaveLength(1);
+    expect(view.container.querySelector("canvas[data-screen='live']")).not.toBeNull();
     await act(async () => {
-      clients[0]?.emitDisconnect(false);
+      clients[0]?.emitDisconnect(true);
     });
-    expect(clients).toHaveLength(1);
+    expect(view.container.querySelector("canvas[data-screen='live']")).toBeNull();
     await act(async () => {
       vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS);
       await Promise.resolve();
     });
     expect(clients).toHaveLength(2);
+    expect(view.container.querySelector("canvas[data-screen='live']")).not.toBeNull();
     await act(async () => {
       clients[1]?.emitDisconnect(false);
-      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS * 5);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS);
       await Promise.resolve();
     });
-    expect(clients).toHaveLength(2);
+    expect(clients).toHaveLength(3);
+    expect(view.container.querySelector("[data-testid='sand-screen-frame'] canvas")).not.toBeNull();
 
     const beforeUnmount = clients.length;
     await view.cleanup();
     await act(async () => {
-      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS * 5);
+      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS + SAND_SCREEN_CONNECT_MS);
       await Promise.resolve();
     });
     expect(clients).toHaveLength(beforeUnmount);
+  });
+
+  it("replaces a preview socket that never finishes connecting", async () => {
+    vi.useFakeTimers();
+    const view = await renderScreen("sand", SEALED, "none", true);
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      vi.advanceTimersByTime(SAND_SCREEN_CONNECT_MS);
+      await Promise.resolve();
+    });
+    expect(clients[0]?.disconnect).toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
+    expect(view.container.querySelector("canvas[data-screen='live']")).not.toBeNull();
+    await view.cleanup();
   });
 
   it("lets an interactive control seal send input", async () => {
@@ -222,17 +280,27 @@ describe("ComputerLiveScreen", () => {
       port: 6081,
       path: "/websockify?token=101",
     });
-    const view = await renderScreen("sand", sealed, "none");
-    const frame = view.container.querySelector("[data-testid='sand-screen-frame']");
+    const view = await renderScreen("sand", sealed, "none", true);
+    const card = view.container.querySelector("[data-testid='computer-preview']");
+    expect(card?.className).toContain("aspect-[16/10]");
+    const frame = card?.querySelector("[data-testid='sand-screen-frame']");
     expect(frame?.getAttribute("aria-label")).toBe("Bot screen preview");
     expect(frame?.className).toContain("absolute");
     expect(frame?.className).toContain("inset-0");
+    expect(frame?.querySelector("canvas[data-screen='live']")).not.toBeNull();
     expect(view.container.querySelector("iframe")).toBeNull();
     expect(clients).toHaveLength(1);
     expect(clients[0]?.url).toBe(sandScreenSocketUrl(sealed, window.location.href));
     expect(clients[0]?.url).not.toContain("14020");
     expect(clients[0]?.url).not.toContain(":20");
     await view.cleanup();
+
+    const overlay = await renderScreen("sand", sealed, "auto");
+    expect(overlay.container.querySelector("iframe")).toBeNull();
+    expect(overlay.container.querySelector("canvas[data-screen='live']")).not.toBeNull();
+    expect(clients.at(-1)?.url).toBe(clients[0]?.url);
+    expect(clients.at(-1)?.url).not.toContain("14020");
+    await overlay.cleanup();
   });
 
   it("keeps private and other non-sand screens on the stock iframe", async () => {

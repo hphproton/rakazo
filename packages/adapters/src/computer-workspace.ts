@@ -11,8 +11,11 @@ import type {
 import type { ComputerMode } from "@rakazo/contracts";
 import { parseScreenLeaseId } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
 import { normalizeWorkspacePath, teamBotWorkspaceDirectory } from "./computer-support.js";
+import { isSandboxGoneError } from "./e2b-sandbox.js";
 import { LocalAgentHomeStore } from "./home.js";
+import { SandSeatUnmappedError } from "./sand-seat.js";
 
 export const PORTABLE_TRANSFER_BATCH_BYTES = 8 * 1024 * 1024;
 
@@ -144,6 +147,41 @@ export async function checkpointRunComputerWorkspace(
       where: { id: computerRecord.id, state: "suspending", providerRef: computer.providerRef },
       data: { state: "running" },
     });
+  }
+}
+
+/**
+ * Checkpoint a running computer before a Team switch, stop, or archive.
+ * The sand sandbox only exports sand computers. A dedicated fake (or any other
+ * kind) is skipped, and a sand computer with no seat is skipped, so the switch
+ * can finish. A docker sandbox still checkpoints a desktop computer. Other
+ * export failures still throw.
+ */
+export async function checkpointRunningComputer(
+  deps: { home: AgentHomeStore; sandbox: SandboxProvider; prisma: PrismaClient },
+  computerRecord: { id: string; homeKey: string },
+  computer: ComputerRef,
+  context: AdapterContext,
+): Promise<string | null> {
+  const sandboxId = deps.sandbox.describe().id;
+  if (sandboxId === "sand" && computer.kind !== "sand") {
+    getLogger().warn("skipped computer checkpoint for a different sandbox kind", {
+      "computer.kind": computer.kind,
+      "sandbox.id": sandboxId,
+    });
+    return null;
+  }
+  try {
+    return await checkpointAndRecordComputerWorkspace(deps, computerRecord, computer, context);
+  } catch (error) {
+    if (error instanceof SandSeatUnmappedError || isSandboxGoneError(error)) {
+      getLogger().warn("skipped computer checkpoint", {
+        "computer.kind": computer.kind,
+        "sandbox.id": sandboxId,
+      });
+      return null;
+    }
+    throw error;
   }
 }
 

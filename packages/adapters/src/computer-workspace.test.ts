@@ -1,14 +1,17 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ComputerRef, SandboxProvider } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkpointComputerWorkspace,
+  checkpointRunningComputer,
   ensureComputerWorkspaceLayout,
   restoreComputerWorkspace,
 } from "./computer-workspace.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { LocalAgentHomeStore } from "./home.js";
+import { SandSeatUnmappedError } from "./sand-seat.js";
 
 const context = {
   operationId: "workspace-test",
@@ -74,6 +77,91 @@ describe("provider-neutral computer workspace", () => {
         await replacementProvider.readFile(replacement, "notes/result.txt", context),
       ),
     ).toBe("portable");
+  });
+});
+
+describe("running computer checkpoint", () => {
+  const record = { id: "computer-staff", homeKey: "team-space" };
+  const base = {
+    id: "computer-staff",
+    botId: "team-space",
+    providerRef: "fake-staff",
+  } satisfies Pick<ComputerRef, "id" | "botId" | "providerRef">;
+
+  it("skips a running dedicated computer the live sandbox does not own", async () => {
+    const exportWorkspace = vi.fn();
+    const sandbox = {
+      describe: () => ({ id: "sand" }),
+      exportWorkspace,
+    } as unknown as SandboxProvider;
+    const revision = await checkpointRunningComputer(
+      { home: {} as never, sandbox, prisma: {} as never },
+      record,
+      { ...base, kind: "fake" },
+      context,
+    );
+    expect(revision).toBeNull();
+    expect(exportWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("still checkpoints a desktop computer through the docker sandbox", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "rakazo-desktop-home-"));
+    roots.push(root);
+    const home = new LocalAgentHomeStore(root);
+    let exported = false;
+    const sandbox = {
+      describe: () => ({ id: "docker" }),
+      exportWorkspace: async function* () {
+        exported = true;
+        yield { path: "notes.txt", content: new TextEncoder().encode("kept") };
+      },
+    } as unknown as SandboxProvider;
+    const revision = await checkpointRunningComputer(
+      {
+        home,
+        sandbox,
+        prisma: { computer: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) } } as never,
+      },
+      record,
+      { ...base, kind: "desktop", providerRef: "desktop-1" },
+      context,
+    );
+    expect(exported).toBe(true);
+    expect(revision).toMatch(/^rev-/);
+  });
+
+  it("skips an unmapped sand seat and still throws other export failures", async () => {
+    const unmapped = {
+      describe: () => ({ id: "sand" }),
+      exportWorkspace: async function* () {
+        await Promise.reject(new SandSeatUnmappedError("staff"));
+        yield { path: "unreachable", content: new Uint8Array() };
+      },
+    } as unknown as SandboxProvider;
+    await expect(
+      checkpointRunningComputer(
+        { home: {} as never, sandbox: unmapped, prisma: {} as never },
+        record,
+        { ...base, kind: "sand" },
+        { ...context, botId: "staff" },
+      ),
+    ).resolves.toBeNull();
+
+    const failed = {
+      describe: () => ({ id: "sand" }),
+      exportWorkspace: async function* () {
+        await Promise.reject(new Error("export failed"));
+        yield { path: "unreachable", content: new Uint8Array() };
+      },
+    } as unknown as SandboxProvider;
+    await expect(
+      checkpointRunningComputer(
+        { home: {} as never, sandbox: failed, prisma: {} as never },
+        record,
+        { ...base, kind: "sand" },
+        context,
+      ),
+    ).rejects.toThrow("export failed");
   });
 });
 
