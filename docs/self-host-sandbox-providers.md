@@ -72,7 +72,13 @@ sends `x-sand-agent-id` to `SAND_HOST_URL`. The router ignores that header. A
 bot with a Team desktop row is sent to `http://127.0.0.1:1339` with
 `x-sand-display` and `x-sand-window-owner`, including when `SAND_HOST_URL`
 points at one exec daemon. Its viewer is `http://127.0.0.1:6081?token=N`,
-where N is the display index.
+where N is the display index. The in-app screen seals that URL; the browser
+loads the app origin, and the socket proxy opens `6081` with `token=N`.
+
+Allocation runs only when the resolved provider is `sand`. `fake`, `docker`,
+`e2b`, and `none` do not sync, reserve, or probe the host. Hub roster mirrors
+(`spawnKey` starting with `hub:`) never get a row. When 101–150 is full, extra
+members stay without a row and bot or roster calls still succeed.
 
 ## `none`
 

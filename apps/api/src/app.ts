@@ -68,6 +68,7 @@ import {
   SpaceMemoryProviderResolver,
   sandboxProviderOptionsFromEnv,
   syncTeamBDesktops,
+  teamDesktopAllocatorForProvider,
   toTeamChatInbound,
 } from "@rakazo/adapters";
 import { createAuth, isBlockedAuthPath, loopbackTwinOrigins } from "@rakazo/auth";
@@ -252,15 +253,23 @@ export async function createApp(
             throw new Error("Graphile job publisher requires a PostgreSQL pool");
           })(),
       );
-  const teamDesktops = createTeamDesktopAllocator({
-    store: createPrismaTeamDesktopStore(prisma),
-    host: createLinuxTeamDesktopHost(),
-    idleMinutes: env.teamDesktopIdleMinutes,
-    maxRunning: env.teamDesktopMaxRunning,
-    reconcileSeconds: env.teamDesktopReconcileSeconds,
-    members: () => listTeamBMemberBotIds(prisma),
-  });
-  await syncTeamBDesktops(prisma, teamDesktops);
+  const teamDesktops = teamDesktopAllocatorForProvider(env.sandboxProvider, () =>
+    createTeamDesktopAllocator({
+      store: createPrismaTeamDesktopStore(prisma),
+      host: createLinuxTeamDesktopHost(),
+      idleMinutes: env.teamDesktopIdleMinutes,
+      maxRunning: env.teamDesktopMaxRunning,
+      reconcileSeconds: env.teamDesktopReconcileSeconds,
+      members: () => listTeamBMemberBotIds(prisma),
+    }),
+  );
+  if (teamDesktops) {
+    try {
+      await syncTeamBDesktops(prisma, teamDesktops);
+    } catch (error) {
+      logger.error("team desktop membership sync failed", error);
+    }
+  }
   const sandbox: SandboxProvider =
     sandboxOverride ??
     createRunSandbox(env.sandboxProvider, {
@@ -477,7 +486,7 @@ export async function createApp(
         notifications,
         reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
-        reconcileTeamDesktops: () => teamDesktops.reconcileIfDue(),
+        reconcileTeamDesktops: teamDesktops ? () => teamDesktops.reconcileIfDue() : undefined,
       })
     : undefined;
   reconciler?.start();

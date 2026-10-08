@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { HUB_SPAWN_KEY_PREFIX, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 
@@ -187,19 +188,48 @@ export interface TeamDesktopMember {
   id: string;
   archived: boolean;
   computerScope: string | null;
+  /** Hub roster mirrors use a `hub:` spawn key and are not members. */
+  spawnKey?: string | null;
 }
 
 /**
- * Non-archived bots whose computer scope is `team`.
- * A private computer, a missing computer, or an archived bot is not a member.
+ * Non-archived bots whose computer scope is `team`, excluding Hub roster mirrors.
+ * A private computer, a missing computer, an archived bot, or a `hub:` spawn key is not a member.
  */
 export function teamDesktopMemberBotIds(bots: readonly TeamDesktopMember[]): string[] {
   const ids: string[] = [];
   for (const bot of bots) {
     if (bot.archived || bot.computerScope !== "team") continue;
+    if (bot.spawnKey?.startsWith(HUB_SPAWN_KEY_PREFIX)) continue;
     ids.push(bot.id);
   }
   return [...new Set(ids)];
+}
+
+/** Prisma filter for `listTeamBMemberBotIds`. Hub mirrors stay out of the band. */
+export function teamDesktopMemberBotWhere() {
+  return {
+    archivedAt: null,
+    computer: { is: { scope: "team" } },
+    ...VISIBLE_ROSTER_BOT_WHERE,
+  } as const;
+}
+
+/**
+ * The allocator talks to the host only when the sandbox provider is `sand`.
+ * fake, docker, e2b, none, and every other provider skip open entirely.
+ */
+export function teamDesktopAllocatorForProvider<T>(provider: string, open: () => T): T | undefined {
+  if (provider !== "sand") return undefined;
+  return open();
+}
+
+/** Message the bot should see when this call cannot take a desktop. Other errors stay thrown. */
+export function teamDesktopCapacityMessage(error: unknown): string | undefined {
+  if (error instanceof TeamDesktopExhaustedError || error instanceof TeamDesktopLimitError) {
+    return error.message;
+  }
+  return undefined;
 }
 
 export function teamDesktopConfigFromEnv(source: NodeJS.ProcessEnv = process.env): {
@@ -337,7 +367,16 @@ export function createTeamDesktopAllocator(options: {
   }
 
   async function ensureBody(botId: string): Promise<TeamDesktopBinding> {
-    const row = await requireRow(botId);
+    let row = await store.getByBot(botId);
+    if (!row) {
+      if (members && !(await members()).includes(botId)) {
+        throw new TeamDesktopMissingError(botId);
+      }
+      await reserveBody(botId);
+      row = await requireRow(botId);
+    } else {
+      assertTeamDesktopIndex(row.displayIndex);
+    }
     if (row.state === "releasing") {
       throw new TeamDesktopError("Team desktop is being released.");
     }
@@ -453,11 +492,31 @@ export function createTeamDesktopAllocator(options: {
     const wanted = new Set(memberBotIds);
     const rows = await store.list();
     for (const row of rows) {
-      if (!wanted.has(row.botId)) await releaseBody(row.botId);
+      if (wanted.has(row.botId)) continue;
+      try {
+        await releaseBody(row.botId);
+      } catch (error) {
+        getLogger().error(
+          "team desktop release during membership sync failed",
+          scrubbed(error, [row.ownerToken]),
+        );
+      }
     }
     const held = new Set((await store.list()).map((row) => row.botId));
+    const skipped: string[] = [];
     for (const botId of wanted) {
-      if (!held.has(botId)) await reserveBody(botId);
+      if (held.has(botId)) continue;
+      try {
+        await reserveBody(botId);
+      } catch (error) {
+        if (!(error instanceof TeamDesktopExhaustedError)) throw error;
+        skipped.push(botId);
+      }
+    }
+    if (skipped.length > 0) {
+      getLogger().warn("team desktop band is full; extra members stay without a row", {
+        skipped: skipped.length,
+      });
     }
   }
 
@@ -571,16 +630,19 @@ export function createPrismaTeamDesktopStore(prisma: PrismaClient): TeamDesktopS
   };
 }
 
-/** Non-archived bots on a team-scoped computer. Does not read chat groups. */
+/** Non-archived team-computer bots, excluding Hub roster mirrors. Does not read chat groups. */
 export async function listTeamBMemberBotIds(prisma: PrismaClient): Promise<string[]> {
   const rows = await prisma.bot.findMany({
-    where: { archivedAt: null, computer: { is: { scope: "team" } } },
+    where: teamDesktopMemberBotWhere(),
     select: { id: true },
   });
   return rows.map((row) => row.id);
 }
 
-/** Reserve current team-computer bots and release everyone else. Does not start windows. */
+/**
+ * Reserve current members and release everyone else. Does not start windows.
+ * A full 101–150 band logs a warning and leaves the extra members without a row.
+ */
 export async function syncTeamBDesktops(
   prisma: PrismaClient,
   desktops: Pick<TeamDesktopAllocator, "syncMembership">,

@@ -627,7 +627,11 @@ function mapTeamDesktopError(error: unknown): unknown {
 
 async function refreshTeamDesktops(deps: RouterDeps): Promise<void> {
   if (!deps.teamDesktops) return;
-  await syncTeamBDesktops(deps.prisma, deps.teamDesktops);
+  try {
+    await syncTeamBDesktops(deps.prisma, deps.teamDesktops);
+  } catch (error) {
+    getLogger().error("team desktop membership sync failed", error);
+  }
 }
 
 async function ownedBotId(deps: RouterDeps, actor: Actor, botId: string): Promise<void> {
@@ -1710,7 +1714,13 @@ export function createRouter(deps: RouterDeps) {
       remove: authed.bots.remove.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId, { includeArchived: true });
         // Release before destroy. Deleting the bot cascades the desktop row and would skip stop and purge.
-        await deps.teamDesktops?.release(bot.id);
+        if (deps.teamDesktops) {
+          try {
+            await deps.teamDesktops.release(bot.id);
+          } catch (error) {
+            getLogger().error("team desktop release before bot remove failed", error);
+          }
+        }
         await destroyBot(
           {
             prisma: deps.prisma,

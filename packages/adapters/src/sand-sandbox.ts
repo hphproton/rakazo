@@ -38,7 +38,7 @@ import {
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
 import type { TeamDesktopBinding } from "./team-desktop.js";
-import { teamDesktopViewerUrl } from "./team-desktop.js";
+import { TeamDesktopMissingError, teamDesktopViewerUrl } from "./team-desktop.js";
 
 /** Shared pod workspace for every sand window. Not a Team B container home. */
 export const SAND_WORKSPACE = "/workspace";
@@ -107,7 +107,6 @@ export class SandSandboxProvider implements SandboxProvider {
     request: CommandRequest,
     context: AdapterContext,
   ): AsyncIterable<ProcessEvent> {
-    const route = await this.session(computer, context, true);
     if (request.argv.length === 0) {
       yield { type: "stderr", data: "sand exec requires a command\n" };
       yield { type: "exit", code: 1 };
@@ -118,6 +117,7 @@ export class SandSandboxProvider implements SandboxProvider {
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = AbortSignal.any([context.signal, timeout]);
     try {
+      const route = await this.session(computer, context, true);
       yield* route.host.exec(
         route.agentId,
         { argv: request.argv, cwd, env: sandExecEnv(request.env), timeoutMs },
@@ -352,8 +352,8 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Team B bots with a desktop row wake that window and talk to the router.
-   * Everyone else keeps the seat map.
+   * A wake for a team member reserves on demand and talks to the router.
+   * A missing desktop falls back to the seat map. Exhaustion stays on this call.
    */
   private async session(
     computer: ComputerRef,
@@ -362,13 +362,23 @@ export class SandSandboxProvider implements SandboxProvider {
   ): Promise<{ host: SandHost; agentId: string }> {
     const gateway = this.opts.teamDesktops;
     const botId = context.botId || computer.botId;
-    if (gateway) {
-      const resolved = await gateway.resolve(botId);
-      if (resolved) {
-        const binding = wake ? await gateway.ensure(botId) : resolved;
+    if (gateway && wake) {
+      try {
+        const binding = await gateway.ensure(botId);
         const host =
           this.opts.host instanceof ConnectSandHost
             ? this.opts.host.withDisplay(binding)
+            : this.opts.host;
+        return { host, agentId: botId };
+      } catch (error) {
+        if (!(error instanceof TeamDesktopMissingError)) throw error;
+      }
+    } else if (gateway) {
+      const resolved = await gateway.resolve(botId);
+      if (resolved) {
+        const host =
+          this.opts.host instanceof ConnectSandHost
+            ? this.opts.host.withDisplay(resolved)
             : this.opts.host;
         return { host, agentId: botId };
       }

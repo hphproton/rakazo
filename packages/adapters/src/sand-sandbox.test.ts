@@ -1,4 +1,5 @@
 import type { AdapterContext, ProcessEvent, SandboxProvider } from "@rakazo/adapter-kit";
+import { openScreenCapability, sealScreenCapability } from "@rakazo/core/node/screen-capability";
 import { describe, expect, it, vi } from "vitest";
 import { resolveBotWorkspacePath } from "./computer-support.js";
 import { SAND_HAND_REFUSAL } from "./sand-hand.js";
@@ -28,6 +29,11 @@ import {
   SandSeatUnmappedError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import {
+  TeamDesktopExhaustedError,
+  TeamDesktopMissingError,
+  teamDesktopViewerUrl,
+} from "./team-desktop.js";
 
 const AGENT_A = "11111111-1111-4111-8111-111111111111";
 const AGENT_B = "22222222-2222-4222-8222-222222222222";
@@ -754,7 +760,7 @@ describe("sand host router", () => {
         },
         async ensure(botId) {
           ensured += 1;
-          expect(botId).toBe("bot-a");
+          if (botId !== "bot-a") throw new TeamDesktopMissingError(botId);
           return { displayIndex: 121, ownerToken };
         },
       },
@@ -793,13 +799,73 @@ describe("sand host router", () => {
     )) {
       if (event.type === "exit") expect(event.code).toBe(0);
     }
-    expect(ensured).toBe(1);
+    expect(ensured).toBe(2);
     expect(urls.at(-1)).toBe("http://127.0.0.1:14020/agent.v1.ControlService/Exec");
     expect(seen.at(-1)).toEqual({
       display: null,
       owner: null,
       agent: AGENT_B,
       authorization: "Bearer test-sand-token",
+    });
+  });
+
+  it("returns desktop exhaustion as shell output for that call", async () => {
+    const sandbox = new SandSandboxProvider({
+      policy: new FixedSeatPolicy({ "bot-a": AGENT_A }),
+      host: new ConnectSandHost({ baseUrl: "http://127.0.0.1:14020", fetch: vi.fn() }),
+      teamDesktops: {
+        async resolve() {
+          return undefined;
+        },
+        async ensure() {
+          throw new TeamDesktopExhaustedError();
+        },
+      },
+    });
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    const events: ProcessEvent[] = [];
+    for await (const event of sandbox.execute(
+      computer,
+      { argv: ["echo", "desk"], cwd: SAND_WORKSPACE },
+      { ...ctx, botId: "bot-a" },
+    )) {
+      events.push(event);
+    }
+    expect(events).toContainEqual({
+      type: "stderr",
+      data: "No free Team desktop in 101-150.\n",
+    });
+    expect(events).toContainEqual({ type: "exit", code: 1 });
+  });
+
+  it("seals the in-app viewer onto that bot's 6081 display token", () => {
+    const upstream = teamDesktopViewerUrl(121);
+    expect(upstream).toBe("http://127.0.0.1:6081?token=121");
+    const sealed = sealScreenCapability(
+      upstream,
+      "fake-secret",
+      "https://app.example",
+      {
+        botId: "bot-a",
+        computerId: "computer",
+        botGeneration: 1,
+        computerGeneration: 1,
+        controlLeaseId: null,
+      },
+      100,
+    );
+    const page = new URL(sealed);
+    expect(page.origin).toBe("https://app.example");
+    expect(page.pathname.startsWith("/novnc/session/view/")).toBe(true);
+    expect(page.search).not.toContain("token=121");
+    expect(sealed).not.toContain("14020");
+    expect(sealed).not.toContain(":20");
+    const socketPath = new URL(page.searchParams.get("path") ?? "", page.origin).pathname;
+    expect(openScreenCapability(socketPath, "fake-secret", 101)?.target).toMatchObject({
+      protocol: "http:",
+      hostname: "127.0.0.1",
+      port: 6081,
+      path: "/websockify?token=121",
     });
   });
 });

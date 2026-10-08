@@ -50,6 +50,7 @@ import {
   SpaceMemoryProviderResolver,
   sandboxProviderOptionsFromEnv,
   syncTeamBDesktops,
+  teamDesktopAllocatorForProvider,
   teamDesktopConfigFromEnv,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey, resolveSupervisorToken } from "@rakazo/core";
@@ -94,15 +95,23 @@ async function main() {
   const { key: deploymentModelKey } = resolveDeploymentModel();
   const sandboxProvider = resolveSandboxProvider(process.env);
   const teamDesktopEnv = teamDesktopConfigFromEnv(process.env);
-  const teamDesktops = createTeamDesktopAllocator({
-    store: createPrismaTeamDesktopStore(prisma),
-    host: createLinuxTeamDesktopHost(),
-    idleMinutes: teamDesktopEnv.idleMinutes,
-    maxRunning: teamDesktopEnv.maxRunning,
-    reconcileSeconds: teamDesktopEnv.reconcileSeconds,
-    members: () => listTeamBMemberBotIds(prisma),
-  });
-  await syncTeamBDesktops(prisma, teamDesktops);
+  const teamDesktops = teamDesktopAllocatorForProvider(sandboxProvider, () =>
+    createTeamDesktopAllocator({
+      store: createPrismaTeamDesktopStore(prisma),
+      host: createLinuxTeamDesktopHost(),
+      idleMinutes: teamDesktopEnv.idleMinutes,
+      maxRunning: teamDesktopEnv.maxRunning,
+      reconcileSeconds: teamDesktopEnv.reconcileSeconds,
+      members: () => listTeamBMemberBotIds(prisma),
+    }),
+  );
+  if (teamDesktops) {
+    try {
+      await syncTeamBDesktops(prisma, teamDesktops);
+    } catch (error) {
+      logger.error("team desktop membership sync failed", error);
+    }
+  }
   const sandbox = createRunSandbox(sandboxProvider, {
     ...sandboxProviderOptionsFromEnv(process.env),
     supervisorUrl: process.env.SANDBOX_SUPERVISOR_URL ?? "http://127.0.0.1:7091",
@@ -264,7 +273,7 @@ async function main() {
     leadership: createPostgresReconciliationLeadership(pool),
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
-    reconcileTeamDesktops: () => teamDesktops.reconcileIfDue(),
+    reconcileTeamDesktops: teamDesktops ? () => teamDesktops.reconcileIfDue() : undefined,
   });
   reconciler.start();
 

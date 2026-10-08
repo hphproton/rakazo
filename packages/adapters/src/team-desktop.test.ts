@@ -1,3 +1,4 @@
+import { HUB_SPAWN_KEY_PREFIX, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
 import type { LogEvent } from "@rakazo/logging";
 import { createLogger, installLogger } from "@rakazo/logging";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,11 +9,14 @@ import {
   TeamDesktopExhaustedError,
   type TeamDesktopHost,
   TeamDesktopLimitError,
+  TeamDesktopMissingError,
   type TeamDesktopRecord,
   type TeamDesktopState,
   type TeamDesktopStore,
+  teamDesktopAllocatorForProvider,
   teamDesktopConfigFromEnv,
   teamDesktopMemberBotIds,
+  teamDesktopMemberBotWhere,
   teamDesktopPurgePaths,
 } from "./team-desktop.js";
 import { createLinuxTeamDesktopHost } from "./team-desktop-host.js";
@@ -358,6 +362,109 @@ describe("team desktop membership", () => {
     expect(host.stops).toEqual([staffIndex, chiefIndex]);
     expect(host.purges).toEqual([staffIndex, chiefIndex]);
     expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
+  });
+
+  it("gives a hub roster mirror no row", async () => {
+    const { alloc, store } = harness();
+    await alloc.syncMembership(
+      teamDesktopMemberBotIds([
+        {
+          id: "mirror",
+          archived: false,
+          computerScope: "team",
+          spawnKey: `${HUB_SPAWN_KEY_PREFIX}agent`,
+        },
+        { id: "chief", archived: false, computerScope: "team", spawnKey: null },
+      ]),
+    );
+    expect(store.rows.has("mirror")).toBe(false);
+    expect(row(store, "chief").state).toBe("reserved");
+    expect(teamDesktopMemberBotWhere()).toEqual({
+      archivedAt: null,
+      computer: { is: { scope: "team" } },
+      ...VISIBLE_ROSTER_BOT_WHERE,
+    });
+  });
+
+  it("keeps create and archive working when 101-150 is full", async () => {
+    const events: LogEvent[] = [];
+    installLogger(
+      createLogger({
+        service: "test",
+        level: "debug",
+        sinks: [
+          {
+            write(event) {
+              events.push(event);
+            },
+          },
+        ],
+      }),
+    );
+    const members = Array.from({ length: 51 }, (_, index) => `bot-${index}`);
+    const { alloc, store, host } = harness();
+    await expect(alloc.syncMembership(members)).resolves.toBeUndefined();
+    expect(store.rows.size).toBe(50);
+    expect(store.rows.has("bot-50")).toBe(false);
+    const warning = events.find((event) => event.level === "warn");
+    expect(warning?.message).toBe("team desktop band is full; extra members stay without a row");
+    expect(warning?.skipped).toBe(1);
+    const dumped = JSON.stringify(events);
+    for (const held of store.rows.values()) {
+      expect(dumped).not.toContain(held.ownerToken);
+    }
+
+    await expect(alloc.syncMembership(members.slice(1))).resolves.toBeUndefined();
+    expect(store.rows.has("bot-0")).toBe(false);
+    expect(store.rows.has("bot-50")).toBe(true);
+    expect(store.rows.size).toBe(50);
+    expect(host.stops.every((index) => index >= 101 && index <= 150)).toBe(true);
+
+    await expect(
+      alloc.syncMembership([...members.slice(2), "bot-51", "bot-52"]),
+    ).resolves.toBeUndefined();
+    expect(store.rows.has("bot-1")).toBe(false);
+    expect(store.rows.size).toBe(50);
+    expect(["bot-51", "bot-52"].filter((id) => store.rows.has(id))).toHaveLength(1);
+  });
+
+  it("reserves an unreserved member on demand and exhausts only that call", async () => {
+    const { alloc, store, host } = harness({ members: async () => ["late"] });
+    const binding = await alloc.ensure("late");
+    expect(row(store, "late").displayIndex).toBe(binding.displayIndex);
+    expect(host.starts).toEqual([
+      { displayIndex: binding.displayIndex, ownerToken: binding.ownerToken },
+    ]);
+    await expect(alloc.ensure("other")).rejects.toBeInstanceOf(TeamDesktopMissingError);
+    expect(store.rows.has("other")).toBe(false);
+
+    const held = Array.from({ length: 50 }, (_, index) => `held-${index}`);
+    const full = harness({ members: async () => [...held, "extra"] });
+    await full.alloc.syncMembership(held);
+    expect(full.store.rows.size).toBe(50);
+    await expect(full.alloc.ensure("extra")).rejects.toBeInstanceOf(TeamDesktopExhaustedError);
+    expect(full.store.rows.size).toBe(50);
+    expect(full.store.rows.has("extra")).toBe(false);
+    await expect(full.alloc.ensure("stranger")).rejects.toBeInstanceOf(TeamDesktopMissingError);
+  });
+
+  it("reserves on demand when membership is not configured", async () => {
+    const { alloc, store } = harness();
+    await alloc.ensure("bot");
+    expect(row(store, "bot").state).toBe("running");
+  });
+});
+
+describe("team desktop provider gate", () => {
+  it("does not open the allocator unless the provider is sand", () => {
+    for (const provider of ["fake", "docker", "e2b", "none"]) {
+      const open = vi.fn(() => ({ id: "alloc" }));
+      expect(teamDesktopAllocatorForProvider(provider, open)).toBeUndefined();
+      expect(open).not.toHaveBeenCalled();
+    }
+    const open = vi.fn(() => ({ id: "alloc" }));
+    expect(teamDesktopAllocatorForProvider("sand", open)).toEqual({ id: "alloc" });
+    expect(open).toHaveBeenCalledOnce();
   });
 });
 

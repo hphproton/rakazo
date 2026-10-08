@@ -1,5 +1,6 @@
 import type { AdapterContext } from "@rakazo/adapter-kit";
 import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
+import { teamDesktopCapacityMessage } from "./team-desktop.js";
 
 export const COMPUTER_SCREEN_UNAVAILABLE =
   "The computer screen is temporarily busy. Retry in a moment. File and shell tools still work.";
@@ -77,6 +78,8 @@ export async function withComputerScreenAvailability<T>(
     return await work();
   } catch (error) {
     if (isComputerScreenUnavailable(error)) return { error: error.message };
+    const capacity = teamDesktopCapacityMessage(error);
+    if (capacity) return { error: capacity };
     throw error;
   }
 }
