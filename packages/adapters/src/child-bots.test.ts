@@ -1018,6 +1018,7 @@ describe("archiveBot", () => {
       $transaction: transaction,
     } as unknown as PrismaClient;
     const sandbox = {
+      describe: () => ({ id: "cloud" }),
       exportWorkspace: async function* () {},
       stop,
     } as unknown as SandboxProvider;
@@ -1074,6 +1075,7 @@ describe("archiveBot", () => {
       $transaction: transaction,
     } as unknown as PrismaClient;
     const sandbox = {
+      describe: () => ({ id: "cloud" }),
       exportWorkspace: async function* () {},
       stop,
     } as unknown as SandboxProvider;
