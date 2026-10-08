@@ -46,6 +46,8 @@ export const SAND_WORKSPACE = "/workspace";
 export interface TeamDesktopGateway {
   resolve(botId: string): Promise<TeamDesktopBinding | undefined>;
   ensure(botId: string): Promise<TeamDesktopBinding>;
+  /** Present when membership is known. Non-members stay on the seat map. */
+  member?(botId: string): Promise<boolean>;
 }
 
 export class SandSandboxProvider implements SandboxProvider {
@@ -83,6 +85,25 @@ export class SandSandboxProvider implements SandboxProvider {
     },
     context: AdapterContext,
   ): Promise<ComputerRef> {
+    const botId = context.botId || request.botId;
+    if (await this.isTeamMember(botId)) {
+      const stored = request.providerRef?.trim();
+      const mapped = stored
+        ? undefined
+        : this.opts.policy.resolve({
+            botId: request.botId,
+            callerBotId: context.botId,
+            providerRef: request.providerRef,
+          });
+      const providerRef = stored || mapped?.agentId || "team-desktop";
+      return {
+        id: `sand:${providerRef}`,
+        botId: request.botId,
+        kind: "sand",
+        providerRef,
+        fresh: false,
+      };
+    }
     const seat = requireSandSeat(this.opts.policy, {
       botId: request.botId,
       callerBotId: context.botId,
@@ -98,8 +119,8 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async prepare(computer: ComputerRef, context: AdapterContext): Promise<void> {
-    const seat = this.seat(computer, context);
-    await this.opts.host.capabilities(seat.agentId, context.signal);
+    const route = await this.session(computer, context, true);
+    await route.host.capabilities(route.agentId, context.signal);
   }
 
   async *execute(
@@ -144,7 +165,7 @@ export class SandSandboxProvider implements SandboxProvider {
     _request: ScreenRequest,
     context: AdapterContext,
   ): Promise<ScreenSession> {
-    const binding = await this.desktopBinding(computer, context);
+    const binding = await this.screenBinding(computer, context);
     if (binding) {
       const url = teamDesktopViewerUrl(binding.displayIndex);
       if (sandScreenSelectsForbiddenDisplay(url)) throw new SandDisplayForbiddenError();
@@ -273,6 +294,13 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   async snapshot(computer: ComputerRef, context: AdapterContext) {
+    const botId = context.botId || computer.botId;
+    if (await this.isTeamMember(botId)) {
+      return {
+        id: `sand-workspace-${botId}`,
+        createdAt: new Date().toISOString(),
+      };
+    }
     const seat = this.seat(computer, context);
     return {
       id: `sand-workspace-${seat.agentId}`,
@@ -342,13 +370,31 @@ export class SandSandboxProvider implements SandboxProvider {
     return entry?.type === "DIRECTORY";
   }
 
-  private async desktopBinding(
+  private async isTeamMember(botId: string): Promise<boolean> {
+    const member = this.opts.teamDesktops?.member;
+    if (!member) return false;
+    return member(botId);
+  }
+
+  /**
+   * A row uses that display. A member with no row reserves one.
+   * Anyone else keeps the seat map.
+   */
+  private async screenBinding(
     computer: ComputerRef,
     context: AdapterContext,
   ): Promise<TeamDesktopBinding | undefined> {
     const gateway = this.opts.teamDesktops;
     if (!gateway) return undefined;
-    return gateway.resolve(context.botId || computer.botId);
+    const botId = context.botId || computer.botId;
+    const resolved = await gateway.resolve(botId);
+    if (resolved) return resolved;
+    try {
+      return await gateway.ensure(botId);
+    } catch (error) {
+      if (!(error instanceof TeamDesktopMissingError)) throw error;
+      return undefined;
+    }
   }
 
   /**

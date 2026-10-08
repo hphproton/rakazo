@@ -15,13 +15,16 @@ SandboxProvider workspace <-> AgentHomeStore <-> Rakazo-owned DATA_DIR
 Hands are shell, files, and computer-use on that agent. A Rakazo bot id is not
 an agent id. `SANDBOX_SAND_SEAT_MAP` accepts a bot id or a computer home key.
 A dedicated computer uses the bot id. A Team Computer uses `team-` plus the
-space id, and a bot id entry on that computer is used first. Unmapped ids are
-refused at provision. A stored ref from another provider, including `fake-<home key>`, does
-not block the map. A different sand agent UUID still refuses. It does not create
-an agent or attach display `:1` or `:3`. A non-archived bot whose computer
-scope is `team` gets a desktop row and uses display index 101–150 through
-`x-sand-display` and `x-sand-window-owner` on `http://127.0.0.1:1339`. A
-private computer, a missing computer, or an archived bot keeps the seat map. The pod
+space id, and a bot id entry on that computer is used first. A bot that is
+not a team member, and has no map entry, is refused at provision. A stored ref
+from another provider, including `fake-<home key>`, does not block the map. A
+different sand agent UUID still refuses. It does not create an agent or attach
+display `:1` or `:3`. A non-archived bot whose computer scope is `team` gets a
+desktop in 101–150, including when it switches from a private computer and
+including when it has no seat-map entry. Run setup and later calls use that
+display through `x-sand-display` and `x-sand-window-owner` on
+`http://127.0.0.1:1339`. A private computer, a missing computer, or an archived
+bot keeps the seat map. A desktop with a run still in progress is not idle-stopped. The pod
 workspace is `/workspace`, shared by sand windows, and it is not a Team B
 container. Sand hands are `computer_observe` plus `computer_act` kinds click,
 move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and

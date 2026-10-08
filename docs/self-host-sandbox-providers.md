@@ -67,13 +67,17 @@ type, key, scroll, and wait. `focus`, `open_path`, and `launch_app` are refused.
 There is no pty, snapshot, takeover, extra screen, or page browser. A directory
 is listed or skipped; it is not passed to ReadBinaryFile.
 
-`SAND_HOST_TOKEN` is an optional bearer. A bot with no Team desktop row still
-sends `x-sand-agent-id` to `SAND_HOST_URL`. The router ignores that header. A
-bot with a Team desktop row is sent to `http://127.0.0.1:1339` with
-`x-sand-display` and `x-sand-window-owner`, including when `SAND_HOST_URL`
-points at one exec daemon. Its viewer is `http://127.0.0.1:6081?token=N`,
-where N is the display index. The in-app screen seals that URL; the browser
+`SAND_HOST_TOKEN` is an optional bearer. A team member reserves a desktop on
+demand and is sent to `http://127.0.0.1:1339` with `x-sand-display` and
+`x-sand-window-owner` for prepare, capabilities, and every later call, even
+when that bot also has a seat-map entry and even when no row existed yet. A
+bot that is not a team member, and has no Team desktop row, still sends
+`x-sand-agent-id` to `SAND_HOST_URL`. The router ignores that header. The
+viewer is `http://127.0.0.1:6081?token=N`, where N is the display index. The
+in-app screen, including the side-panel preview, seals that URL; the browser
 loads the app origin, and the socket proxy opens `6081` with `token=N`.
+Stop and release delete only `Fork-N` for N in 101–150, including
+`/home/box/chrome-profile/Fork-N`. `Default` and every other profile stay.
 
 Allocation runs only when the resolved provider is `sand`. `fake`, `docker`,
 `e2b`, and `none` do not sync, reserve, or probe the host. Hub roster mirrors
