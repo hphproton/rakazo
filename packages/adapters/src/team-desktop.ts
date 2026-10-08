@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { HUB_SPAWN_KEY_PREFIX, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
+import { ACTIVE_RUN_STATUSES, HUB_SPAWN_KEY_PREFIX, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 
@@ -16,10 +16,12 @@ export const TEAM_DESKTOP_ENSURE_TIMEOUT_MS = 15_000;
 
 const POLL_MS = 200;
 
+/** Only `Fork-N` under these roots is purged, and only for N in 101–150. Never `Default`. */
 export const TEAM_DESKTOP_FORK_ROOTS = [
   "/tmp",
   "/home/box/.config/google-chrome",
   "/home/box/.config/chromium",
+  "/home/box/chrome-profile",
 ] as const;
 
 export type TeamDesktopState = "reserved" | "running" | "stopped" | "releasing";
@@ -82,6 +84,8 @@ export interface TeamDesktopAllocator {
   release(botId: string): Promise<void>;
   status(botId: string): Promise<TeamDesktopStatus | null>;
   resolve(botId: string): Promise<TeamDesktopBinding | undefined>;
+  /** True when this bot is a current team member. Hub mirrors are not. */
+  member(botId: string): Promise<boolean>;
   reconcile(): Promise<void>;
   reconcileIfDue(): Promise<void>;
   syncMembership(memberBotIds: readonly string[]): Promise<void>;
@@ -262,6 +266,11 @@ export function createTeamDesktopAllocator(options: {
   sleep?: (ms: number) => Promise<void>;
   /** Current member bot ids. Reconcile re-syncs from this list. */
   members?: () => Promise<readonly string[]>;
+  /**
+   * Bots with a run still in progress. Those desktops are not idle-stopped
+   * or cap-evicted. When a bot leaves this set, its idle clock starts then.
+   */
+  activeRuns?: () => Promise<readonly string[]>;
 }): TeamDesktopAllocator {
   const idleMinutes = options.idleMinutes ?? TEAM_DESKTOP_DEFAULT_IDLE_MINUTES;
   const maxRunning = options.maxRunning ?? TEAM_DESKTOP_DEFAULT_MAX_RUNNING;
@@ -273,6 +282,8 @@ export function createTeamDesktopAllocator(options: {
   const store = options.store;
   const host = options.host;
   const members = options.members;
+  const activeRuns = options.activeRuns;
+  const watchedRuns = new Set<string>();
   let tail: Promise<unknown> = Promise.resolve();
   let lastReconcileAt = 0;
 
@@ -317,6 +328,10 @@ export function createTeamDesktopAllocator(options: {
       const row = await store.getByBot(botId);
       if (!row || row.state === "releasing") return undefined;
       return { displayIndex: row.displayIndex, ownerToken: row.ownerToken };
+    },
+    async member(botId) {
+      if (!members) return false;
+      return (await members()).includes(botId);
     },
     reconcile() {
       return exclusive(() => reconcileBody());
@@ -403,6 +418,8 @@ export function createTeamDesktopAllocator(options: {
   }
 
   async function makeRoom(botId: string): Promise<void> {
+    const busy = await currentBusy();
+    await releaseFinishedRuns(busy);
     const rows = await store.list();
     const self = rows.find((row) => row.botId === botId);
     if (self?.state === "running") return;
@@ -412,7 +429,7 @@ export function createTeamDesktopAllocator(options: {
       );
       if (running.length < maxRunning) return;
       const idle = running
-        .filter((row) => isIdle(row))
+        .filter((row) => !busy.has(row.botId) && isIdle(row))
         .sort((a, b) => (a.lastUsedAt?.getTime() ?? 0) - (b.lastUsedAt?.getTime() ?? 0));
       const victim = idle[0];
       if (!victim) throw new TeamDesktopLimitError(maxRunning);
@@ -543,6 +560,8 @@ export function createTeamDesktopAllocator(options: {
         getLogger().error("team desktop orphan reap failed", scrubbed(error, []));
       }
     }
+    const busy = await currentBusy();
+    await releaseFinishedRuns(busy);
     const cutoff = idleCutoff();
     for (const row of await store.list()) {
       if (!inRange(row.displayIndex)) continue;
@@ -556,8 +575,27 @@ export function createTeamDesktopAllocator(options: {
         await markStopped(row);
         continue;
       }
+      if (busy.has(row.botId)) continue;
       if ((row.lastUsedAt?.getTime() ?? 0) <= cutoff) await stopBody(row.botId);
     }
+  }
+
+  async function currentBusy(): Promise<Set<string>> {
+    if (!activeRuns) return new Set();
+    return new Set(await activeRuns());
+  }
+
+  /** A run that just ended starts its idle clock now, not from the last tool call. */
+  async function releaseFinishedRuns(busy: ReadonlySet<string>): Promise<void> {
+    if (!activeRuns) return;
+    const finishedAt = now();
+    for (const botId of watchedRuns) {
+      if (busy.has(botId)) continue;
+      const row = await store.getByBot(botId);
+      if (row && row.state !== "releasing") await store.update(botId, { lastUsedAt: finishedAt });
+    }
+    watchedRuns.clear();
+    for (const botId of busy) watchedRuns.add(botId);
   }
 
   async function pickIndex(): Promise<number> {
@@ -628,6 +666,16 @@ export function createPrismaTeamDesktopStore(prisma: PrismaClient): TeamDesktopS
       await prisma.teamDesktop.deleteMany({ where: { botId } });
     },
   };
+}
+
+/** Bots whose run is still in progress. The idle reaper treats these desktops as in use. */
+export async function listTeamDesktopActiveRunBotIds(prisma: PrismaClient): Promise<string[]> {
+  const rows = await prisma.run.findMany({
+    where: { status: { in: [...ACTIVE_RUN_STATUSES] } },
+    select: { botId: true },
+    distinct: ["botId"],
+  });
+  return rows.map((row) => row.botId);
 }
 
 /** Non-archived team-computer bots, excluding Hub roster mirrors. Does not read chat groups. */

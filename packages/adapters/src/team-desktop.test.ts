@@ -6,6 +6,7 @@ import {
   assertTeamDesktopIndex,
   createTeamDesktopAllocator,
   isTeamDesktopTmpLeftover,
+  TEAM_DESKTOP_FORK_ROOTS,
   TeamDesktopExhaustedError,
   type TeamDesktopHost,
   TeamDesktopLimitError,
@@ -130,6 +131,7 @@ function harness(options?: {
   now?: Date;
   ensureTimeoutMs?: number;
   members?: () => Promise<readonly string[]>;
+  activeRuns?: () => Promise<readonly string[]>;
 }) {
   const store = new MemoryTeamDesktopStore();
   const host = new FakeTeamDesktopHost();
@@ -141,6 +143,7 @@ function harness(options?: {
     idleMinutes: options?.idleMinutes,
     ensureTimeoutMs: options?.ensureTimeoutMs,
     members: options?.members,
+    activeRuns: options?.activeRuns,
     now: () => now,
     sleep: async () => {
       now = new Date(now.getTime() + 1_000);
@@ -155,6 +158,9 @@ function harness(options?: {
     },
     advance(ms: number) {
       now = new Date(now.getTime() + ms);
+    },
+    now() {
+      return now;
     },
   };
 }
@@ -565,6 +571,42 @@ describe("team desktop running cap", () => {
     expect(row(store, "busy").state).toBe("running");
     expect(row(store, "waiting").state).toBe("reserved");
   });
+
+  it("keeps a desktop with an active run and starts the idle clock when the run ends", async () => {
+    let active = ["chief"];
+    const { alloc, host, store, advance, now } = harness({
+      maxRunning: 1,
+      idleMinutes: 2,
+      activeRuns: async () => active,
+    });
+    await alloc.reserve("chief");
+    await alloc.ensure("chief");
+    const chiefIndex = row(store, "chief").displayIndex;
+    const touchedAt = row(store, "chief").lastUsedAt?.toISOString();
+    advance(10 * 60_000);
+    await alloc.reconcile();
+    expect(row(store, "chief").state).toBe("running");
+    expect(row(store, "chief").lastUsedAt?.toISOString()).toBe(touchedAt);
+    expect(host.stops).not.toContain(chiefIndex);
+
+    await alloc.reserve("other");
+    await expect(alloc.ensure("other")).rejects.toBeInstanceOf(TeamDesktopLimitError);
+    expect(row(store, "chief").state).toBe("running");
+    expect(row(store, "other").state).toBe("reserved");
+    expect(host.stops).not.toContain(chiefIndex);
+
+    active = [];
+    const finishedAt = now().toISOString();
+    await alloc.reconcile();
+    expect(row(store, "chief").state).toBe("running");
+    expect(row(store, "chief").lastUsedAt?.toISOString()).toBe(finishedAt);
+    expect(host.stops).not.toContain(chiefIndex);
+
+    advance(2 * 60_000 + 1);
+    await alloc.reconcile();
+    expect(row(store, "chief").state).toBe("stopped");
+    expect(host.stops).toEqual([chiefIndex]);
+  });
 });
 
 describe("team desktop host bounds", () => {
@@ -598,10 +640,24 @@ describe("team desktop host bounds", () => {
       "/tmp/Fork-101",
       "/home/box/.config/google-chrome/Fork-101",
       "/home/box/.config/chromium/Fork-101",
+      "/home/box/chrome-profile/Fork-101",
     ]);
+    expect(paths.some((entry) => entry.includes("Default"))).toBe(false);
+    expect(paths.some((entry) => entry.includes("Fork-100") || entry.includes("Fork-20"))).toBe(
+      false,
+    );
+    expect(TEAM_DESKTOP_FORK_ROOTS).toContain("/home/box/chrome-profile");
     expect(isTeamDesktopTmpLeftover("plank:101.pid", 101)).toBe(true);
     expect(isTeamDesktopTmpLeftover("plank:1010.pid", 101)).toBe(false);
     expect(() => teamDesktopPurgePaths(20, ["xvfb:20.log"])).toThrow(/outside 101-150/);
+    expect(() => teamDesktopPurgePaths(100, [])).toThrow(/outside 101-150/);
+    expect(() => teamDesktopPurgePaths(151, [])).toThrow(/outside 101-150/);
+    expect(teamDesktopPurgePaths(150, []).filter((entry) => entry.includes("Fork-"))).toEqual([
+      "/tmp/Fork-150",
+      "/home/box/.config/google-chrome/Fork-150",
+      "/home/box/.config/chromium/Fork-150",
+      "/home/box/chrome-profile/Fork-150",
+    ]);
   });
 
   it("reads idle, reconcile, and cap defaults from the environment", () => {

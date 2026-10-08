@@ -33,6 +33,7 @@ import {
   LocalAgentHomeStore,
   LocalArtifactStore,
   listTeamBMemberBotIds,
+  listTeamDesktopActiveRunBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingEnvFromProcess,
@@ -103,6 +104,7 @@ async function main() {
       maxRunning: teamDesktopEnv.maxRunning,
       reconcileSeconds: teamDesktopEnv.reconcileSeconds,
       members: () => listTeamBMemberBotIds(prisma),
+      activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
     }),
   );
   if (teamDesktops) {

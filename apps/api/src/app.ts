@@ -50,6 +50,7 @@ import {
   LocalAgentHomeStore,
   LocalArtifactStore,
   listTeamBMemberBotIds,
+  listTeamDesktopActiveRunBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingPlatformsFromEnv,
@@ -261,6 +262,7 @@ export async function createApp(
       maxRunning: env.teamDesktopMaxRunning,
       reconcileSeconds: env.teamDesktopReconcileSeconds,
       members: () => listTeamBMemberBotIds(prisma),
+      activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
     }),
   );
   if (teamDesktops) {

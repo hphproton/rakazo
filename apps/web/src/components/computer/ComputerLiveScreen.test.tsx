@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
 import type { ComputerStatus } from "@rakazo/contracts";
+import { openScreenCapability, sealScreenCapability } from "@rakazo/core/node/screen-capability";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sandScreenSocketUrl } from "../../lib/computer-screen";
 import { ComputerLiveScreen, SAND_SCREEN_RETRY_MS } from "./ComputerLiveScreen";
 
 type MockClient = {
@@ -190,6 +192,46 @@ describe("ComputerLiveScreen", () => {
     expect(clients[0]?.viewOnly).toBe(false);
     expect(clients[0]?.focusOnClick).toBe(true);
     expect(view.container.querySelector("iframe")).toBeNull();
+    await view.cleanup();
+  });
+
+  it("fills the side-panel preview from the same 6081 display token", async () => {
+    const upstream = "http://127.0.0.1:6081?token=101";
+    const sealed = sealScreenCapability(
+      upstream,
+      "fake-secret",
+      "https://app.example",
+      {
+        botId: "bot-a",
+        computerId: "computer",
+        botGeneration: 1,
+        computerGeneration: 1,
+        controlLeaseId: null,
+      },
+      100,
+    );
+    const page = new URL(sealed);
+    expect(page.origin).toBe("https://app.example");
+    expect(page.search).not.toContain("token=101");
+    expect(sealed).not.toContain("14020");
+    expect(sealed).not.toContain(":20");
+    const socketPath = new URL(page.searchParams.get("path") ?? "", page.origin).pathname;
+    expect(openScreenCapability(socketPath, "fake-secret", 101)?.target).toMatchObject({
+      protocol: "http:",
+      hostname: "127.0.0.1",
+      port: 6081,
+      path: "/websockify?token=101",
+    });
+    const view = await renderScreen("sand", sealed, "none");
+    const frame = view.container.querySelector("[data-testid='sand-screen-frame']");
+    expect(frame?.getAttribute("aria-label")).toBe("Bot screen preview");
+    expect(frame?.className).toContain("absolute");
+    expect(frame?.className).toContain("inset-0");
+    expect(view.container.querySelector("iframe")).toBeNull();
+    expect(clients).toHaveLength(1);
+    expect(clients[0]?.url).toBe(sandScreenSocketUrl(sealed, window.location.href));
+    expect(clients[0]?.url).not.toContain("14020");
+    expect(clients[0]?.url).not.toContain(":20");
     await view.cleanup();
   });
 

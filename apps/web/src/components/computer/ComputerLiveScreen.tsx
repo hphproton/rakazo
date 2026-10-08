@@ -11,6 +11,11 @@ import {
 export const SAND_SCREEN_RETRY_MS = 1_000;
 
 const FRAME_CLASS = "h-full w-full border-0 bg-black";
+/**
+ * Pin the frame to the preview card. The card sizes with aspect-ratio and its
+ * other child is the absolute open button, so the RFB client measures this box.
+ */
+const SAND_FRAME_CLASS = "absolute inset-0 overflow-hidden border-0 bg-black";
 
 export function liveScreenIsInAppRfb(kind: ComputerStatus["kind"] | undefined) {
   return kind === "sand";
@@ -135,7 +140,7 @@ function SandScreenFrame({
       data-testid="sand-screen-frame"
       role="img"
       aria-label={title}
-      className={FRAME_CLASS}
+      className={SAND_FRAME_CLASS}
       style={{ pointerEvents }}
     />
   );

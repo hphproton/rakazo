@@ -23,13 +23,16 @@ import {
 import { SAND_WORKSPACE, SandSandboxProvider, sandWorkspacePath } from "./sand-sandbox.js";
 import type { SandSeatPolicy, SandSeatRequest } from "./sand-seat.js";
 import {
+  MappedSandSeatPolicy,
   RefusingSandSeatPolicy,
   SandDisplayForbiddenError,
   SandSeatInvalidError,
   SandSeatUnmappedError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import type { TeamDesktopHost, TeamDesktopRecord, TeamDesktopStore } from "./team-desktop.js";
 import {
+  createTeamDesktopAllocator,
   TeamDesktopExhaustedError,
   TeamDesktopMissingError,
   teamDesktopViewerUrl,
@@ -868,7 +871,201 @@ describe("sand host router", () => {
       path: "/websockify?token=121",
     });
   });
+
+  it("runs a team member that has no seat-map entry", async () => {
+    const desk = teamMemberDesk(["deputy"], new Map([["chief", AGENT_A]]));
+    const context = { ...ctx, botId: "deputy" };
+    const computer = await desk.sandbox.provision(
+      { botId: "team-space", homePath: "/tmp" },
+      context,
+    );
+    expect(computer.providerRef).toBe("team-desktop");
+    expect(desk.urls).toEqual([]);
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+    expect(desk.urls).toEqual([]);
+    await prepareAndExec(desk.sandbox, computer, "deputy");
+    expect(desk.urls[0]).toBe("http://127.0.0.1:1339/agent.v1.ControlService/GetCapabilities");
+    expect(desk.urls.every((url) => url.startsWith("http://127.0.0.1:1339/"))).toBe(true);
+    expect(desk.urls.some((url) => url.includes("14020"))).toBe(false);
+    expect(desk.seen.every((call) => call.display === "101" && call.agent === null)).toBe(true);
+    expect(desk.seen.every((call) => call.ownerLength > 16)).toBe(true);
+    expect(desk.store.rows.get("deputy")?.displayIndex).toBe(101);
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+  });
+
+  it("does not call the seat host for a team member that is also in the seat map", async () => {
+    const desk = teamMemberDesk(
+      ["chief"],
+      new Map([
+        ["chief", AGENT_A],
+        ["team-space", AGENT_A],
+      ]),
+    );
+    const context = { ...ctx, botId: "chief" };
+    const computer = await desk.sandbox.provision(
+      { botId: "team-space", homePath: "/tmp" },
+      context,
+    );
+    expect(computer.providerRef).toBe(AGENT_A);
+    await prepareAndExec(desk.sandbox, computer, "chief");
+    expect(desk.urls.some((url) => url.includes("GetCapabilities"))).toBe(true);
+    expect(desk.urls.every((url) => url.startsWith("http://127.0.0.1:1339/"))).toBe(true);
+    expect(desk.urls.some((url) => url.includes("14020"))).toBe(false);
+    expect(desk.seen.every((call) => call.display === "101" && call.agent === null)).toBe(true);
+    expect(desk.seen.some((call) => call.display === "20")).toBe(false);
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+  });
+
+  it("gives a bot that switches from dedicated to team its own desktop without a seat", async () => {
+    const desk = teamMemberDesk(["staff"], new Map());
+    const context = { ...ctx, botId: "staff" };
+    const computer = await desk.sandbox.provision(
+      { botId: "team-space", homePath: "/tmp", providerRef: "dedicated-staff" },
+      context,
+    );
+    expect(computer.providerRef).toBe("dedicated-staff");
+    await prepareAndExec(desk.sandbox, computer, "staff");
+    expect(desk.urls[0]).toBe("http://127.0.0.1:1339/agent.v1.ControlService/GetCapabilities");
+    expect(desk.urls.every((url) => url.startsWith("http://127.0.0.1:1339/"))).toBe(true);
+    expect(desk.urls.some((url) => url.includes("14020"))).toBe(false);
+    expect(desk.seen.every((call) => call.display === "101" && call.agent === null)).toBe(true);
+    expect(desk.seen.every((call) => call.ownerLength > 16)).toBe(true);
+    expect(desk.store.rows.get("staff")?.state).toBe("running");
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+  });
 });
+
+class MemoryDeskStore implements TeamDesktopStore {
+  readonly rows = new Map<string, TeamDesktopRecord>();
+
+  async getByBot(botId: string) {
+    const row = this.rows.get(botId);
+    return row ? { ...row } : null;
+  }
+
+  async list() {
+    return [...this.rows.values()].map((row) => ({ ...row }));
+  }
+
+  async insert(row: TeamDesktopRecord) {
+    if ([...this.rows.values()].some((existing) => existing.botId === row.botId)) {
+      throw Object.assign(new Error("unique"), { code: "P2002" });
+    }
+    if ([...this.rows.values()].some((existing) => existing.displayIndex === row.displayIndex)) {
+      throw Object.assign(new Error("unique"), { code: "P2002" });
+    }
+    this.rows.set(row.botId, { ...row });
+  }
+
+  async update(botId: string, patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt">>) {
+    const row = this.rows.get(botId);
+    if (!row) throw new Error(`missing ${botId}`);
+    this.rows.set(botId, { ...row, ...patch });
+  }
+
+  async delete(botId: string) {
+    this.rows.delete(botId);
+  }
+}
+
+class QuietTeamDesktopHost implements TeamDesktopHost {
+  private readonly alive = new Set<number>();
+
+  async xSocketExists() {
+    return false;
+  }
+
+  async tokenFileExists() {
+    return false;
+  }
+
+  async portListening() {
+    return false;
+  }
+
+  async windowAlive(displayIndex: number) {
+    return this.alive.has(displayIndex);
+  }
+
+  async startWindow(displayIndex: number, _ownerToken: string) {
+    this.alive.add(displayIndex);
+  }
+
+  async stopWindow(displayIndex: number) {
+    this.alive.delete(displayIndex);
+  }
+
+  async purge() {}
+}
+
+function teamMemberDesk(members: readonly string[], seats: ReadonlyMap<string, string>) {
+  const urls: string[] = [];
+  const seen: Array<{ display: string | null; agent: string | null; ownerLength: number }> = [];
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    urls.push(url);
+    const headers = new Headers(init?.headers);
+    seen.push({
+      display: headers.get(SAND_DISPLAY_HEADER),
+      agent: headers.get(SAND_AGENT_HEADER),
+      ownerLength: headers.get(SAND_WINDOW_OWNER_HEADER)?.length ?? 0,
+    });
+    if (url.endsWith("/agent.v1.ControlService/GetCapabilities")) {
+      return Response.json({ computerUseSupported: true });
+    }
+    if (url.endsWith("/agent.v1.ControlService/Exec")) {
+      return new Response(
+        Buffer.concat([
+          frame(0, { stdoutEvent: { data: "ok\n" } }),
+          frame(0, { exitEvent: { exitCode: 0 } }),
+          frame(2, {}),
+        ]),
+      );
+    }
+    return new Response("no", { status: 404 });
+  });
+  const store = new MemoryDeskStore();
+  const sandbox = new SandSandboxProvider({
+    policy: new MappedSandSeatPolicy(seats),
+    host: new ConnectSandHost({
+      baseUrl: "http://127.0.0.1:14020",
+      token: "test-sand-token",
+      fetch: fetchMock,
+    }),
+    teamDesktops: createTeamDesktopAllocator({
+      store,
+      host: new QuietTeamDesktopHost(),
+      members: async () => members,
+      now: () => new Date("2026-10-08T12:00:00.000Z"),
+      sleep: async () => undefined,
+    }),
+  });
+  return { sandbox, urls, seen, store };
+}
+
+async function prepareAndExec(
+  sandbox: SandSandboxProvider,
+  computer: Awaited<ReturnType<SandSandboxProvider["provision"]>>,
+  botId: string,
+) {
+  const context = { ...ctx, botId };
+  await sandbox.prepare(computer, context);
+  for await (const event of sandbox.execute(
+    computer,
+    { argv: ["echo", "desk"], cwd: SAND_WORKSPACE },
+    context,
+  )) {
+    if (event.type === "exit") expect(event.code).toBe(0);
+  }
+}
 
 function lsArgv(body: unknown): boolean {
   return Array.isArray((body as { argv?: unknown }).argv)
