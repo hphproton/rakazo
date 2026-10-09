@@ -18,8 +18,35 @@ const scope: ScreenCapabilityScope = {
   computerGeneration: 3,
   controlLeaseId: null,
 };
+/** Parse a relative seal the way a browser does, against the page that embedded it. */
+function capabilityUrl(value: string, viewer = "http://viewer.invalid") {
+  return new URL(value, viewer);
+}
+
+/**
+ * Stock noVNC 1.7 `app/ui.js` `connect` when `host` is unset.
+ * That is the default, and the seal does not set `host`.
+ */
+function stockNovncSocket(pageHref: string) {
+  const path = new URL(pageHref).searchParams.get("path") ?? "websockify";
+  const url = new URL(path, pageHref);
+  url.protocol = new URL(pageHref).protocol === "https:" ? "wss:" : "ws:";
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+/** Custom embed: strip a leading slash and join onto the capability directory. */
+function embedSocket(pageHref: string) {
+  const page = new URL(pageHref);
+  const path = (page.searchParams.get("path") ?? "websockify").replace(/^\//, "");
+  const prefix = page.pathname.replace(/[^/]+$/, "");
+  const protocol = page.protocol === "https:" ? "wss:" : "ws:";
+  return new URL(`${protocol}//${page.host}${prefix}${path}`);
+}
+
 const path = (url: string, interactive = false) =>
-  new URL(
+  capabilityUrl(
     sealScreenCapability(
       `${url}?token=fake-provider-token&view_only=${!interactive}`,
       "fake-secret",
@@ -37,6 +64,7 @@ describe("sealed screen capabilities", () => {
       provider.searchParams.set("path", "websockify?token=fake-socket-token");
       const url = new URL(
         sealScreenCapability(provider.toString(), "fake-secret", "https://app.example", scope, 100),
+        "https://app.example",
       );
       const html = readFileSync(
         new URL("../../../../infra/sandboxes/computer/embed.html", import.meta.url),
@@ -97,23 +125,62 @@ describe("sealed screen capabilities", () => {
   it("keeps noVNC routing public and nested provider socket credentials sealed", () => {
     const provider = new URL("https://screen.example/vnc.html");
     provider.searchParams.set("path", "websockify?token=fake-socket-token");
-    const url = new URL(
-      sealScreenCapability(provider.toString(), "fake-secret", "https://app.example", scope, 100),
+    const sealed = sealScreenCapability(
+      provider.toString(),
+      "fake-secret",
+      "https://app.example",
+      scope,
+      100,
     );
-    expect(url.toString()).not.toContain("fake-socket-token");
+    expect(sealed.startsWith("/novnc/session/view/")).toBe(true);
+    expect(sealed).not.toContain("://");
+    expect(sealed).not.toContain("fake-socket-token");
+    const url = capabilityUrl(sealed, "http://127.0.0.1:5173/");
     expect(url.searchParams.get("autoconnect")).toBe("true");
-    const socketPath = url.searchParams.get("path");
-    expect(socketPath?.startsWith("/novnc/session/view/")).toBe(true);
-    expect(socketPath?.endsWith("/websockify")).toBe(true);
-    const page = new URL(url.pathname, "http://127.0.0.1:5173");
-    const resolved = new URL(socketPath ?? "", page);
-    expect(resolved.pathname).toBe(page.pathname.replace(/\/[^/]*$/, "/websockify"));
-    const nested = new URL(socketPath?.replace(/^\//, "") ?? "", page);
-    expect(nested.pathname).toBe(
-      `${page.pathname.replace(/\/[^/]*$/, "/")}${socketPath?.replace(/^\//, "")}`,
-    );
+    expect(url.searchParams.get("path")).toBe("websockify");
+    expect(url.searchParams.has("host")).toBe(false);
+    const resolved = stockNovncSocket(url.href);
+    expect(resolved.pathname).toBe(url.pathname.replace(/\/[^/]*$/, "/websockify"));
+    // A capability prefix without a leading slash is relative to the page, so it nests.
+    const nested = new URL("novnc/session/view/token/websockify", url);
     expect(nested.pathname).not.toBe(resolved.pathname);
     expect(openScreenCapability(resolved.pathname, "fake-secret", 101)?.target.path).toBe(
+      "/websockify?token=fake-socket-token",
+    );
+  });
+
+  it.each([
+    ["http://machine.tailnet.ts.net:5173/bots/chief", "https://screen.example/vnc.html"],
+    ["http://127.0.0.1:5173/", "https://screen.example/vnc.html"],
+    ["http://machine.tailnet.ts.net:5173/bots/chief", "http://127.0.0.1:6080/embed.html"],
+    ["http://127.0.0.1:5173/", "http://127.0.0.1:6080/embed.html"],
+    ["http://machine.tailnet.ts.net:5173/", "http://127.0.0.1:6081/"],
+    ["http://127.0.0.1:5173/", "http://127.0.0.1:6081/"],
+  ])("viewer %s connects a seal of %s on its own origin", (viewer, upstream) => {
+    const provider = new URL(upstream);
+    provider.searchParams.set("path", "websockify?token=fake-socket-token");
+    provider.searchParams.set("view_only", "true");
+    const sealed = sealScreenCapability(
+      provider.toString(),
+      "fake-secret",
+      "http://127.0.0.1:5173",
+      scope,
+      100,
+    );
+    expect(sealed.startsWith("/novnc/session/")).toBe(true);
+    expect(sealed).not.toContain("://");
+    const page = capabilityUrl(sealed, viewer);
+    expect(page.host).toBe(new URL(viewer).host);
+    expect(page.searchParams.get("path")).toBe("websockify");
+    const stock = stockNovncSocket(page.href);
+    const embed = embedSocket(page.href);
+    expect(stock.protocol).toBe(page.protocol === "https:" ? "wss:" : "ws:");
+    expect(stock.host).toBe(page.host);
+    expect(embed.host).toBe(page.host);
+    expect(stock.pathname).toBe(embed.pathname);
+    expect(stock.pathname.endsWith("/websockify")).toBe(true);
+    expect(stock.href).not.toContain("fake-socket-token");
+    expect(openScreenCapability(stock.pathname, "fake-secret", 101)?.target.path).toBe(
       "/websockify?token=fake-socket-token",
     );
   });
@@ -199,19 +266,19 @@ describe("remote screen capability reuse", () => {
     const first = issued(now);
     const duringHandshake = issued(now + 5_000);
     expect(duringHandshake).toBe(first);
-    const opened = openScreenCapability(new URL(first).pathname, "fake-secret", now + 5_000);
+    const opened = openScreenCapability(capabilityUrl(first).pathname, "fake-secret", now + 5_000);
     expect(opened?.target.path).toBe(
       "/vnc.html?autoconnect=true&resize=scale&path=websockify%3Ftoken%3Dview-1&view_only=true",
     );
     expect(
       openScreenCapability(
-        new URL(first).pathname.replace("/vnc.html", "/websockify"),
+        capabilityUrl(first).pathname.replace("/vnc.html", "/websockify"),
         "fake-secret",
         now + 5_000,
       )?.target.path,
     ).toBe("/websockify?token=view-1");
     expect(
-      openScreenCapability(new URL(first).pathname, "fake-secret", now + SCREEN_PROXY_TTL_MS),
+      openScreenCapability(capabilityUrl(first).pathname, "fake-secret", now + SCREEN_PROXY_TTL_MS),
     ).toBeNull();
   });
 
@@ -220,7 +287,7 @@ describe("remote screen capability reuse", () => {
     const first = issued(now);
     const later = issued(now + 20 * 60_000);
     expect(later).toBe(first);
-    const expiresAt = Number(new URL(later).pathname.match(/\/(\d+)\./)?.[1]);
+    const expiresAt = Number(capabilityUrl(later).pathname.match(/\/(\d+)\./)?.[1]);
     expect(expiresAt).toBe(now + SCREEN_PROXY_TTL_MS);
   });
 
@@ -232,16 +299,18 @@ describe("remote screen capability reuse", () => {
     const refreshAt = now + SCREEN_PROXY_TTL_MS - REMOTE_SCREEN_CAPABILITY_MIN_REMAINING_MS;
     const renewed = issued(refreshAt);
     expect(renewed).not.toBe(first);
-    expect(openScreenCapability(new URL(first).pathname, "fake-secret", refreshAt)).not.toBeNull();
     expect(
-      openScreenCapability(new URL(first).pathname, "fake-secret", now + SCREEN_PROXY_TTL_MS),
+      openScreenCapability(capabilityUrl(first).pathname, "fake-secret", refreshAt),
+    ).not.toBeNull();
+    expect(
+      openScreenCapability(capabilityUrl(first).pathname, "fake-secret", now + SCREEN_PROXY_TTL_MS),
     ).toBeNull();
     expect(
-      openScreenCapability(new URL(renewed).pathname, "fake-secret", refreshAt),
+      openScreenCapability(capabilityUrl(renewed).pathname, "fake-secret", refreshAt),
     ).not.toBeNull();
     expect(
       openScreenCapability(
-        new URL(renewed).pathname,
+        capabilityUrl(renewed).pathname,
         "fake-secret",
         refreshAt + SCREEN_PROXY_TTL_MS,
       ),

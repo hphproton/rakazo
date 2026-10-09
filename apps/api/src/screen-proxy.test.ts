@@ -55,7 +55,7 @@ function fixture(
     secret,
   );
   const url = addScreenProxyCapability(upstream, secret, "https://app.example", scope);
-  const path = new URL(url).pathname;
+  const path = new URL(url, "http://viewer.invalid").pathname;
   const request = (value = path, credential = secret) =>
     app.request(SCREEN_TARGET_ENDPOINT, {
       method: "POST",
@@ -146,8 +146,10 @@ describe("screen capability lifecycle authorization", () => {
     const upstream =
       "https://6100-sandbox.example/vnc.html?autoconnect=true&resize=scale&path=websockify%3Ftoken%3Dview-1&view_only=true";
     const { path, request, computer } = fixture(false, upstream);
-    const again = new URL(addScreenProxyCapability(upstream, secret, "https://app.example", scope))
-      .pathname;
+    const again = new URL(
+      addScreenProxyCapability(upstream, secret, "https://app.example", scope),
+      "http://viewer.invalid",
+    ).pathname;
     expect(again).toBe(path);
     expect((await request()).status).toBe(200);
     expect((await request(again.replace("/vnc.html", "/websockify"))).status).toBe(200);
@@ -158,7 +160,9 @@ describe("screen capability lifecycle authorization", () => {
     const upstream = "http://127.0.0.1:49152/embed.html?view_only=true";
     const first = addScreenProxyCapability(upstream, secret, "https://app.example", scope);
     const second = addScreenProxyCapability(upstream, secret, "https://app.example", scope);
-    expect(new URL(first).pathname).not.toBe(new URL(second).pathname);
+    expect(new URL(first, "http://viewer.invalid").pathname).not.toBe(
+      new URL(second, "http://viewer.invalid").pathname,
+    );
   });
   it("passes desktop and other non-http screen URLs through unsealed", () => {
     expect(

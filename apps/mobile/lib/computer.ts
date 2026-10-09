@@ -53,14 +53,25 @@ export async function readScreenUrl(
   return null;
 }
 
-/** Point a loopback noVNC URL at the same host the app uses for the API. */
+/**
+ * Absolute URL for the screen WebView.
+ * A relative seal resolves against the API origin. That origin is the public
+ * server, the same one self-hosting sets as WEB_ORIGIN, and it serves `/novnc`.
+ * An absolute loopback URL keeps its port and takes the API host when the API
+ * is not loopback, so a device can open a screen published on 127.0.0.1.
+ */
 export function embeddableScreenUrl(url: string | null, apiBase: string): string | null {
   if (!url) return null;
+  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(url);
+  // A seal is an origin-relative path. Anything else that is not an absolute
+  // URL is not a screen the WebView can open.
+  if (!absolute && !url.startsWith("/")) return null;
+  if (url.startsWith("//")) return null;
   try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     const api = new URL(apiBase);
-    if (isLocalHostname(parsed.hostname) && !isLocalHostname(api.hostname)) {
+    const parsed = absolute ? new URL(url) : new URL(url, api);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (absolute && isLocalHostname(parsed.hostname) && !isLocalHostname(api.hostname)) {
       parsed.hostname = api.hostname;
     }
     return parsed.toString();
@@ -75,7 +86,7 @@ export function embeddableScreenUrl(url: string | null, apiBase: string): string
  */
 export function screenStreamKey(url: string): string {
   try {
-    const parsed = new URL(url);
+    const parsed = parseScreenUrl(url);
     const match = parsed.pathname.match(/^\/novnc\/session\/(view|control)\/[^/]+(\/.*)?$/);
     if (match) return `${parsed.origin}/novnc/session/${match[1]}${match[2] ?? ""}`;
     const viewOnly = parsed.searchParams.get("view_only");
@@ -96,9 +107,15 @@ const SCREEN_CAPABILITY_TTL_MS = 60 * 60_000;
 const SCREEN_SOURCE_RENEW_REMAINING_MS =
   SCREEN_CAPABILITY_TTL_MS - SCREEN_URL_RENEW_MS + 5 * 60_000;
 
+function parseScreenUrl(url: string) {
+  return new URL(url, "http://screen.invalid");
+}
+
 function screenCapabilityExpiresAt(url: string): number | null {
   try {
-    const match = new URL(url).pathname.match(/^\/novnc\/session\/(?:view|control)\/(\d+)\./);
+    const match = parseScreenUrl(url).pathname.match(
+      /^\/novnc\/session\/(?:view|control)\/(\d+)\./,
+    );
     if (!match) return null;
     const expiresAt = Number(match[1]);
     return Number.isSafeInteger(expiresAt) ? expiresAt : null;

@@ -184,6 +184,18 @@ describe("embeddableScreenUrl", () => {
       "https://screen.example:6080/vnc.html",
     );
   });
+
+  it.each(["http://machine.tailnet.ts.net:5173/bots/chief", "http://127.0.0.1:5173/"])(
+    "resolves a relative seal against the page %s",
+    (href) => {
+      vi.stubGlobal("window", { location: { href } });
+      const sealed =
+        "/novnc/session/view/1710000000000.token/vnc.html?autoconnect=true&resize=scale&view_only=true&path=websockify";
+      const page = new URL(href);
+      expect(embeddableScreenUrl(sealed)).toBe(new URL(sealed, page).href);
+      expect(new URL(embeddableScreenUrl(sealed) ?? "").host).toBe(page.host);
+    },
+  );
 });
 
 describe("sandScreenSocketUrl", () => {
@@ -198,6 +210,19 @@ describe("sandScreenSocketUrl", () => {
       "wss://app.example/novnc/session/control/1710000000000.sealed-token/websockify",
     );
   });
+
+  it.each(["http://machine.tailnet.ts.net:5173/bots/chief", "http://127.0.0.1:5173/"])(
+    "opens a relative seal on the viewer %s",
+    (base) => {
+      const sealed =
+        "/novnc/session/view/1710000000000.token/vnc.html?autoconnect=true&resize=scale&view_only=true&path=websockify";
+      const socket = sandScreenSocketUrl(sealed, base);
+      const viewer = new URL(base);
+      expect(socket).toBe(
+        `${viewer.protocol === "https:" ? "wss" : "ws"}://${viewer.host}/novnc/session/view/1710000000000.token/websockify`,
+      );
+    },
+  );
 
   it("keeps a relative websockify path inside the sealed directory", () => {
     expect(

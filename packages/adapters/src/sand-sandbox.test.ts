@@ -921,13 +921,15 @@ describe("sand host router", () => {
       },
       100,
     );
-    const page = new URL(sealed);
-    expect(page.origin).toBe("https://app.example");
+    expect(sealed.startsWith("/novnc/session/view/")).toBe(true);
+    expect(sealed).not.toContain("://");
+    const page = new URL(sealed, "http://machine.tailnet.ts.net:5173/");
+    expect(page.host).toBe("machine.tailnet.ts.net:5173");
     expect(page.pathname.startsWith("/novnc/session/view/")).toBe(true);
     expect(page.search).not.toContain("token=121");
     expect(sealed).not.toContain("14020");
     expect(sealed).not.toContain(":20");
-    const socketPath = new URL(page.searchParams.get("path") ?? "", page.origin).pathname;
+    const socketPath = new URL(page.searchParams.get("path") ?? "websockify", page).pathname;
     expect(openScreenCapability(socketPath, "fake-secret", 101)?.target).toMatchObject({
       protocol: "http:",
       hostname: "127.0.0.1",
