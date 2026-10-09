@@ -1111,6 +1111,121 @@ describe("sand host router", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("isRunning uses the bot desktop signals and does not wake", async () => {
+    const starts: number[] = [];
+    const probed: number[] = [];
+    const ports: number[] = [];
+    const sockets = new Set<number>([121]);
+    const listening = new Set<number>([14000 + 121]);
+    const store = new MemoryDeskStore();
+    const now = new Date("2026-10-09T00:00:00.000Z");
+    await store.insert({
+      botId: "chief",
+      displayIndex: 121,
+      ownerToken: "fixture-owner-token",
+      state: "running",
+      lastUsedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.insert({
+      botId: "seat",
+      displayIndex: 20,
+      ownerToken: "fixture-owner-token",
+      state: "running",
+      lastUsedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const host: TeamDesktopHost = {
+      async xSocketExists(displayIndex) {
+        probed.push(displayIndex);
+        if (displayIndex < 101 || displayIndex > 150) throw new Error(`seat ${displayIndex}`);
+        return sockets.has(displayIndex);
+      },
+      async tokenFileExists() {
+        return false;
+      },
+      async portListening(port) {
+        ports.push(port);
+        return listening.has(port);
+      },
+      async windowAlive() {
+        return false;
+      },
+      async startWindow(displayIndex) {
+        starts.push(displayIndex);
+      },
+      async stopWindow() {
+        return undefined;
+      },
+      async cleanWindow() {
+        return undefined;
+      },
+      async cleanOrphans() {
+        return undefined;
+      },
+      async purge() {
+        return undefined;
+      },
+    };
+    let ensures = 0;
+    const desktops = createTeamDesktopAllocator({
+      store,
+      host,
+      now: () => now,
+      sleep: async () => undefined,
+    });
+    const ensureDesktop = desktops.ensure.bind(desktops);
+    desktops.ensure = (botId) => {
+      ensures += 1;
+      return ensureDesktop(botId);
+    };
+    const sandbox = new SandSandboxProvider({
+      policy: new MappedSandSeatPolicy(new Map([["chief", AGENT_A]])),
+      host: new ConnectSandHost({ baseUrl: "http://127.0.0.1:14020", fetch: vi.fn() }),
+      teamDesktops: desktops,
+    });
+    const computer = {
+      id: "sand:team-desktop",
+      botId: "team-space",
+      kind: "sand" as const,
+      providerRef: "team-desktop",
+    };
+    const chief = { ...ctx, botId: "chief" };
+    expect(await sandbox.isRunning(computer, chief)).toBe(true);
+    expect(ensures).toBe(0);
+    expect(starts).toEqual([]);
+    expect(probed).toEqual([121]);
+    expect(ports).toEqual([14121]);
+    expect(store.rows.get("chief")?.state).toBe("running");
+    expect(store.rows.get("chief")?.lastUsedAt?.toISOString()).toBe(now.toISOString());
+
+    expect(await sandbox.isRunning({ ...computer, kind: "docker" }, chief)).toBe(false);
+    expect(probed).toEqual([121]);
+
+    sockets.delete(121);
+    expect(await sandbox.isRunning(computer, chief)).toBe(false);
+    expect(ports).toEqual([14121]);
+    expect(ensures).toBe(0);
+
+    sockets.add(121);
+    await store.update("chief", { state: "stopped" });
+    expect(await sandbox.isRunning(computer, chief)).toBe(false);
+    expect(probed).toEqual([121, 121]);
+
+    expect(await sandbox.isRunning(computer, { ...ctx, botId: "seat" })).toBe(false);
+    expect(probed).toEqual([121, 121]);
+    expect(starts).toEqual([]);
+
+    const abort = new AbortController();
+    abort.abort(new Error("cancelled"));
+    await expect(sandbox.isRunning(computer, { ...chief, signal: abort.signal })).rejects.toThrow(
+      "cancelled",
+    );
+    expect(ensures).toBe(0);
+  });
 });
 
 class MemoryDeskStore implements TeamDesktopStore {

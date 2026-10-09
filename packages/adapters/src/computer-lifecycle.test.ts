@@ -988,6 +988,8 @@ describe("computer provisioning", () => {
     }
   });
 
+  // No isRunning probe: an unconfirmed sand Team wake still claims once.
+  // A desktop the probe confirms running does not; that path is in computer-reuse.
   it("still claims booting after a running sand team desktop wakes", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-team-wake-ok-"));
     const original = {
