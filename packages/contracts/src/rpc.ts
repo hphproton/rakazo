@@ -20,6 +20,7 @@ import {
   ArtifactVersionSchema,
   ArtifactWithContentSchema,
   AvatarStyleSchema,
+  BillingStatusSchema,
   BOT_NAME_MAX_LENGTH,
   BotMcpServerSchema,
   BotSchema,
@@ -51,6 +52,8 @@ import {
   MessagingChannelMembershipSchema,
   MessagingLinkedIdentitySchema,
   MessagingStatusSchema,
+  ModelBackupChoiceSchema,
+  ModelBackupListSchema,
   ModelCatalogEntrySchema,
   ModelConnectInputSchema,
   ModelCredentialSchema,
@@ -172,6 +175,8 @@ const threadSendInput = threadTarget
     }
   });
 
+const spaceName = z.string().trim().min(1).max(60);
+
 export const appContract = {
   aiConsent: {
     status: oc.input(AiConsentQuerySchema).output(AiConsentStatusSchema),
@@ -188,12 +193,20 @@ export const appContract = {
   },
   health: oc.output(z.object({ ok: z.literal(true), version: z.string() })),
   me: oc.output(MeSchema),
+  billing: {
+    status: oc.output(BillingStatusSchema),
+    checkout: oc.output(z.object({ url: z.string().url() })),
+    portal: oc.output(z.object({ url: z.string().url() })),
+  },
   preferences: {
     update: oc.input(z.object({ avatarStyle: AvatarStyleSchema })).output(MeSchema),
   },
   spaces: {
     list: oc.output(SpaceNavigationSchema),
-    create: oc.input(z.object({ name: z.string().trim().min(1).max(60) })).output(SpaceSchema),
+    create: oc.input(z.object({ name: spaceName })).output(SpaceSchema),
+    rename: oc
+      .input(z.object({ spaceId: Id, name: spaceName }))
+      .output(z.object({ id: Id, name: z.string() })),
     remove: oc
       .input(z.object({ spaceId: Id }))
       .output(z.object({ ok: z.literal(true), activeSpaceId: Id })),
@@ -224,12 +237,22 @@ export const appContract = {
   models: {
     list: oc.output(z.array(ModelCatalogEntrySchema)),
     credentials: oc.output(z.array(ModelCredentialSchema)),
+    backups: oc.output(z.array(ModelBackupChoiceSchema)),
+    setBackups: oc.input(ModelBackupListSchema).output(z.object({ ok: z.literal(true) })),
     connect: oc.input(ModelConnectInputSchema).output(ModelCredentialSchema),
     probeOpenAiCompatible: oc
       .input(
         z.object({
           baseUrl: z.string(),
           apiKey: z.string().optional(),
+        }),
+      )
+      .output(z.object({ models: z.array(z.string()) })),
+    probeCatalog: oc
+      .input(
+        z.object({
+          provider: z.string().trim().min(1),
+          apiKey: z.string().trim().min(8),
         }),
       )
       .output(z.object({ models: z.array(z.string()) })),
@@ -560,6 +583,10 @@ export const appContract = {
               .regex(/^[a-z0-9._-]+$/i)
               .nullable()
               .optional(),
+            /** Null clears the routine's own model and runs it on the bot's. */
+            modelProvider: z.string().trim().min(1).max(80).nullable().optional(),
+            modelId: z.string().trim().min(1).max(200).nullable().optional(),
+            thinkingLevel: ThinkingLevelSchema.nullable().optional(),
             /** ISO datetime to arm a never-run one-shot. */
             runAt: IsoDate.optional(),
           })
@@ -887,8 +914,10 @@ export const appContract = {
     list: oc.output(z.array(UsageRecordSchema)),
     summary: oc.output(
       z.object({
-        inputTokens: z.number(),
-        outputTokens: z.number(),
+        inputTokens: z.number().nullable(),
+        outputTokens: z.number().nullable(),
+        totalTokens: z.number().nullable().optional(),
+        modelCalls: z.number().optional(),
         runs: z.number(),
       }),
     ),
@@ -898,12 +927,23 @@ export const appContract = {
   },
   notifications: {
     registerPush: oc
-      .input(z.object({ token: z.string().min(8).max(512) }))
+      // No whitespace: the token store keeps the registering session on the next line.
+      .input(z.object({ token: z.string().min(8).max(512).regex(/^\S+$/) }))
       .output(z.object({ ok: z.literal(true) })),
     unregisterPush: oc.output(z.object({ ok: z.literal(true) })),
   },
   search: {
     query: oc.input(z.object({ q: z.string().max(200) })).output(SearchQueryOutputSchema),
+  },
+  links: {
+    /**
+     * The site icon for a link's origin as a small data URL, resolved and cached by the server.
+     * `retry` means the server was too busy to look; the origin may still have an icon.
+     */
+    favicon: oc
+      // The longest origin: a scheme, a 253-character host name and a port.
+      .input(z.object({ origin: z.string().max("https://".length + 253 + ":65535".length) }))
+      .output(z.object({ icon: z.string().nullable(), retry: z.boolean().optional() })),
   },
   runs: {
     list: oc.input(z.object({ filter: z.enum(["active", "recent"]) })).output(RunsListOutputSchema),

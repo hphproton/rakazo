@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
 import { ORPCError, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import type {
+  AgentContextStrategy,
   AgentRuntime,
+  BillingProvider,
   JobPublisher,
   ManagedConnectorProvider,
   MessagingSurface,
@@ -33,12 +34,14 @@ import {
   createRunExecutor,
   createRunSandbox,
   createRunSecretWriter,
+  createSecretStore,
   createTeamDesktopAllocator,
   createWebProvider,
+  deletePushToken,
   destroyBot,
   EmailEmulator,
-  EncryptedSecretStore,
   ExpoPushProvider,
+  endSessionPushToken,
   GraphileJobPublisher,
   InMemoryJobQueue,
   InMemoryRealtimeFanout,
@@ -61,27 +64,32 @@ import {
   pipedreamConfigFromEnv,
   piSessionsRoot,
   publishTeamDesktopComputerStatus,
-  pushTokenPath,
   reconcileCloudAgents,
   reconcileComputerUpdates,
   removePiUserSessions,
   ScriptedAgentRuntime,
   SmtpEmailProvider,
   SpaceMemoryProviderResolver,
+  StripeBillingProvider,
   sandboxProviderOptionsFromEnv,
+  stripeBillingConfigFromEnv,
   syncTeamBDesktops,
   teamDesktopAllocatorForProvider,
   toTeamChatInbound,
+  withSecretPersistence,
 } from "@rakazo/adapters";
 import { createAuth, isBlockedAuthPath, loopbackTwinOrigins } from "@rakazo/auth";
+import type { Actor, AuthCapabilities } from "@rakazo/contracts";
 import { signupAllowlistBootUpdate, signupPolicyFromEnv } from "@rakazo/core";
 import type { Pool, PrismaClient } from "@rakazo/db";
 import {
   createDb,
   createPool,
   createThreadEvents,
+  IsolationError,
   parsePositiveInteger,
   provisionMessagingIdentity,
+  pushSessionExpiresAt,
   requireMembership,
 } from "@rakazo/db";
 import type { Logger } from "@rakazo/logging";
@@ -96,6 +104,8 @@ import { requestLogging } from "@rakazo/logging/hono";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { createBillingService } from "./billing.js";
+import { mountBillingRoutes } from "./billing-webhook.js";
 import type { AppEnv } from "./env.js";
 import { loadEnv } from "./env.js";
 import { healthRoutes } from "./health.js";
@@ -145,6 +155,8 @@ export interface AppHandles {
   email?: TransactionalEmailProvider;
   executor: ReturnType<typeof createRunExecutor>;
   runtime: AgentRuntime;
+  awaitIdle?: () => Promise<void>;
+  backgroundFailures?: () => Array<{ name: string; count: number }>;
   stop: () => Promise<void>;
 }
 
@@ -157,8 +169,11 @@ export async function createApp(
     pipedream?: ManagedConnectorProvider;
     messaging?: MessagingSurface;
     email?: TransactionalEmailProvider;
+    billing?: BillingProvider;
     remoteConnectors?: RemoteConnectorDependencies;
     logger?: Logger;
+    runtime?: AgentRuntime;
+    contextStrategy?: AgentContextStrategy;
   } = {},
 ): Promise<AppHandles> {
   const {
@@ -169,8 +184,11 @@ export async function createApp(
     pipedream: pipedreamOverride,
     messaging: messagingOverride,
     email: emailOverride,
+    billing: billingOverride,
     remoteConnectors,
     logger: loggerOverride,
+    runtime: runtimeOverride,
+    contextStrategy,
     ...envOverrides
   } = overrides;
   const env = { ...loadEnv(process.env), ...envOverrides };
@@ -182,7 +200,7 @@ export async function createApp(
         poolMax: parsePositiveInteger(process.env.DB_POOL_MAX, 4),
         applicationName: "rakazo-api",
       });
-  const { prisma } = created;
+  let { prisma } = created;
   const realtime =
     realtimeOverride ??
     (created.pool
@@ -191,7 +209,11 @@ export async function createApp(
           publisher: created.pool,
         })
       : new InMemoryRealtimeFanout());
-  const secrets = new EncryptedSecretStore(env.encryptionKey);
+  const secrets = createSecretStore(env.encryptionKey, process.env, realtime);
+  await secrets.start();
+  if (secrets.describe().capabilities.degraded)
+    logger.warn("Secret storage degraded; encrypted credentials remain available");
+  prisma = withSecretPersistence(prisma, secrets);
   const events = createThreadEvents(prisma, realtime, {
     runSecretWriter: createRunSecretWriter(secrets),
   });
@@ -325,7 +347,7 @@ export async function createApp(
   const messaging =
     messagingOverride ??
     (isMessagingSurfaceEnabled(messagingPlatforms, {
-      deploymentModelKey: env.deploymentModelKey,
+      deploymentModelConfigured: env.deploymentModelConfigured,
       openSignup: env.messagingOpenSignup,
     })
       ? new ChatSdkMessagingSurface(messagingPlatforms)
@@ -346,6 +368,12 @@ export async function createApp(
     (env.smtpUrl
       ? new SmtpEmailProvider({ url: env.smtpUrl, from: env.emailFrom ?? "" })
       : localEmailEmulator);
+  const stripeBilling = stripeBillingConfigFromEnv(env);
+  const billingProvider: BillingProvider | undefined =
+    billingOverride ?? (stripeBilling ? new StripeBillingProvider(stripeBilling) : undefined);
+  const billing = billingProvider
+    ? createBillingService({ prisma, provider: billingProvider, webOrigin: env.webOrigin })
+    : undefined;
   const installed = new InstalledConnectorProvider(
     prisma,
     secrets,
@@ -371,13 +399,18 @@ export async function createApp(
   await connector.start();
   integrationSettings.warmDirectories();
   const runtime =
-    env.agentRuntime === "scripted"
+    runtimeOverride ??
+    (env.agentRuntime === "scripted"
       ? new ScriptedAgentRuntime()
       : new PiAgentRuntime({
           sessionRoot: env.piSessionRecording ? piSessionsRoot(env.dataDir) : undefined,
-        });
-  const notifications = new ExpoPushProvider(env.dataDir);
+        }));
+  const notifications = new ExpoPushProvider(env.dataDir, (sessionId) =>
+    pushSessionExpiresAt(prisma, sessionId),
+  );
   const auth = createAuth(prisma, {
+    passwordAuth: env.passwordAuth,
+    oidc: env.oidc,
     secret: env.authSecret,
     baseURL: env.authUrl,
     webOrigin: env.webOrigin,
@@ -387,6 +420,8 @@ export async function createApp(
     onEmailError: (error) => getLogger().error("transactional email delivery failed", error),
     extraOrigins: MOBILE_AUTH_ORIGINS,
     beforeDeleteUser: async (userId) => {
+      // First, so a provider failure aborts deletion before anything is destroyed.
+      await billing?.cancelForDeletedUser(userId);
       const bots = await prisma.bot.findMany({
         where: { userId },
         select: { id: true, userId: true, spaceId: true, name: true, archivedAt: true },
@@ -409,7 +444,20 @@ export async function createApp(
         ),
       );
       await removePiUserSessions(env.dataDir, userId);
-      await rm(pushTokenPath(env.dataDir, userId), { force: true }).catch(() => undefined);
+      await deletePushToken(env.dataDir, userId).catch((error) =>
+        getLogger().error("push token removal failed", error),
+      );
+    },
+    // The session change already happened, so a token file failure must not fail sign-out.
+    afterDeleteSession: async (session) => {
+      await endSessionPushToken(env.dataDir, session.userId, session.id).catch((error) =>
+        getLogger().error("push token removal failed", error),
+      );
+    },
+    afterReplaceSession: async (previous, session) => {
+      await endSessionPushToken(env.dataDir, session.userId, previous.id, session.id).catch(
+        (error) => getLogger().error("push token session update failed", error),
+      );
     },
   });
   // One provider instance so emulator launches and polls share the same Map.
@@ -423,6 +471,7 @@ export async function createApp(
   // resolution alike, so a list call warms the run path in this process.
   const codexCatalog = new CodexCatalogCache();
   const executor = createRunExecutor({
+    contextStrategy,
     prisma,
     runtime,
     codexCatalog,
@@ -454,6 +503,7 @@ export async function createApp(
     secretHttp: remoteConnectors,
     mcpAllowPrivateEndpoint: env.mcpAllowPrivateEndpoint,
     deploymentModelKey: env.deploymentModelKey,
+    deploymentModelConfigured: env.deploymentModelConfigured,
     dataDir: env.dataDir,
     notifications,
     jobs,
@@ -476,6 +526,7 @@ export async function createApp(
     secretStore: secrets,
     memoryProviders,
     deploymentModelKey: env.deploymentModelKey,
+    deploymentModelConfigured: env.deploymentModelConfigured,
     messaging,
     cloudAgent,
   });
@@ -515,6 +566,7 @@ export async function createApp(
     remoteConnectors,
     artifacts,
     dataDir: env.dataDir,
+    billing,
     messaging: {
       enabled: Boolean(messaging),
       providers: messaging?.platforms().map((platform) => platform.provider) ?? [],
@@ -526,7 +578,8 @@ export async function createApp(
       defaultModel: env.defaultModel,
       teamChatJudgeProvider: env.teamChatJudgeProvider,
       teamChatJudgeModel: env.teamChatJudgeModel,
-      deploymentModelKey: env.deploymentModelKey,
+      deploymentModelConfigured: env.deploymentModelConfigured,
+      deploymentModelHostCredentials: env.deploymentModelHostCredentials,
       webOrigin: env.webOrigin,
       privacyPolicyUrl: env.privacyPolicyUrl,
       screenProxySecret: env.screenProxySecret,
@@ -556,12 +609,19 @@ export async function createApp(
       credentials: true,
     }),
   );
-  app.get("/api/auth/capabilities", (c) =>
-    c.json({
-      passwordReset: Boolean(email),
-      resetUrl: email ? new URL("/reset-password", env.webOrigin).href : null,
-    }),
-  );
+  app.get("/api/auth/capabilities", (c) => {
+    c.header("cache-control", "no-store");
+    return c.json({
+      sso: env.oidc
+        ? { name: env.oidc.name, availability: auth.ssoAvailability() ?? "checking" }
+        : null,
+      passwordAuth: env.passwordAuth !== false,
+      passwordReset: env.passwordAuth !== false && Boolean(email),
+      resetUrl:
+        env.passwordAuth !== false && email ? new URL("/reset-password", env.webOrigin).href : null,
+      billing: Boolean(billing),
+    } satisfies AuthCapabilities);
+  });
   if (localEmailEmulator && env.nodeEnv === "development") {
     app.get(
       "/api/dev/emails",
@@ -581,34 +641,54 @@ export async function createApp(
     return auth.handler(c.req.raw);
   });
   mountLocalSettings(app, { token: env.desktopStackToken, prisma, rpc });
+  const requestSession = async (request: Request) => {
+    const session = await auth.api.getSession({ headers: sessionHeaders(request) });
+    if (!session?.user) return null;
+    const actor = await actorFromMembership(
+      requireMembership(prisma, session.user.id, request.headers.get("x-rakazo-space-id")),
+    );
+    return actor && { actor, sessionId: session.session.id };
+  };
+  const sessionActor = async (request: Request) => (await requestSession(request))?.actor ?? null;
   app.use("/rpc/*", async (c, next) => {
-    const session = await auth.api.getSession({ headers: sessionHeaders(c.req.raw) });
-    const requestedSpaceId = c.req.header("x-rakazo-space-id");
-    const actor = session?.user
-      ? await requireMembership(prisma, session.user.id, requestedSpaceId).catch(() => null)
-      : null;
+    const session = await requestSession(c.req.raw);
+    const actor = session?.actor ?? null;
     if (actor) {
       enrichLogContext({ "user.id": actor.userId, "space.id": actor.spaceId });
     }
     const { matched, response } = await rpc.handle(c.req.raw, {
       prefix: "/rpc",
-      context: { actor, signal: c.req.raw.signal },
+      context: {
+        actor,
+        sessionId: session?.sessionId,
+        signal: c.req.raw.signal,
+        // Same user in the same space, so leaving the space also ends a stream.
+        // A database failure rejects this check; only a missing membership is unauthorized.
+        stillAuthorized: async () => {
+          const current = await sessionActor(c.req.raw);
+          return Boolean(
+            actor && current?.userId === actor.userId && current.spaceId === actor.spaceId,
+          );
+        },
+      },
     });
     if (matched) return c.newResponse(response.body, response);
     await next();
   });
   mountVoiceHttpRoutes(app, { prisma, secrets }, async (c) => {
-    const session = await auth.api.getSession({ headers: sessionHeaders(c.req.raw) });
-    if (!session?.user) return null;
-    const actor = await requireMembership(
-      prisma,
-      session.user.id,
-      c.req.header("x-rakazo-space-id"),
-    ).catch(() => null);
+    const actor = await sessionActor(c.req.raw);
     if (actor) enrichLogContext({ "user.id": actor.userId, "space.id": actor.spaceId });
     return actor;
   });
   mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+  if (billing && billingProvider) {
+    mountBillingRoutes(app, {
+      billing,
+      provider: billingProvider,
+      webOrigin: env.webOrigin,
+      authenticate: sessionActor,
+    });
+  }
   // Shared with stop so a shutdown during retry delays does not restart polling.
   let messagingStopped = false;
   let clearMessagingRetryDelay: (() => void) | undefined;
@@ -886,8 +966,11 @@ export async function createApp(
       pipedream: Boolean(pipedream),
       messaging: Boolean(messaging),
       email: email?.describe().id ?? null,
+      billing: billingProvider?.describe().id ?? null,
       jobs: jobKind,
       realtime: realtime.describe().id,
+      secrets: secrets.describe(),
+      degraded: secrets.describe().capabilities.degraded ?? false,
       revision: env.gitSha ?? null,
     })),
   );
@@ -904,9 +987,12 @@ export async function createApp(
     email,
     executor,
     runtime,
+    awaitIdle: inMemoryJobs ? () => inMemoryJobs.awaitIdle() : undefined,
+    backgroundFailures: inMemoryJobs ? () => inMemoryJobs.failureCounts() : undefined,
     stop: async () => {
       // Abort in-flight continueRun boot waits before draining jobs so stop() cannot sit
       // on waitForComputerReady for the full boot-wait window during shared Postgres journeys.
+      auth.disposeOidcDiscovery();
       shutdown.abort();
       oauthLogins.abortAll();
       messagingStopped = true;
@@ -926,6 +1012,7 @@ export async function createApp(
       await email?.drain?.();
       await reconciler?.stop();
       await jobs.close();
+      await secrets.close();
       await realtime.close();
       await connector.stop();
       await mcp.close();
@@ -970,6 +1057,20 @@ function originVariants(origin: string): string[] {
     return variants;
   }
   return variants;
+}
+
+/**
+ * No membership is no actor, which the RPC layer answers as 401. A database
+ * failure, including the deployment-settings lookup, must stay a server error
+ * so a blip does not look like a rejected session.
+ */
+export async function actorFromMembership(membership: Promise<Actor>): Promise<Actor | null> {
+  try {
+    return await membership;
+  } catch (error) {
+    if (error instanceof IsolationError) return null;
+    throw error;
+  }
 }
 
 function sessionHeaders(request: Request) {
