@@ -1121,6 +1121,10 @@ class QuietTeamDesktopHost implements TeamDesktopHost {
     this.alive.delete(displayIndex);
   }
 
+  async cleanWindow() {}
+
+  async cleanOrphans() {}
+
   async purge() {}
 }
 

@@ -8,9 +8,16 @@ import {
   isTeamDesktopTmpLeftover,
   TEAM_DESKTOP_FORK_ROOTS,
   type TeamDesktopHost,
+  teamDesktopCdpBusyMessage,
   teamDesktopPorts,
   teamDesktopPurgePaths,
 } from "./team-desktop.js";
+import {
+  cleanTeamDesktopOrphans,
+  linuxTeamDesktopOrphanControl,
+  type TeamDesktopOrphanControl,
+  teamDesktopOrphanBand,
+} from "./team-desktop-orphans.js";
 
 export const START_WINDOW_BIN = "/usr/local/bin/start-window";
 export const STOP_WINDOW_BIN = "/usr/local/bin/stop-window";
@@ -18,6 +25,8 @@ export const STOP_WINDOW_BIN = "/usr/local/bin/stop-window";
 const COMMAND_TIMEOUT_MS = 20_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const PORT_TIMEOUT_MS = 200;
+const CDP_BUSY_WAIT_MS = 500;
+const CDP_BUSY_POLL_MS = 50;
 
 export type TeamDesktopCommand = (
   file: string,
@@ -28,12 +37,31 @@ export type TeamDesktopCommand = (
 /**
  * Talks to Grok Computer's window scripts as the current uid.
  * Display indexes outside 101–150 are rejected before any command or filesystem call.
- * The exec-daemon bearer, listen scope, and token-file mode are host behavior and stay as they are.
+ * stop-window does not kill the detached start-desktop session or its dbus-daemon;
+ * this host does, for 101–150 only. The exec-daemon bearer, listen scope, and
+ * token-file mode are host behavior and stay as they are.
  */
 export function createLinuxTeamDesktopHost(
-  deps: { command?: TeamDesktopCommand } = {},
+  deps: { command?: TeamDesktopCommand; orphans?: TeamDesktopOrphanControl } = {},
 ): TeamDesktopHost {
   const command = deps.command ?? defaultCommand;
+  const orphans = deps.orphans ?? linuxTeamDesktopOrphanControl();
+
+  async function safeClean(displayIndexes: readonly number[]): Promise<void> {
+    try {
+      const cleaned = await cleanTeamDesktopOrphans(displayIndexes, orphans);
+      for (const result of cleaned) {
+        if (result.sessions === 0 && result.dbus === 0) continue;
+        getLogger().info("team desktop orphan sessions cleaned", {
+          displayIndex: result.displayIndex,
+          sessions: result.sessions,
+          dbus: result.dbus,
+        });
+      }
+    } catch (error) {
+      getLogger().error("team desktop orphan cleanup failed", error);
+    }
+  }
 
   return {
     async xSocketExists(displayIndex) {
@@ -57,6 +85,8 @@ export function createLinuxTeamDesktopHost(
     async startWindow(displayIndex, ownerToken) {
       assertTeamDesktopIndex(displayIndex);
       if (!ownerToken) throw new Error("Team desktop owner token is missing.");
+      await safeClean([displayIndex]);
+      await assertCdpPortFree(displayIndex);
       const code = await command(
         START_WINDOW_BIN,
         [String(displayIndex), ownerToken],
@@ -68,9 +98,18 @@ export function createLinuxTeamDesktopHost(
       assertTeamDesktopIndex(displayIndex);
       const code = await command(STOP_WINDOW_BIN, [String(displayIndex)], COMMAND_TIMEOUT_MS);
       if (code !== 0) throw new Error(`stop-window exited ${code}`);
+      await safeClean([displayIndex]);
+    },
+    async cleanWindow(displayIndex) {
+      assertTeamDesktopIndex(displayIndex);
+      await safeClean([displayIndex]);
+    },
+    async cleanOrphans() {
+      await safeClean(teamDesktopOrphanBand());
     },
     async purge(displayIndex) {
       assertTeamDesktopIndex(displayIndex);
+      await safeClean([displayIndex]);
       let names: string[] = [];
       try {
         names = await readdir("/tmp");
@@ -129,6 +168,21 @@ function tcpOpen(port: number): Promise<boolean> {
     socket.once("timeout", () => finish(false));
     socket.once("error", () => finish(false));
   });
+}
+
+/**
+ * A foreign listener (a stray browser on 9222+N) would make the desktop's own
+ * browser fail to bind. Wait briefly so a session we just signaled can drop
+ * the port, then refuse the start.
+ */
+async function assertCdpPortFree(displayIndex: number): Promise<void> {
+  const port = teamDesktopPorts(displayIndex).cdp;
+  let waited = 0;
+  while (await tcpOpen(port)) {
+    if (waited >= CDP_BUSY_WAIT_MS) throw new Error(teamDesktopCdpBusyMessage(displayIndex));
+    await new Promise((resolve) => setTimeout(resolve, CDP_BUSY_POLL_MS));
+    waited += CDP_BUSY_POLL_MS;
+  }
 }
 
 /** Null when /proc cannot be read. Callers must not delete in that case. */
