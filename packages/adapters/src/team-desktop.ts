@@ -73,6 +73,13 @@ export interface TeamDesktopHost {
   windowAlive(displayIndex: number): Promise<boolean>;
   startWindow(displayIndex: number, ownerToken: string): Promise<void>;
   stopWindow(displayIndex: number): Promise<void>;
+  /**
+   * Kill leftover start-desktop sessions and dbus-daemon processes for N.
+   * A session that still contains Xvfb :N is left alone.
+   */
+  cleanWindow(displayIndex: number): Promise<void>;
+  /** One pass over 101–150. Does not call stop-window and does not touch seats. */
+  cleanOrphans(): Promise<void>;
   /** Delete only this index's leftovers, and only when no process holds them. */
   purge(displayIndex: number): Promise<void>;
 }
@@ -145,12 +152,19 @@ export function teamDesktopPorts(displayIndex: number): {
   pty: number;
 } {
   assertTeamDesktopIndex(displayIndex);
+  // Sand desktops bind the browser debugger at 9222+N (display 111 → 9333).
+  // The Docker computer runtime uses 9221+display and is a different process.
   return {
     cdp: 9222 + displayIndex,
     exec: 14000 + displayIndex,
     vnc: 5900 + displayIndex,
     pty: 13600 + displayIndex,
   };
+}
+
+export function teamDesktopCdpBusyMessage(displayIndex: number): string {
+  const port = teamDesktopPorts(displayIndex).cdp;
+  return `Team desktop ${displayIndex} CDP port ${port} is already in use.`;
 }
 
 /** Viewer for display N. The query value is the index, not the owner token. */
@@ -398,6 +412,7 @@ export function createTeamDesktopAllocator(options: {
     await makeRoom(botId);
     const current = await requireRow(botId);
     if (!(await alive(current.displayIndex))) {
+      await host.cleanWindow(current.displayIndex);
       try {
         await host.startWindow(current.displayIndex, current.ownerToken);
       } catch (error) {
@@ -447,6 +462,14 @@ export function createTeamDesktopAllocator(options: {
       );
     }
     try {
+      await host.cleanWindow(row.displayIndex);
+    } catch (error) {
+      getLogger().error(
+        "team desktop orphan cleanup for a dead window failed",
+        scrubbed(error, [row.ownerToken]),
+      );
+    }
+    try {
       await host.purge(row.displayIndex);
     } catch (error) {
       getLogger().error(
@@ -470,6 +493,7 @@ export function createTeamDesktopAllocator(options: {
     }
     try {
       await host.stopWindow(row.displayIndex);
+      await host.cleanWindow(row.displayIndex);
       await host.purge(row.displayIndex);
     } catch (error) {
       throw scrubbed(error, [row.ownerToken]);
@@ -489,6 +513,14 @@ export function createTeamDesktopAllocator(options: {
       } catch (error) {
         getLogger().error(
           "team desktop stop during release failed",
+          scrubbed(error, [row.ownerToken]),
+        );
+      }
+      try {
+        await host.cleanWindow(row.displayIndex);
+      } catch (error) {
+        getLogger().error(
+          "team desktop orphan cleanup during release failed",
           scrubbed(error, [row.ownerToken]),
         );
       }
@@ -540,6 +572,11 @@ export function createTeamDesktopAllocator(options: {
   async function reconcileBody(): Promise<void> {
     lastReconcileAt = now().getTime();
     if (members) await syncBody(await members());
+    try {
+      await host.cleanOrphans();
+    } catch (error) {
+      getLogger().error("team desktop orphan session cleanup failed", scrubbed(error, []));
+    }
     const rows = await store.list();
     const held = new Set<number>();
     for (const row of rows) {
@@ -554,6 +591,7 @@ export function createTeamDesktopAllocator(options: {
       if (!(await occupied(displayIndex))) continue;
       try {
         await host.stopWindow(displayIndex);
+        await host.cleanWindow(displayIndex);
         await host.purge(displayIndex);
         getLogger().info("team desktop orphan reaped", { displayIndex });
       } catch (error) {

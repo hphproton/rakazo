@@ -18,6 +18,7 @@ import {
   teamDesktopConfigFromEnv,
   teamDesktopMemberBotIds,
   teamDesktopMemberBotWhere,
+  teamDesktopPorts,
   teamDesktopPurgePaths,
 } from "./team-desktop.js";
 import { createLinuxTeamDesktopHost } from "./team-desktop-host.js";
@@ -66,6 +67,8 @@ class FakeTeamDesktopHost implements TeamDesktopHost {
   readonly starts: Array<{ displayIndex: number; ownerToken: string }> = [];
   readonly stops: number[] = [];
   readonly purges: number[] = [];
+  readonly cleans: number[] = [];
+  orphanPasses = 0;
   readonly probedIndexes: number[] = [];
   readonly probedPorts: number[] = [];
   failStartWithToken = false;
@@ -115,6 +118,15 @@ class FakeTeamDesktopHost implements TeamDesktopHost {
     this.guard(displayIndex);
     this.stops.push(displayIndex);
     this.alive.delete(displayIndex);
+  }
+
+  async cleanWindow(displayIndex: number) {
+    this.guard(displayIndex);
+    this.cleans.push(displayIndex);
+  }
+
+  async cleanOrphans() {
+    this.orphanPasses += 1;
   }
 
   async purge(displayIndex: number) {
@@ -251,12 +263,14 @@ describe("team desktop lifecycle", () => {
     expect(running).toEqual({ displayIndex, ownerToken: token });
     expect(row(store, "bot").state).toBe<TeamDesktopState>("running");
     expect(host.starts).toEqual([{ displayIndex, ownerToken: token }]);
+    expect(host.cleans).toEqual([displayIndex]);
 
     const stopped = await alloc.stop("bot");
     expect(stopped).toMatchObject({ displayIndex, state: "stopped" });
     expect(row(store, "bot").ownerToken).toBe(token);
     expect(host.stops).toEqual([displayIndex]);
     expect(host.purges).toEqual([displayIndex]);
+    expect(host.cleans).toEqual([displayIndex, displayIndex]);
 
     await alloc.ensure("bot");
     expect(host.starts).toEqual([
@@ -264,11 +278,13 @@ describe("team desktop lifecycle", () => {
       { displayIndex, ownerToken: token },
     ]);
     expect(row(store, "bot").state).toBe("running");
+    expect(host.cleans).toEqual([displayIndex, displayIndex, displayIndex]);
 
     await alloc.release("bot");
     expect(store.rows.has("bot")).toBe(false);
     expect(host.stops).toEqual([displayIndex, displayIndex]);
     expect(host.purges).toEqual([displayIndex, displayIndex]);
+    expect(host.cleans).toEqual([displayIndex, displayIndex, displayIndex, displayIndex]);
   });
 
   it("runs one ensure at a time for a bot", async () => {
@@ -367,6 +383,7 @@ describe("team desktop membership", () => {
     expect(store.rows.has("chief")).toBe(false);
     expect(host.stops).toEqual([staffIndex, chiefIndex]);
     expect(host.purges).toEqual([staffIndex, chiefIndex]);
+    expect(host.cleans).toEqual([staffIndex, chiefIndex]);
     expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
   });
 
@@ -494,6 +511,8 @@ describe("team desktop reconcile", () => {
     host.tokenFiles.add(130);
     host.stops.length = 0;
     host.purges.length = 0;
+    host.cleans.length = 0;
+    host.orphanPasses = 0;
     host.probedIndexes.length = 0;
     host.probedPorts.length = 0;
     const startsBefore = host.starts.length;
@@ -508,6 +527,10 @@ describe("team desktop reconcile", () => {
     expect(row(store, "idle").state).toBe("stopped");
     expect(row(store, "live").state).toBe("running");
     expect(host.stops).not.toContain(liveIndex);
+    expect(host.cleans).toEqual(expect.arrayContaining([130, deadIndex, idleIndex]));
+    expect(host.cleans).not.toContain(liveIndex);
+    expect(host.orphanPasses).toBe(1);
+    expect(host.cleans.every((index) => index >= 101 && index <= 150)).toBe(true);
     expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
     expect(host.probedPorts.every((port) => displayForPort(port) !== undefined)).toBe(true);
     expect(host.stops.every((index) => index >= 101 && index <= 150)).toBe(true);
@@ -556,6 +579,8 @@ describe("team desktop running cap", () => {
     expect(row(store, "newer").state).toBe("running");
     expect(row(store, "next").state).toBe("running");
     expect(host.stops).toContain(olderIndex);
+    expect(host.cleans).toContain(olderIndex);
+    expect(host.purges).toContain(olderIndex);
   });
 
   it("refuses ensure when every running desktop is still in use", async () => {
@@ -606,6 +631,8 @@ describe("team desktop running cap", () => {
     await alloc.reconcile();
     expect(row(store, "chief").state).toBe("stopped");
     expect(host.stops).toEqual([chiefIndex]);
+    expect(host.cleans).toContain(chiefIndex);
+    expect(host.orphanPasses).toBeGreaterThan(0);
   });
 });
 
@@ -615,10 +642,17 @@ describe("team desktop host bounds", () => {
     const host = createLinuxTeamDesktopHost({ command });
     await expect(host.startWindow(100, "not-used")).rejects.toThrow(/outside 101-150/);
     await expect(host.stopWindow(151)).rejects.toThrow(/outside 101-150/);
+    await expect(host.cleanWindow(20)).rejects.toThrow(/outside 101-150/);
     await expect(host.purge(2)).rejects.toThrow(/outside 101-150/);
     await expect(host.windowAlive(1)).rejects.toThrow(/outside 101-150/);
     expect(command).not.toHaveBeenCalled();
     expect(() => assertTeamDesktopIndex(50)).toThrow(/outside 101-150/);
+  });
+
+  it("derives the sand CDP port as 9222+N", () => {
+    expect(teamDesktopPorts(111).cdp).toBe(9333);
+    expect(teamDesktopPorts(101)).toEqual({ cdp: 9323, exec: 14101, vnc: 6001, pty: 13701 });
+    expect(teamDesktopPorts(150).cdp).toBe(9372);
   });
 
   it("selects only leftovers for that index", () => {
