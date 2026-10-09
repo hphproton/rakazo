@@ -49,6 +49,11 @@ export interface TeamDesktopGateway {
   ensure(botId: string): Promise<TeamDesktopBinding>;
   /** Present when membership is known. Non-members stay on the seat map. */
   member?(botId: string): Promise<boolean>;
+  /**
+   * Read-only. True when this bot's 101–150 desktop is already up.
+   * Must not start a window or write.
+   */
+  isRunning?(botId: string): Promise<boolean>;
 }
 
 export class SandSandboxProvider implements SandboxProvider {
@@ -117,6 +122,22 @@ export class SandSandboxProvider implements SandboxProvider {
       providerRef: seat.agentId,
       fresh: false,
     };
+  }
+
+  /**
+   * True only when this bot's team desktop is already up.
+   * Reads the team_desktops row, the X socket, and exec port 14000+N.
+   * Does not ensure, start a window, or write. Seats stay on the seat map.
+   */
+  async isRunning(computer: ComputerRef, context: AdapterContext): Promise<boolean> {
+    if (computer.kind !== "sand") return false;
+    const probe = this.opts.teamDesktops?.isRunning;
+    if (!probe) return false;
+    context.signal.throwIfAborted();
+    const botId = context.botId || computer.botId;
+    const running = await probe(botId);
+    context.signal.throwIfAborted();
+    return running;
   }
 
   async prepare(computer: ComputerRef, context: AdapterContext): Promise<void> {

@@ -304,10 +304,12 @@ export async function provisionComputer(
   // worker that observed the same stamp could also claim and provision.
   const observedStamp = reclaimStamp ?? suspendStamp ?? existing.updatedAt;
   const claimStamp = new Date(Math.max(Date.now(), observedStamp.getTime() + 1));
-  // The screen trigger counts running→booting. Team desktop wake is sandbox.prepare
-  // (ensure). Do that first on an already-running sand Team computer: a failed wake
-  // must not claim, or every setup retry cuts every Team bot's screen. A wake that
-  // succeeds still claims, so a normal reconnect keeps the stock transition.
+  // When isRunning confirms this sand desktop, provision already returned above
+  // without claiming booting, so a live turn does not bump screenGeneration.
+  // This prepare is only the asleep case (probe false, or no probe). Wake
+  // before the claim so a failed ensure does not bump the shared computer. A
+  // wake that succeeds still claims once. Reconciliation keepExisting and the
+  // team_desktops booting check stay; they cap retries after a setup failure.
   if (
     reconnecting &&
     existing.state === "running" &&

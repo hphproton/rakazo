@@ -979,6 +979,94 @@ describe("team desktop X socket", () => {
   });
 });
 
+describe("team desktop isRunning", () => {
+  const now = new Date("2026-10-09T00:00:00.000Z");
+
+  async function seed(
+    store: MemoryTeamDesktopStore,
+    state: TeamDesktopState,
+    displayIndex: number,
+    botId = "bot",
+  ) {
+    await store.insert({
+      botId,
+      displayIndex,
+      ownerToken: "fixture-owner-token",
+      state,
+      lastUsedAt: state === "running" ? now : null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  it("is true only when the running row has an X socket and the exec daemon", async () => {
+    const { alloc, host, store } = harness();
+    await seed(store, "running", 121);
+    const writes = vi.spyOn(store, "update");
+    expect(await alloc.isRunning("bot")).toBe(false);
+    expect(host.probedIndexes).toEqual([121]);
+    expect(host.probedPorts).toEqual([]);
+    expect(host.starts).toEqual([]);
+
+    host.xSockets.add(121);
+    expect(await alloc.isRunning("bot")).toBe(false);
+    expect(host.probedPorts).toEqual([14000 + 121]);
+
+    host.ports.add(14000 + 121);
+    expect(await alloc.isRunning("bot")).toBe(true);
+    expect(host.probedPorts.filter((port) => port !== 14000 + 121)).toEqual([]);
+    expect(host.starts).toEqual([]);
+    expect(host.stops).toEqual([]);
+    expect(writes).not.toHaveBeenCalled();
+    expect(row(store, "bot").state).toBe("running");
+    expect(row(store, "bot").lastUsedAt?.toISOString()).toBe(now.toISOString());
+    expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
+  });
+
+  it.each(["stopped", "reserved", "booting", "releasing"] as const)(
+    "is false for a %s row even when the socket and exec port are up",
+    async (state) => {
+      const { alloc, host, store } = harness();
+      await seed(store, state, 121);
+      host.xSockets.add(121);
+      host.ports.add(14000 + 121);
+      host.alive.add(121);
+      expect(await alloc.isRunning("bot")).toBe(false);
+      expect(host.probedIndexes).toEqual([]);
+      expect(host.probedPorts).toEqual([]);
+      expect(host.starts).toEqual([]);
+      expect(row(store, "bot").state).toBe(state);
+    },
+  );
+
+  it("does not probe seats 2-100 or a missing row", async () => {
+    const { alloc, host, store } = harness();
+    await seed(store, "running", 20, "seat");
+    await seed(store, "running", 100, "edge");
+    await seed(store, "running", 151, "high");
+    expect(await alloc.isRunning("seat")).toBe(false);
+    expect(await alloc.isRunning("edge")).toBe(false);
+    expect(await alloc.isRunning("high")).toBe(false);
+    expect(await alloc.isRunning("absent")).toBe(false);
+    expect(host.probedIndexes).toEqual([]);
+    expect(host.probedPorts).toEqual([]);
+    expect(host.starts).toEqual([]);
+  });
+
+  it("throws a probe failure without writing or starting a window", async () => {
+    const { alloc, host, store } = harness();
+    await seed(store, "running", 121);
+    host.xSockets.add(121);
+    host.xSocketExists = async () => {
+      throw new Error("probe failed fixture-owner-token");
+    };
+    await expect(alloc.isRunning("bot")).rejects.toThrow("probe failed [redacted]");
+    expect(host.starts).toEqual([]);
+    expect(row(store, "bot").state).toBe("running");
+    expect(row(store, "bot").lastUsedAt?.toISOString()).toBe(now.toISOString());
+  });
+});
+
 function displayForPort(port: number): number | undefined {
   for (const base of [9222, 14000, 5900, 13600]) {
     const displayIndex = port - base;

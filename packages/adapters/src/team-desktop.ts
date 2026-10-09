@@ -110,6 +110,13 @@ export interface TeamDesktopAllocator {
   release(botId: string): Promise<void>;
   status(botId: string): Promise<TeamDesktopStatus | null>;
   resolve(botId: string): Promise<TeamDesktopBinding | undefined>;
+  /**
+   * Read-only. True when this bot's row is running and display N (101–150)
+   * has `/tmp/.X11-unix/XN` plus a reachable exec daemon on 14000+N.
+   * Does not start a window, wake, or write the row. A stopped row or a
+   * missing socket is false. Indexes outside 101–150 are not probed.
+   */
+  isRunning(botId: string): Promise<boolean>;
   /** True when this bot is a current team member. Hub mirrors are not. */
   member(botId: string): Promise<boolean>;
   /**
@@ -396,6 +403,23 @@ export function createTeamDesktopAllocator(options: {
       // and this read must not start one.
       if (row?.state !== "running") return undefined;
       return { displayIndex: row.displayIndex, ownerToken: row.ownerToken };
+    },
+    async isRunning(botId) {
+      const row = await store.getByBot(botId);
+      // Stopped, reserved, booting, and releasing are not a confirmed-running
+      // desktop. The caller wakes those. This read must not.
+      if (row?.state !== "running") return false;
+      if (!inRange(row.displayIndex)) return false;
+      try {
+        if (!(await host.xSocketExists(row.displayIndex))) return false;
+        return await host.portListening(teamDesktopPorts(row.displayIndex).exec);
+      } catch (error) {
+        // A thrown probe is not proof the desktop is asleep. Returning false
+        // would wake and claim the shared computer.
+        const failure = scrubbed(error, [row.ownerToken]);
+        getLogger().error("team desktop running probe failed", failure);
+        throw failure;
+      }
     },
     async member(botId) {
       if (!members) return false;
