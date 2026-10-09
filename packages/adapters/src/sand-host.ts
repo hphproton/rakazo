@@ -1,5 +1,6 @@
 import type { ProcessEvent } from "@rakazo/adapter-kit";
 import { SandDisplayForbiddenError, sandScreenSelectsForbiddenDisplay } from "./sand-seat.js";
+import { createStepSignal, withStepSignal } from "./step-signal.js";
 import { TEAM_DESKTOP_ROUTER_URL, teamDesktopViewerUrl } from "./team-desktop.js";
 
 /**
@@ -193,32 +194,44 @@ export class ConnectSandHost implements SandHost {
     const [command, ...args] = request.argv;
     if (!command) throw new Error("sand exec requires a command");
     const env = sandExecEnv(request.env);
-    const response = await this.stream(
-      "ControlService",
-      "Exec",
-      agentId,
-      {
-        command,
-        args,
-        cwd: request.cwd,
-        ...(Object.keys(env).length > 0 ? { environment: env } : {}),
-      },
-      signal,
-      request.timeoutMs,
-    );
-    let exited = false;
-    for await (const frame of readConnectJson(response, signal)) {
-      const record = asRecord(frame);
-      const stdout = nestedString(record, "stdoutEvent", "data");
-      const stderr = nestedString(record, "stderrEvent", "data");
-      if (stdout) yield { type: "stdout", data: stdout };
-      if (stderr) yield { type: "stderr", data: stderr };
-      if ("exitEvent" in record) {
-        exited = true;
-        yield { type: "exit", code: nestedNumber(record, "exitEvent", "exitCode") ?? 0 };
+    // timeoutMs 0 means the caller already armed the deadline on `signal`.
+    const step = createStepSignal(signal, request.timeoutMs > 0 ? request.timeoutMs : undefined);
+    try {
+      const response = await this.stream(
+        "ControlService",
+        "Exec",
+        agentId,
+        {
+          command,
+          args,
+          cwd: request.cwd,
+          ...(Object.keys(env).length > 0 ? { environment: env } : {}),
+        },
+        step.signal,
+      );
+      let exited = false;
+      for await (const frame of readConnectJson(response, step.signal)) {
+        const record = asRecord(frame);
+        const stdout = nestedString(record, "stdoutEvent", "data");
+        const stderr = nestedString(record, "stderrEvent", "data");
+        if (stdout) yield { type: "stdout", data: stdout };
+        if (stderr) yield { type: "stderr", data: stderr };
+        if ("exitEvent" in record) {
+          exited = true;
+          yield { type: "exit", code: nestedNumber(record, "exitEvent", "exitCode") ?? 0 };
+        }
       }
+      if (!exited) yield { type: "exit", code: 0 };
+    } catch (error) {
+      if (step.timedOut && !signal.aborted) {
+        yield { type: "stderr", data: `command timed out after ${request.timeoutMs} ms\n` };
+        yield { type: "exit", code: 124 };
+        return;
+      }
+      throw error;
+    } finally {
+      step.dispose();
     }
-    if (!exited) yield { type: "exit", code: 0 };
   }
 
   async listDirectory(agentId: string, path: string, signal: AbortSignal) {
@@ -258,36 +271,38 @@ export class ConnectSandHost implements SandHost {
   ): Promise<SandComputerUseResult> {
     const id = this.nextId;
     this.nextId += 1;
-    const response = await this.stream(
-      "ExecService",
-      "Exec",
-      agentId,
-      {
-        id,
-        execId: `sand-${id}`,
-        computerUseArgs: {
-          toolCallId: `sand-cu-${id}`,
-          actions,
-          desktopLeaseActorId: agentId,
+    return withStepSignal(signal, async (stepSignal) => {
+      const response = await this.stream(
+        "ExecService",
+        "Exec",
+        agentId,
+        {
+          id,
+          execId: `sand-${id}`,
+          computerUseArgs: {
+            toolCallId: `sand-cu-${id}`,
+            actions,
+            desktopLeaseActorId: agentId,
+          },
         },
-      },
-      signal,
-    );
-    let screenshot: string | undefined;
-    let cursor: { x: number; y: number } | undefined;
-    for await (const frame of readConnectJson(response, signal)) {
-      const result = computerUsePayload(frame);
-      if (!result) continue;
-      if (typeof result.error === "string" && result.error) {
-        throw new Error(result.error.slice(0, 200));
+        stepSignal,
+      );
+      let screenshot: string | undefined;
+      let cursor: { x: number; y: number } | undefined;
+      for await (const frame of readConnectJson(response, stepSignal)) {
+        const result = computerUsePayload(frame);
+        if (!result) continue;
+        if (typeof result.error === "string" && result.error) {
+          throw new Error(result.error.slice(0, 200));
+        }
+        if (typeof result.screenshot === "string") screenshot = result.screenshot;
+        if (isCoordinate(result.cursorPosition)) cursor = result.cursorPosition;
       }
-      if (typeof result.screenshot === "string") screenshot = result.screenshot;
-      if (isCoordinate(result.cursorPosition)) cursor = result.cursorPosition;
-    }
-    return {
-      ...(screenshot ? { screenshot: Uint8Array.from(Buffer.from(screenshot, "base64")) } : {}),
-      ...(cursor ? { cursor } : {}),
-    };
+      return {
+        ...(screenshot ? { screenshot: Uint8Array.from(Buffer.from(screenshot, "base64")) } : {}),
+        ...(cursor ? { cursor } : {}),
+      };
+    });
   }
 
   private async unary(
@@ -297,17 +312,19 @@ export class ConnectSandHost implements SandHost {
     body: unknown,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const response = await this.request(
-      service,
-      method,
-      agentId,
-      "application/json",
-      bodyBytes(JSON.stringify(body)),
-      signal,
-    );
-    const text = await response.text();
-    if (!text) return {};
-    return JSON.parse(text) as unknown;
+    return withStepSignal(signal, async (stepSignal) => {
+      const response = await this.request(
+        service,
+        method,
+        agentId,
+        "application/json",
+        bodyBytes(JSON.stringify(body)),
+        stepSignal,
+      );
+      const text = await response.text();
+      if (!text) return {};
+      return JSON.parse(text) as unknown;
+    });
   }
 
   private async stream(
@@ -316,15 +333,12 @@ export class ConnectSandHost implements SandHost {
     agentId: string,
     body: unknown,
     signal: AbortSignal,
-    timeoutMs?: number,
   ): Promise<Response> {
-    const timeout = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
-    const combined = timeout ? AbortSignal.any([signal, timeout]) : signal;
     const payload = bodyBytes(JSON.stringify(body));
     const framed = new Uint8Array(5 + payload.length);
     framed.set(frameHeader(0, payload.length));
     framed.set(payload, 5);
-    return this.request(service, method, agentId, "application/connect+json", framed, combined);
+    return this.request(service, method, agentId, "application/connect+json", framed, signal);
   }
 
   private async request(

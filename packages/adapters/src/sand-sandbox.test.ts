@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ import {
   SandSeatUnmappedError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import { createStepSignal } from "./step-signal.js";
 import type { TeamDesktopHost, TeamDesktopRecord, TeamDesktopStore } from "./team-desktop.js";
 import {
   createTeamDesktopAllocator,
@@ -284,6 +286,63 @@ describe("sand sandbox provider", () => {
     }
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(events).toContainEqual({ type: "exit", code: 124 });
+    expect(ctx.signal.aborted).toBe(false);
+  });
+
+  it("keeps a cold-boot tool deadline off the run signal and the next turn", async () => {
+    const run = new AbortController();
+    const runCtx: AdapterContext = { ...ctx, signal: run.signal };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal).not.toBe(run.signal);
+      if (signal) signal.addEventListener("abort", () => undefined);
+      expect(getEventListeners(run.signal, "abort").length).toBeLessThanOrEqual(1);
+      return Response.json({ computerUseSupported: true });
+    });
+    const host = new ConnectSandHost({ fetch: fetchMock });
+    const sandbox = provider(host);
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, runCtx);
+    for (let i = 0; i < 40; i += 1) {
+      await sandbox.prepare(computer, runCtx);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(40);
+    expect(getEventListeners(run.signal, "abort")).toHaveLength(0);
+    expect(run.signal.aborted).toBe(false);
+
+    host.exec = async function* (
+      _agentId: string,
+      _request: SandExecRequest,
+      signal: AbortSignal,
+    ): AsyncIterable<ProcessEvent> {
+      if (signal.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+      }
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 5_000);
+        signal.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+        });
+      });
+    };
+    const events: ProcessEvent[] = [];
+    for await (const event of sandbox.execute(
+      computer,
+      { argv: ["sleep", "30"], timeoutMs: 30 },
+      runCtx,
+    )) {
+      events.push(event);
+    }
+    expect(events).toContainEqual({ type: "exit", code: 124 });
+    expect(run.signal.aborted).toBe(false);
+    expect(getEventListeners(run.signal, "abort")).toHaveLength(0);
+
+    const turn = createStepSignal(run.signal);
+    expect(turn.signal.aborted).toBe(false);
+    expect(run.signal.aborted).toBe(false);
+    turn.dispose();
+    expect(getEventListeners(run.signal, "abort")).toHaveLength(0);
   });
 
   it("round-trips files on the shared workspace", async () => {

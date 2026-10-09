@@ -186,6 +186,8 @@ import { computerPlaceholder } from "../lib/computer-placeholder";
 import type { ScreenSealGeneration } from "../lib/computer-screen";
 import {
   embeddableScreenUrl,
+  liveScreenInteractive,
+  liveScreenSurfaces,
   loadComputerScreen,
   reuseScreenUrl,
   screenSealGeneration,
@@ -676,6 +678,14 @@ export function ShellPage() {
     heldScreenGeneration.current = url ? generation : null;
     setScreenUrl(url);
   }
+  const [overlayScreenUrl, setOverlayScreenUrl] = useState<string | null>(null);
+  const overlayScreenUrlRef = useRef<string | null>(null);
+  const overlayGeneration = useRef<ScreenSealGeneration | null>(null);
+  function showOverlayScreen(url: string | null, generation: ScreenSealGeneration | null) {
+    overlayScreenUrlRef.current = url;
+    overlayGeneration.current = url ? generation : null;
+    setOverlayScreenUrl(url);
+  }
   const [computerOpen, setComputerOpen] = useState(false);
   const [computerBotId, setComputerBotId] = useState<string | undefined>();
   const computerOpenRef = useRef(false);
@@ -1082,24 +1092,42 @@ export function ShellPage() {
 
   async function refreshComputerScreen(id: string) {
     if (!computerVisible.current) return null;
+    const overlay = computerOpenRef.current;
     const request = ++screenRequest.current;
+    const interactive = liveScreenInteractive(overlay ? "overlay" : "card");
     return loadComputerScreen({
-      load: () => rpc.computer.screenUrl({ botId: id }),
+      load: () =>
+        rpc.computer.screenUrl({
+          botId: id,
+          ...(interactive ? {} : { interactive: false }),
+        }),
       isCurrent: () =>
         request === screenRequest.current &&
         (activeBotId.current === id || computerBotIdRef.current === id) &&
-        computerVisible.current,
+        computerVisible.current &&
+        computerOpenRef.current === overlay,
       commit: (screen) => {
         const incoming = screenSealGeneration(screen.botGeneration, screen.computerGeneration);
-        const url = reuseScreenUrl(screenUrlRef.current, screen.url, Date.now(), {
-          held: heldScreenGeneration.current,
-          next: incoming,
-        });
-        const replaced = url !== screenUrlRef.current;
-        let generation = heldScreenGeneration.current;
-        if (replaced || generation == null) generation = url ? incoming : null;
-        showScreen(url, generation);
-        cacheComputerFor(id, { screenUrl: url, screenGeneration: generation });
+        if (overlay) {
+          const url = reuseScreenUrl(overlayScreenUrlRef.current, screen.url, Date.now(), {
+            held: overlayGeneration.current,
+            next: incoming,
+          });
+          const replaced = url !== overlayScreenUrlRef.current;
+          let generation = overlayGeneration.current;
+          if (replaced || generation == null) generation = url ? incoming : null;
+          showOverlayScreen(url, generation);
+        } else {
+          const url = reuseScreenUrl(screenUrlRef.current, screen.url, Date.now(), {
+            held: heldScreenGeneration.current,
+            next: incoming,
+          });
+          const replaced = url !== screenUrlRef.current;
+          let generation = heldScreenGeneration.current;
+          if (replaced || generation == null) generation = url ? incoming : null;
+          showScreen(url, generation);
+          cacheComputerFor(id, { screenUrl: url, screenGeneration: generation });
+        }
         setComputerError(screen.error);
         setComputerErrorFromScreen(Boolean(screen.error));
       },
@@ -2561,6 +2589,10 @@ export function ShellPage() {
   }, [panel, active?.id]);
 
   useEffect(() => {
+    computerOpenRef.current = false;
+    overlayScreenUrlRef.current = null;
+    overlayGeneration.current = null;
+    setOverlayScreenUrl(null);
     setComputerOpen(false);
     setComputerError(null);
     setComputerErrorFromScreen(false);
@@ -2666,6 +2698,15 @@ export function ShellPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [computerOpen]);
 
+  const overlayWasOpen = useRef(false);
+  useEffect(() => {
+    const wasOpen = overlayWasOpen.current;
+    overlayWasOpen.current = computerOpen;
+    if (!wasOpen || computerOpen) return;
+    const id = computerBotIdRef.current ?? active?.id;
+    if (id) void refreshComputerScreen(id);
+  }, [computerOpen, active?.id]);
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (!isCommandPaletteHotkey(event)) return;
@@ -2703,6 +2744,7 @@ export function ShellPage() {
       showScreen(targetScreen, targetScreen ? (cached?.screenGeneration ?? null) : null);
     }
     setComputerOpen(true);
+    computerOpenRef.current = true;
     computerVisible.current = true;
     const needsTakeover = !userHoldsComputerControl(targetComputer, id);
     const blocked = computerTakeoverBlocked(targetComputer, snapshot?.run?.status);
@@ -2732,6 +2774,7 @@ export function ShellPage() {
         await rpc.computer.release({ botId, reason });
         if (computerBotIdRef.current !== botId && activeBotId.current !== botId) return;
         setComputerOpen(false);
+        computerOpenRef.current = false;
         const groupId = activeGroupId.current;
         if (groupId) {
           await refreshGroupThreadRef.current(groupId).catch(() => undefined);
@@ -2759,12 +2802,16 @@ export function ShellPage() {
   }
 
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl);
+  const embeddedOverlayUrl = embeddableScreenUrl(overlayScreenUrl);
+  const screenSurfaces = liveScreenSurfaces(computerOpen);
   const refreshRejectedScreen = () => {
     const id = computerBotIdRef.current ?? activeBotId.current;
     return id ? refreshComputerScreen(id) : null;
   };
   const hasControl = userHoldsComputerControl(computer, computerBot?.id);
-  const hideScreenLoadError = computerErrorFromScreen && Boolean(embeddedScreenUrl);
+  const hideScreenLoadError =
+    computerErrorFromScreen &&
+    Boolean(screenSurfaces.includes("overlay") ? embeddedOverlayUrl : embeddedScreenUrl);
   const computerScreenError =
     computerError && !hideScreenLoadError ? (
       <div role="alert" className="flex flex-col items-center gap-3 px-6 text-center text-sm">
@@ -3780,33 +3827,37 @@ export function ShellPage() {
                   data-testid="computer-preview"
                   className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-background"
                 >
-                  {computerOpen ? (
+                  {screenSurfaces.includes("card") ? (
+                    computer?.kind === "desktop" ? (
+                      <DesktopKindEmptyState className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80" />
+                    ) : computer?.state === "running" &&
+                      embeddedScreenUrl &&
+                      !computerScreenError ? (
+                      <ComputerLiveScreen
+                        kind={computer.kind}
+                        url={embeddedScreenUrl}
+                        title={t`Bot screen preview`}
+                        allow="clipboard-read; clipboard-write"
+                        pointerEvents="none"
+                        onRejected={refreshRejectedScreen}
+                      />
+                    ) : (
+                      <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80">
+                        {computerScreenError ??
+                          (computersAreUnavailable(bootstrapMe?.sandboxProvider) ? (
+                            <ComputersUnavailableHint />
+                          ) : (
+                            computerPlaceholder(
+                              computer?.state,
+                              booting,
+                              computerLabel(computer?.mode, active.name),
+                            )
+                          ))}
+                      </div>
+                    )
+                  ) : (
                     <div className="grid h-full place-items-center text-sm text-muted-foreground/80">
                       <Trans>Open in full window</Trans>
-                    </div>
-                  ) : computer?.kind === "desktop" ? (
-                    <DesktopKindEmptyState className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80" />
-                  ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
-                    <ComputerLiveScreen
-                      kind={computer.kind}
-                      url={embeddedScreenUrl}
-                      title={t`Bot screen preview`}
-                      allow="clipboard-read; clipboard-write"
-                      pointerEvents="none"
-                      onRejected={refreshRejectedScreen}
-                    />
-                  ) : (
-                    <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80">
-                      {computerScreenError ??
-                        (computersAreUnavailable(bootstrapMe?.sandboxProvider) ? (
-                          <ComputersUnavailableHint />
-                        ) : (
-                          computerPlaceholder(
-                            computer?.state,
-                            booting,
-                            computerLabel(computer?.mode, active.name),
-                          )
-                        ))}
                     </div>
                   )}
                   {!computerScreenError ? (
@@ -4521,7 +4572,7 @@ export function ShellPage() {
             <div className="h-full w-2/3 rounded-full bg-primary" />
           </div>
         </div>
-      ) : computerOpen && computerBot ? (
+      ) : screenSurfaces.includes("overlay") && computerBot ? (
         <div className="fixed inset-0 z-30 bg-background">
           <div
             data-testid="computer-viewport"
@@ -4642,11 +4693,11 @@ export function ShellPage() {
               >
                 {computer?.kind === "desktop" ? (
                   <DesktopKindEmptyState className="grid h-full place-items-center px-8 text-center text-sm text-muted-foreground/80" />
-                ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
+                ) : computer?.state === "running" && embeddedOverlayUrl && !computerScreenError ? (
                   <>
                     <ComputerLiveScreen
                       kind={computer.kind}
-                      url={embeddedScreenUrl}
+                      url={embeddedOverlayUrl}
                       title={t`Bot screen`}
                       allow="clipboard-read; clipboard-write; fullscreen"
                       pointerEvents={recordingSkill || !hasControl ? "none" : "auto"}

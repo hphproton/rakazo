@@ -65,6 +65,7 @@ import {
 } from "./pi-session.js";
 import type { FinishedShellCommand } from "./shell-command-stream.js";
 import { deliverFinishedShells } from "./shell-command-stream.js";
+import { createStepSignal } from "./step-signal.js";
 import { textContentArg } from "./tool-text.js";
 
 const running = new Map<string, { controller: AbortController; work: Promise<void> }>();
@@ -192,6 +193,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const work = (async () => {
       let trackedBudget: ToolCallBudget | undefined;
       let resumeHost: ToolHost | undefined;
+      let capturedModelError: unknown;
       try {
         const selectedModel = resolveRuntimeModel(request.model);
         if (!selectedModel.model) {
@@ -222,6 +224,12 @@ export class PiAgentRuntime implements AgentRuntime {
           depth: 0,
           pausePending: false,
           pendingShells: [],
+          get lastModelError() {
+            return capturedModelError;
+          },
+          set lastModelError(value: unknown) {
+            capturedModelError = value;
+          },
         };
         resumeHost = host;
         const tools = toAgentTools(toolDefs, host);
@@ -273,15 +281,17 @@ export class PiAgentRuntime implements AgentRuntime {
         agent = new Agent({
           sessionId: conversationSessionId(request.threadId, request.botId),
           steeringMode: "all",
-          streamFn: (m, ctx, options) =>
-            reliableModelStream(
+          streamFn: (m, ctx, options) => {
+            host.lastModelError = undefined;
+            return reliableModelStream(
               models,
               m,
               ctx,
-              options,
+              { ...options, fetch: captureModelFetch(options?.fetch, host) },
               request.model.maxTokens,
               () => selectedModel.credentials?.accessToken ?? apiKey,
-            ),
+            );
+          },
           getApiKey: async () => apiKey,
           transformContext: async (messages) =>
             pruneComputerScreenshotContext(
@@ -447,7 +457,7 @@ export class PiAgentRuntime implements AgentRuntime {
         const budgetExceeded = host.toolCallBudget.exceeded;
         const error = agent.state.errorMessage;
         if (error && !budgetExceeded) {
-          throw new Error(sanitizeProviderError(model.provider, error));
+          throw modelTurnFailure(model.provider, error, host.lastModelError);
         }
         if (budgetExceeded) {
           const budgetMessage = toolCallBudgetExceededMessage(host.toolCallBudget.limit);
@@ -488,7 +498,7 @@ export class PiAgentRuntime implements AgentRuntime {
         queue.push(streamed.trim() ? { type: "done", text: streamed } : { type: "done" });
       } catch (error) {
         const message = sanitizeError(error instanceof Error ? error.message : String(error));
-        queue.fail(new Error(message));
+        queue.fail(copyRunFailure(message, error, capturedModelError));
       } finally {
         queue.close();
         if (trackedBudget) {
@@ -1788,6 +1798,47 @@ function sanitizeProviderError(provider: string, message: string): string {
   return sanitized;
 }
 
+/** User-facing message stays sanitized. Name and cause stay on the error the executor logs. */
+export function modelTurnFailure(provider: string, message: string, raw?: unknown): Error {
+  const failure = new Error(sanitizeProviderError(provider, message));
+  if (raw instanceof Error) {
+    failure.name = raw.name || "Error";
+    if (raw.cause !== undefined) failure.cause = raw.cause;
+  }
+  return failure;
+}
+
+function copyRunFailure(message: string, error: unknown, captured: unknown): Error {
+  const failure = new Error(message);
+  if (error instanceof Error) {
+    failure.name = error.name || "Error";
+    if (error.stack) failure.stack = error.stack;
+    if (error.cause !== undefined) failure.cause = error.cause;
+  }
+  if (failure.cause === undefined && captured instanceof Error) {
+    if (failure.name === "Error" && captured.name) failure.name = captured.name;
+    failure.cause = captured.cause !== undefined ? captured.cause : captured;
+  }
+  return failure;
+}
+
+function captureModelFetch(
+  fetchImpl: ModelsSimpleStreamOptions["fetch"] | undefined,
+  host: ToolHost,
+): NonNullable<ModelsSimpleStreamOptions["fetch"]> {
+  const base = fetchImpl ?? globalThis.fetch.bind(globalThis);
+  return async (input, init) => {
+    try {
+      const response = await base(input, init);
+      host.lastModelError = undefined;
+      return response;
+    } catch (error) {
+      host.lastModelError = error;
+      throw error;
+    }
+  };
+}
+
 interface EventQueue {
   push(event: AgentRuntimeEvent): void;
   fail(error: Error): void;
@@ -1808,6 +1859,8 @@ interface ToolHost {
   toolCallSeq: { value: number };
   abortTurn(): void;
   signal: AbortSignal;
+  /** Last provider fetch rejection. Pi keeps only `error.message` on the agent. */
+  lastModelError?: unknown;
   depth: number;
   pausePending: boolean;
   /** Shell commands that returned output and are still running. */
@@ -2125,7 +2178,13 @@ export function reliableModelStream(
   configuredMaxTokens: number | undefined,
   accessToken?: string | (() => string | undefined),
 ): AssistantMessageEventStream {
-  const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(options?.signal) : undefined;
+  // Fetch and SDK abort listeners attach to this step, not the long-lived run signal.
+  const turn = createStepSignal(options?.signal);
+  const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(turn.signal) : undefined;
+  const dispose = () => {
+    watchdog?.dispose();
+    turn.dispose();
+  };
   try {
     const stream = models.streamSimple(
       model,
@@ -2144,16 +2203,51 @@ export function reliableModelStream(
                 return options?.onResponse?.(response, requestModel);
               },
             }
-          : options,
+          : { ...options, signal: turn.signal },
         configuredMaxTokens,
         accessToken,
       ),
     );
-    return watchdog ? watchdog.wrap(stream) : stream;
+    return settleStep(watchdog ? watchdog.wrap(stream) : stream, dispose);
   } catch (error) {
-    watchdog?.dispose();
+    dispose();
     throw error;
   }
+}
+
+function settleStep(
+  stream: AssistantMessageEventStream,
+  dispose: () => void,
+): AssistantMessageEventStream {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    dispose();
+  };
+  class Settled extends AssistantMessageEventStream {
+    override [Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+      const iterator = (async function* settledStream() {
+        try {
+          yield* stream;
+        } finally {
+          finish();
+        }
+      })();
+      // return() before the first next() closes a generator without entering
+      // its body, so the finally above would not run.
+      const close = iterator.return.bind(iterator);
+      iterator.return = (value) => {
+        finish();
+        return close(value);
+      };
+      return iterator;
+    }
+    override result(): Promise<AssistantMessage> {
+      return stream.result().finally(finish);
+    }
+  }
+  return new Settled();
 }
 
 const CODEX_RESIDENCY_HEADER = "x-openai-internal-codex-residency";

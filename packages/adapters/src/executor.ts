@@ -287,6 +287,7 @@ import { actorMayUsePrivateEndpoint } from "./private-endpoint.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
 import { assertSafeRemoteUrl } from "./remote-mcp.js";
 import { loadReplyContext, messageToAgentHistoryText } from "./reply-context.js";
+import { redactFailure } from "./run-failure.js";
 import {
   commitConsumedRunSecret,
   normalizeSecretAskPurpose,
@@ -4886,6 +4887,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           if (!terminalCheckpointComplete) {
             await workspaceCheckpoint.flush().catch(() => undefined);
           }
+          getLogger().error("run.failed", redactFailure(error, runSecrets));
           const message = redactSecrets(
             error instanceof Error ? error.message : String(error),
             runSecrets,

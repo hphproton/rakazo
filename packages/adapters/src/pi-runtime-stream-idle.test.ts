@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import type {
   Api,
   AssistantMessage,
@@ -14,6 +15,7 @@ import {
   reliableModelStream,
 } from "./pi-runtime.js";
 import { MODEL_STREAM_IDLE_TIMEOUT_MS, MODEL_STREAM_TIMEOUT_MS } from "./pi-runtime-limits.js";
+import { createStepSignal } from "./step-signal.js";
 
 function assistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
@@ -242,7 +244,7 @@ describe("Codex stream idle watchdog", () => {
 describe("reliableModelStream idle gating", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("hands Codex a composed signal while other providers keep the caller's", async () => {
+  it("hands every provider a step signal and only Codex the idle watchdog", async () => {
     vi.useFakeTimers();
     const caller = new AbortController();
     const inner = new AssistantMessageEventStream();
@@ -265,9 +267,11 @@ describe("reliableModelStream idle gating", () => {
 
     const plain = reliableModelStream(models, other, context, options, undefined);
     const plainOptions = streamSimple.mock.calls[1]?.[2];
-    expect(plainOptions?.signal).toBe(caller.signal);
+    expect(plainOptions?.signal).not.toBe(caller.signal);
+    expect(plainOptions?.signal?.aborted).toBe(false);
     expect(plainOptions?.fetch).toBe(callerFetch);
-    expect(plain).toBe(inner);
+    expect(plain).not.toBe(inner);
+    expect(plain).toBeInstanceOf(AssistantMessageEventStream);
 
     // Before the first event the idle budget stays unarmed, so a headers
     // timeout leaves a retried attempt its own full timeoutMs.
@@ -283,6 +287,37 @@ describe("reliableModelStream idle gating", () => {
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS);
     expect(guardedOptions?.signal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
+    expect(plainOptions?.signal?.aborted).toBe(false);
+  });
+
+  it("does not let a previous step deadline abort the next model turn", async () => {
+    const run = new AbortController();
+    const previous = createStepSignal(run.signal, 15);
+    await new Promise<void>((resolve) => {
+      previous.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    previous.dispose();
+    expect(run.signal.aborted).toBe(false);
+
+    const inner = new AssistantMessageEventStream();
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => inner,
+    );
+    const other = { provider: "openrouter", api: "openai-completions" } as Model<Api>;
+    const stream = reliableModelStream(
+      { streamSimple } as unknown as Models,
+      other,
+      context,
+      { signal: run.signal },
+      undefined,
+    );
+    const turnOptions = streamSimple.mock.calls[0]?.[2];
+    expect(turnOptions?.signal).not.toBe(run.signal);
+    expect(turnOptions?.signal?.aborted).toBe(false);
+    expect(run.signal.aborted).toBe(false);
+    await stream[Symbol.asyncIterator]().return?.(undefined);
+    expect(getEventListeners(run.signal, "abort")).toHaveLength(0);
+    expect(run.signal.aborted).toBe(false);
   });
 
   it("arms only on successful responses, leaving retry backoff uncovered", async () => {

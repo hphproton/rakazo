@@ -37,6 +37,7 @@ import {
   SandDisplayForbiddenError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import { createStepSignal } from "./step-signal.js";
 import type { TeamDesktopBinding } from "./team-desktop.js";
 import { TeamDesktopMissingError, teamDesktopViewerUrl } from "./team-desktop.js";
 
@@ -135,21 +136,22 @@ export class SandSandboxProvider implements SandboxProvider {
     }
     const cwd = sandWorkspacePath(request.cwd);
     const timeoutMs = boundedSandboxCommandTimeoutMs(request.timeoutMs);
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const signal = AbortSignal.any([context.signal, timeout]);
+    const step = createStepSignal(context.signal, timeoutMs);
     try {
       const route = await this.session(computer, context, true);
+      // The deadline is already on step.signal. timeoutMs 0 keeps exec from
+      // arming a second one on the same command.
       yield* route.host.exec(
         route.agentId,
-        { argv: request.argv, cwd, env: sandExecEnv(request.env), timeoutMs },
-        signal,
+        { argv: request.argv, cwd, env: sandExecEnv(request.env), timeoutMs: 0 },
+        step.signal,
       );
     } catch (error) {
       if (context.signal.aborted) {
         yield { type: "exit", code: 130 };
         return;
       }
-      if (timeout.aborted) {
+      if (step.timedOut) {
         yield { type: "stderr", data: `command timed out after ${timeoutMs} ms\n` };
         yield { type: "exit", code: 124 };
         return;
@@ -157,6 +159,8 @@ export class SandSandboxProvider implements SandboxProvider {
       const message = error instanceof Error ? error.message : "sand exec failed";
       yield { type: "stderr", data: `${message}\n` };
       yield { type: "exit", code: 1 };
+    } finally {
+      step.dispose();
     }
   }
 

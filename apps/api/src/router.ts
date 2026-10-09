@@ -3013,16 +3013,15 @@ export function createRouter(deps: RouterDeps) {
           return { url: null };
         }
         const computer = bot.computer;
+        const leaseHeld = hasActiveComputerControl(computer) && computer.controlBotId === bot.id;
+        const interactive = input.interactive === false ? false : leaseHeld;
         const session = await deps.sandbox
           .connectScreen(
             toComputerRef(computer),
             {
               view: "stream",
-              interactive: hasActiveComputerControl(computer) && computer.controlBotId === bot.id,
-              controlToken:
-                computer.controlBotId === bot.id
-                  ? (computer.controlLeaseId ?? undefined)
-                  : undefined,
+              interactive,
+              controlToken: interactive ? (computer.controlLeaseId ?? undefined) : undefined,
             },
             await computerScreenContext(deps.prisma, context.actor, computer.id, bot.id, "screen"),
           )
@@ -3036,8 +3035,6 @@ export function createRouter(deps: RouterDeps) {
           });
         if (!session?.url) return { url: null };
         scheduleComputerSleep(deps.jobs, bot.computer.id);
-        const interactive =
-          hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id;
         const viewUrl = withViewOnly(session.url, !interactive);
         const scope = {
           botId: bot.id,
