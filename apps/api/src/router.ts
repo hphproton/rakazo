@@ -252,6 +252,7 @@ import {
   UpdaterProxyError,
 } from "./server-update.js";
 import { assertTeachingSendAllowed, createTaughtSkillsService } from "./taught-skills.js";
+import { applyTeamDesktopPreview, teamDesktopPreviewState } from "./team-desktop-preview.js";
 import {
   isPeerRun,
   loadAllMessages,
@@ -2387,6 +2388,16 @@ export function createRouter(deps: RouterDeps) {
         const bot = await repos.getBot(context.actor, input.botId);
         if (!bot.computer) throw new IsolationError();
         if (bot.computer.state === "running" && bot.computer.providerRef) {
+          // Stock opens a sleeping computer through this call. The shared Team
+          // row stays running, so wake this bot's own window on the team path.
+          const preview = await teamDesktopPreviewState(deps.teamDesktops, input.botId);
+          if (deps.teamDesktops && preview != null && preview !== "running") {
+            try {
+              await deps.teamDesktops.ensure(input.botId);
+            } catch (error) {
+              throw mapTeamDesktopError(error);
+            }
+          }
           scheduleComputerSleep(deps.jobs, bot.computer.id);
           return computerStatus(deps, context.actor, input.botId);
         }
@@ -3010,6 +3021,12 @@ export function createRouter(deps: RouterDeps) {
           !bot.computer?.providerRef ||
           (bot.computer.state !== "running" && bot.computer.state !== "booting")
         ) {
+          return { url: null };
+        }
+        // An asleep or still-booting team window has no viewer. Do not seal the
+        // shared computer. Opening the preview wakes it through computer.boot.
+        const desktopPreview = await teamDesktopPreviewState(deps.teamDesktops, bot.id);
+        if (desktopPreview != null && desktopPreview !== "running") {
           return { url: null };
         }
         const computer = bot.computer;
@@ -5973,7 +5990,11 @@ async function computerStatus(
     botId,
     botName: bot.name,
   });
-  return toComputerStatus(botId, bot.computer, busyBotName);
+  return applyTeamDesktopPreview(
+    toComputerStatus(botId, bot.computer, busyBotName),
+    await teamDesktopPreviewState(deps.teamDesktops, botId),
+    { maintenance: Boolean(bot.computer?.maintenanceId) },
+  );
 }
 
 /** Hand the user's screen control for this bot back, continuing any run waiting on it. */

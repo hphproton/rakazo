@@ -5,6 +5,7 @@ import {
   ComputerScreenUnavailableError,
   SandSeatUnmappedError,
   screenLeaseIdForRun,
+  TeamDesktopLimitError,
 } from "@rakazo/adapters";
 import type { Actor, Bot } from "@rakazo/contracts";
 import { REPLY_QUOTE_MAX_LENGTH } from "@rakazo/contracts";
@@ -1081,6 +1082,15 @@ describe("computer screen url", () => {
       controlLeaseExpiresAt?: Date | null;
       controlBotId?: string | null;
     } = {},
+    teamDesktops?: {
+      status: (botId: string) => Promise<{
+        botId: string;
+        displayIndex: number;
+        state: "reserved" | "booting" | "running" | "stopped" | "releasing";
+        lastUsedAt: string | null;
+      } | null>;
+      member: (botId: string) => Promise<boolean>;
+    },
   ) => {
     const prisma = {
       bot: {
@@ -1098,6 +1108,7 @@ describe("computer screen url", () => {
       prisma,
       sandbox: { connectScreen },
       jobs: { enqueue: vi.fn().mockResolvedValue(undefined) },
+      ...(teamDesktops ? { teamDesktops } : {}),
       env: {
         defaultProvider: "fake",
         defaultModel: "fake-model",
@@ -1209,6 +1220,273 @@ describe("computer screen url", () => {
       ((await control.response.json()) as { json: { url: string } }).json.url,
     );
     expect(controlUrl.pathname).toContain("/novnc/session/control/");
+  });
+
+  it("does not seal a stopped or booting team desktop", async () => {
+    const connectScreen = vi.fn(async () => ({
+      url: "http://127.0.0.1:6081?token=101",
+    }));
+    const teamDesktops = {
+      status: vi.fn(async () => ({
+        botId: "bot-1",
+        displayIndex: 101,
+        state: "stopped" as const,
+        lastUsedAt: null,
+      })),
+      member: vi.fn(async () => true),
+    };
+    const stopped = await callScreenUrl(connectScreen, vi.fn(), "sand", {}, {}, teamDesktops);
+    expect(stopped.response.status).toBe(200);
+    const stoppedBody = await stopped.response.json();
+    expect(stoppedBody.json.url).toBeNull();
+    expect(JSON.stringify(stoppedBody)).not.toContain("6081");
+    expect(JSON.stringify(stoppedBody)).not.toContain("novnc");
+    expect(JSON.stringify(stoppedBody)).not.toContain("token");
+    expect(connectScreen).not.toHaveBeenCalled();
+
+    teamDesktops.status.mockResolvedValue({
+      botId: "bot-1",
+      displayIndex: 101,
+      state: "booting",
+      lastUsedAt: null,
+    });
+    const booting = await callScreenUrl(connectScreen, vi.fn(), "sand", {}, {}, teamDesktops);
+    expect((await booting.response.json()).json.url).toBeNull();
+    expect(connectScreen).not.toHaveBeenCalled();
+
+    teamDesktops.status.mockResolvedValue(null);
+    const absent = await callScreenUrl(connectScreen, vi.fn(), "sand", {}, {}, teamDesktops);
+    expect((await absent.response.json()).json.url).toBeNull();
+    expect(connectScreen).not.toHaveBeenCalled();
+  });
+
+  it("seals a running team desktop without waking it first", async () => {
+    const connectScreen = vi.fn(async () => ({
+      url: "http://127.0.0.1:6081?token=101",
+    }));
+    const { response } = await callScreenUrl(
+      connectScreen,
+      vi.fn(),
+      "sand",
+      { interactive: false },
+      {},
+      {
+        status: async () => ({
+          botId: "bot-1",
+          displayIndex: 101,
+          state: "running" as const,
+          lastUsedAt: null,
+        }),
+        member: async () => true,
+      },
+    );
+    expect(response.status).toBe(200);
+    const { json } = await response.json();
+    expect(json.url).toContain("/novnc/session/view/");
+    expect(json.url).not.toContain("token=101");
+    expect(connectScreen).toHaveBeenCalledOnce();
+  });
+
+  it("opens an asleep team desktop with one ensure, then one screen connect", async () => {
+    const actor = {
+      spaceId: "workspace-1",
+      userId: "user-1",
+      email: "user@rakazo.test",
+      isDeploymentOwner: true,
+    } satisfies Actor;
+    let desktopState: "stopped" | "booting" | "running" = "stopped";
+    const ensure = vi.fn(async () => {
+      desktopState = "running";
+      return { displayIndex: 101, ownerToken: "desk-owner-token" };
+    });
+    const connectScreen = vi.fn(async () => ({
+      url: "http://127.0.0.1:6081?token=101",
+    }));
+    const teamDesktops = {
+      status: async () => ({
+        botId: "bot-1",
+        displayIndex: 101,
+        state: desktopState,
+        lastUsedAt: null,
+      }),
+      member: async () => true,
+      ensure,
+    };
+    const prisma = {
+      bot: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "bot-1",
+          name: "Chief",
+          screenGeneration: 2,
+          thread: { id: "thread-1" },
+          computer: {
+            id: "computer-1",
+            screenGeneration: 3,
+            kind: "sand",
+            scope: "team",
+            state: "running",
+            providerRef: "team-desktop",
+            homeKey: "home-1",
+            homeRevision: "rev-1",
+            controlHolder: "none",
+            controlLeaseId: null,
+            controlLeaseExpiresAt: null,
+            controlBotId: null,
+            controlRunId: null,
+            maintenanceId: null,
+          },
+        }),
+      },
+      computerExecutionLease: { findUnique: vi.fn().mockResolvedValue(null) },
+    } as unknown as PrismaClient;
+    const deps = {
+      prisma,
+      sandbox: { connectScreen },
+      jobs: { enqueue: vi.fn().mockResolvedValue(undefined) },
+      teamDesktops,
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "sand",
+      },
+      dataDir: "/tmp/rakazo-router-test",
+    } as unknown as RouterDeps;
+    const handler = new RPCHandler(createRouter(deps));
+    const call = async (procedure: string, input: Record<string, unknown> = { botId: "bot-1" }) => {
+      const { response } = await handler.handle(
+        new Request(`http://127.0.0.1/rpc/${procedure}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ json: input }),
+        }),
+        { prefix: "/rpc", context: { actor } },
+      );
+      if (!response) throw new Error("missing response");
+      return response;
+    };
+
+    const asleep = await call("computer/status");
+    expect(asleep.status).toBe(200);
+    const asleepBody = await asleep.json();
+    expect(asleepBody.json.state).toBe("suspended");
+    expect(asleepBody.json.screenAvailable).toBe(false);
+    expect(JSON.stringify(asleepBody)).not.toContain("desk-owner-token");
+    expect(ensure).not.toHaveBeenCalled();
+
+    const dark = await call("computer/screenUrl", { botId: "bot-1", interactive: false });
+    expect(dark.status).toBe(200);
+    expect((await dark.json()).json.url).toBeNull();
+    expect(connectScreen).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
+
+    const opened = await call("computer/boot");
+    expect(opened.status).toBe(200);
+    const openedBody = await opened.json();
+    expect(openedBody.json.state).toBe("running");
+    expect(openedBody.json.screenAvailable).toBe(true);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledWith("bot-1");
+    expect(JSON.stringify(openedBody)).not.toContain("desk-owner-token");
+    expect(JSON.stringify(openedBody)).not.toContain("6081");
+    expect(connectScreen).not.toHaveBeenCalled();
+
+    const screen = await call("computer/screenUrl", { botId: "bot-1", interactive: false });
+    expect(screen.status).toBe(200);
+    const screenBody = await screen.json();
+    expect(screenBody.json.url).toContain("/novnc/session/view/");
+    expect(screenBody.json.url).not.toContain("token=101");
+    expect(connectScreen).toHaveBeenCalledOnce();
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(screenBody)).not.toContain("14020");
+
+    const again = await call("computer/boot");
+    expect(again.status).toBe(200);
+    expect((await again.json()).json.state).toBe("running");
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not seal or connect when opening an asleep desktop is at the team limit", async () => {
+    const actor = {
+      spaceId: "workspace-1",
+      userId: "user-1",
+      email: "user@rakazo.test",
+      isDeploymentOwner: true,
+    } satisfies Actor;
+    const ensure = vi.fn(async () => {
+      throw new TeamDesktopLimitError(4);
+    });
+    const connectScreen = vi.fn();
+    const prisma = {
+      bot: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "bot-1",
+          name: "Chief",
+          screenGeneration: 2,
+          thread: { id: "thread-1" },
+          computer: {
+            id: "computer-1",
+            screenGeneration: 3,
+            kind: "sand",
+            scope: "team",
+            state: "running",
+            providerRef: "team-desktop",
+            homeKey: "home-1",
+            homeRevision: "rev-1",
+            controlHolder: "none",
+            controlLeaseId: null,
+            controlLeaseExpiresAt: null,
+            controlBotId: null,
+            controlRunId: null,
+            maintenanceId: null,
+          },
+        }),
+      },
+      computerExecutionLease: { findUnique: vi.fn().mockResolvedValue(null) },
+    } as unknown as PrismaClient;
+    const handler = new RPCHandler(
+      createRouter({
+        prisma,
+        sandbox: { connectScreen },
+        jobs: { enqueue: vi.fn().mockResolvedValue(undefined) },
+        teamDesktops: {
+          status: async () => ({
+            botId: "bot-1",
+            displayIndex: 101,
+            state: "stopped" as const,
+            lastUsedAt: null,
+          }),
+          member: async () => true,
+          ensure,
+        },
+        env: {
+          defaultProvider: "fake",
+          defaultModel: "fake-model",
+          webOrigin: "http://127.0.0.1:5173",
+          screenProxySecret: "fake-test-secret",
+          sandboxProvider: "sand",
+        },
+        dataDir: "/tmp/rakazo-router-test",
+      } as unknown as RouterDeps),
+    );
+    const { response } = await handler.handle(
+      new Request("http://127.0.0.1/rpc/computer/boot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: { botId: "bot-1" } }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+    if (!response) throw new Error("missing response");
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.json.code).toBe("BAD_REQUEST");
+    expect(body.json.message).toMatch(/Team desktop limit reached/);
+    expect(ensure).toHaveBeenCalledOnce();
+    expect(connectScreen).not.toHaveBeenCalled();
+    expect(JSON.stringify(body)).not.toContain("6081");
+    expect(JSON.stringify(body)).not.toContain("novnc");
   });
 
   it("returns desktop provider screen URLs without sealing them", async () => {

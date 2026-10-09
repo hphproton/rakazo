@@ -185,11 +185,13 @@ import { newClientId } from "../lib/client-id";
 import { computerPlaceholder } from "../lib/computer-placeholder";
 import type { ScreenSealGeneration } from "../lib/computer-screen";
 import {
+  computerCardShowsLiveScreen,
   embeddableScreenUrl,
   liveScreenInteractive,
   liveScreenSurfaces,
   loadComputerScreen,
   reuseScreenUrl,
+  sandScreenKeepsRetrying,
   screenSealGeneration,
 } from "../lib/computer-screen";
 import { publishComputerCommand } from "../lib/computer-workspace";
@@ -2804,9 +2806,17 @@ export function ShellPage() {
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl);
   const embeddedOverlayUrl = embeddableScreenUrl(overlayScreenUrl);
   const screenSurfaces = liveScreenSurfaces(computerOpen);
-  const refreshRejectedScreen = () => {
+  const refreshRejectedScreen = async () => {
     const id = computerBotIdRef.current ?? activeBotId.current;
-    return id ? refreshComputerScreen(id) : null;
+    if (!id) return false;
+    const url = await refreshComputerScreen(id);
+    const status = url ? null : await rpc.computer.status({ botId: id }).catch(() => null);
+    if (status && (computerBotIdRef.current === id || activeBotId.current === id)) {
+      commitComputer(status);
+      cacheComputerFor(id, { computer: status });
+    }
+    const state = status?.state ?? computerRef.current?.state;
+    return sandScreenKeepsRetrying(url, state);
   };
   const hasControl = userHoldsComputerControl(computer, computerBot?.id);
   const hideScreenLoadError =
@@ -3830,15 +3840,16 @@ export function ShellPage() {
                   {screenSurfaces.includes("card") ? (
                     computer?.kind === "desktop" ? (
                       <DesktopKindEmptyState className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80" />
-                    ) : computer?.state === "running" &&
-                      embeddedScreenUrl &&
+                    ) : computer &&
+                      computerCardShowsLiveScreen(computer.state, embeddedScreenUrl) &&
                       !computerScreenError ? (
                       <ComputerLiveScreen
                         kind={computer.kind}
-                        url={embeddedScreenUrl}
+                        url={embeddedScreenUrl ?? ""}
                         title={t`Bot screen preview`}
                         allow="clipboard-read; clipboard-write"
                         pointerEvents="none"
+                        live={computer.state === "running" || computer.state === "booting"}
                         onRejected={refreshRejectedScreen}
                       />
                     ) : (
@@ -4693,14 +4704,17 @@ export function ShellPage() {
               >
                 {computer?.kind === "desktop" ? (
                   <DesktopKindEmptyState className="grid h-full place-items-center px-8 text-center text-sm text-muted-foreground/80" />
-                ) : computer?.state === "running" && embeddedOverlayUrl && !computerScreenError ? (
+                ) : computer &&
+                  computerCardShowsLiveScreen(computer.state, embeddedOverlayUrl) &&
+                  !computerScreenError ? (
                   <>
                     <ComputerLiveScreen
                       kind={computer.kind}
-                      url={embeddedOverlayUrl}
+                      url={embeddedOverlayUrl ?? ""}
                       title={t`Bot screen`}
                       allow="clipboard-read; clipboard-write; fullscreen"
                       pointerEvents={recordingSkill || !hasControl ? "none" : "auto"}
+                      live={computer.state === "running" || computer.state === "booting"}
                       onRejected={refreshRejectedScreen}
                     />
                     {computerBot ? (

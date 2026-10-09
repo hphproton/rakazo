@@ -40,8 +40,14 @@ function fixture(interactive = false) {
       ? bot
       : null,
   );
+  let desktop: { state: string } | null = null;
+  const findUnique = vi.fn(async () => desktop);
   const app = new Hono();
-  mountScreenTarget(app, { bot: { findFirst } } as unknown as PrismaClient, secret);
+  mountScreenTarget(
+    app,
+    { bot: { findFirst }, teamDesktop: { findUnique } } as unknown as PrismaClient,
+    secret,
+  );
   const url = addScreenProxyCapability(
     `http://127.0.0.1:49152/embed.html?view_only=${!interactive}`,
     secret,
@@ -55,7 +61,16 @@ function fixture(interactive = false) {
       headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
       body: JSON.stringify({ path: value }),
     });
-  return { bot, computer, findFirst, path, request };
+  return {
+    bot,
+    computer,
+    findFirst,
+    path,
+    request,
+    setDesktop(next: { state: string } | null) {
+      desktop = next;
+    },
+  };
 }
 
 describe("screen capability lifecycle authorization", () => {
@@ -69,6 +84,18 @@ describe("screen capability lifecycle authorization", () => {
     const { request, findFirst, path } = fixture();
     expect((await request(path, "wrong")).status).toBe(403);
     expect(findFirst).not.toHaveBeenCalled();
+  });
+  it("rejects a seal while this bot's team desktop is not running", async () => {
+    const { request, setDesktop, computer } = fixture();
+    expect(computer.state).toBe("running");
+    setDesktop({ state: "stopped" });
+    expect((await request()).status).toBe(403);
+    setDesktop({ state: "booting" });
+    expect((await request()).status).toBe(403);
+    setDesktop({ state: "running" });
+    expect((await request()).status).toBe(200);
+    setDesktop(null);
+    expect((await request()).status).toBe(200);
   });
   it("rejects stopped computers and old URLs after restart at the same address", async () => {
     const { request, computer } = fixture();

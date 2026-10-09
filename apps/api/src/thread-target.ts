@@ -45,6 +45,7 @@ import {
 } from "./artifacts.js";
 import { resolveBusyBotName, toComputerStatus } from "./computer-status.js";
 import { withSerializableRetry } from "./serializable-retry.js";
+import { applyTeamDesktopPreview, teamDesktopPreviewState } from "./team-desktop-preview.js";
 import { loadMessagePage } from "./thread-message-pages.js";
 
 export type ThreadTarget =
@@ -329,7 +330,10 @@ export async function threadHead(prisma: PrismaClient, target: ThreadTarget) {
 }
 
 export async function threadSnapshot(
-  deps: { prisma: PrismaClient },
+  deps: {
+    prisma: PrismaClient;
+    teamDesktops?: Parameters<typeof teamDesktopPreviewState>[0];
+  },
   target: ThreadTarget,
 ): Promise<ThreadSnapshot> {
   // Lock the thread row so messages, the event cursor, active runs, and live
@@ -417,6 +421,11 @@ export async function threadSnapshot(
         return { messagePage, last, run: currentRun, liveEvents };
       }),
     ]);
+    const computer = applyTeamDesktopPreview(
+      toComputerStatus(target.botId, target.bot.computer, busyBotName),
+      await teamDesktopPreviewState(deps.teamDesktops, target.botId),
+      { maintenance: Boolean(target.bot.computer?.maintenanceId) },
+    );
     return {
       botId: target.botId,
       threadId: target.threadId,
@@ -424,7 +433,7 @@ export async function threadSnapshot(
       messages: messagesWithLiveEvents(core.messagePage.messages, core.liveEvents),
       olderCursor: core.messagePage.olderCursor,
       run: core.run ? mapRun(core.run) : null,
-      computer: toComputerStatus(target.botId, target.bot.computer, busyBotName),
+      computer,
     };
   }
 

@@ -5,7 +5,9 @@ import { openScreenCapability, sealScreenCapability } from "@rakazo/core/node/sc
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { computerPlaceholder } from "../../lib/computer-placeholder";
 import {
+  computerCardShowsLiveScreen,
   liveScreenInteractive,
   liveScreenSurfaces,
   sandScreenSocketUrl,
@@ -30,6 +32,10 @@ type MockClient = {
 };
 
 const clients: MockClient[] = [];
+
+vi.mock("@lingui/core/macro", () => ({
+  t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
+}));
 
 vi.mock("@novnc/novnc", () => ({
   default: class MockRFB {
@@ -505,6 +511,169 @@ describe("ComputerLiveScreen", () => {
     expect(openClients()).toHaveLength(1);
     expect(openClients()[0]?.disconnect).not.toHaveBeenCalled();
 
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("shows the asleep preview with no socket, then connects once from booting to running", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const card = (state: ComputerStatus["state"], url: string | null) =>
+      computerCardShowsLiveScreen(state, url) ? (
+        <ComputerLiveScreen
+          kind="sand"
+          url={url ?? ""}
+          title="Bot screen preview"
+          allow="clipboard-read; clipboard-write"
+          pointerEvents="none"
+          live={state === "running" || state === "booting"}
+        />
+      ) : (
+        <div data-testid="computer-placeholder">
+          {computerPlaceholder(state, false, "Team Computer")}
+        </div>
+      );
+    await act(async () => {
+      root.render(card("suspended", SEALED));
+    });
+    expect(container.querySelector("[data-testid='sand-screen-frame']")).toBeNull();
+    expect(container.textContent).toContain("Computer is asleep. Open it to wake.");
+    expect(clients).toHaveLength(0);
+
+    await act(async () => {
+      root.render(card("booting", SEALED));
+    });
+    expect(container.textContent).toContain("Booting live desktop…");
+    expect(clients).toHaveLength(0);
+
+    await act(async () => {
+      root.render(card("running", SEALED));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      clients[0]?.emitConnect();
+      root.render(card("running", SEALED));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+    expect(clients[0]?.disconnect).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.render(card("suspended", null));
+    });
+    expect(clients[0]?.disconnect).toHaveBeenCalled();
+    expect(container.textContent).toContain("Computer is asleep. Open it to wake.");
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+
+    await act(async () => {
+      root.render(card("booting", null));
+    });
+    expect(container.textContent).toContain("Booting live desktop…");
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      root.render(card("running", SEALED));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
+    await act(async () => {
+      clients[1]?.emitConnect();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
+    expect(clients[1]?.disconnect).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("does not schedule another socket when the server says the desktop is stopped", async () => {
+    vi.useFakeTimers();
+    const onRejected = vi.fn(async () => false);
+    const view = await renderScreen("sand", SEALED, "none", true, onRejected);
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      clients[0]?.emitDisconnect(false);
+      await Promise.resolve();
+    });
+    expect(onRejected).toHaveBeenCalledOnce();
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+    expect(onRejected).toHaveBeenCalledOnce();
+    await view.cleanup();
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+  });
+
+  it("closes the open socket when live becomes false and connects once when it is live again", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const frame = (live: boolean) => (
+      <ComputerLiveScreen
+        kind="sand"
+        url={SEALED}
+        title="Bot screen preview"
+        allow="clipboard-read; clipboard-write"
+        pointerEvents="none"
+        live={live}
+      />
+    );
+    await act(async () => {
+      root.render(frame(false));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(0);
+    await act(async () => {
+      root.render(frame(true));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      root.render(frame(false));
+    });
+    expect(clients[0]?.disconnect).toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      root.render(frame(true));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
     await act(async () => root.unmount());
     container.remove();
   });

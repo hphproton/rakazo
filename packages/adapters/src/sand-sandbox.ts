@@ -175,6 +175,11 @@ export class SandSandboxProvider implements SandboxProvider {
       if (sandScreenSelectsForbiddenDisplay(url)) throw new SandDisplayForbiddenError();
       return { url, mimeType: "text/html", close: async () => undefined };
     }
+    // A team member whose window is asleep or not started has no screen.
+    // Do not fall through to the seat map, and do not start the window.
+    if (binding === null) {
+      return { url: null, mimeType: "text/html", close: async () => undefined };
+    }
     const seat = this.seat(computer, context);
     const url = this.opts.host.screenUrl(seat.agentId);
     if (url && sandScreenSelectsForbiddenDisplay(url)) throw new SandDisplayForbiddenError();
@@ -381,24 +386,23 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * A row uses that display. A member with no row reserves one.
-   * Anyone else keeps the seat map.
+   * A running row uses that display.
+   * A member with no running window returns null: a screen read must not wake
+   * it and must not use the seat map. Opening the preview wakes through
+   * `computer.boot` → `ensure`. Anyone else keeps the seat map.
+   * Runs still wake through `session`.
    */
   private async screenBinding(
     computer: ComputerRef,
     context: AdapterContext,
-  ): Promise<TeamDesktopBinding | undefined> {
+  ): Promise<TeamDesktopBinding | null | undefined> {
     const gateway = this.opts.teamDesktops;
     if (!gateway) return undefined;
     const botId = context.botId || computer.botId;
     const resolved = await gateway.resolve(botId);
     if (resolved) return resolved;
-    try {
-      return await gateway.ensure(botId);
-    } catch (error) {
-      if (!(error instanceof TeamDesktopMissingError)) throw error;
-      return undefined;
-    }
+    if (await this.isTeamMember(botId)) return null;
+    return undefined;
   }
 
   /**
