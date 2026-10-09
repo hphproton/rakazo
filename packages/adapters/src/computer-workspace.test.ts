@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ComputerRef, SandboxProvider } from "@rakazo/adapter-kit";
+import type { LogEvent } from "@rakazo/logging";
+import { createLogger, installLogger } from "@rakazo/logging";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkpointComputerWorkspace,
@@ -215,5 +217,106 @@ describe("Team run checkpoints", () => {
       where: { id: "team", providerRef: "remote", state: "suspending" },
       data: { state: "running" },
     });
+  });
+
+  it("skips a sand run checkpoint without listing the workspace", async () => {
+    const events: LogEvent[] = [];
+    installLogger(
+      createLogger({
+        service: "test",
+        level: "debug",
+        sinks: [
+          {
+            write(event) {
+              events.push(event);
+            },
+          },
+        ],
+      }),
+    );
+    try {
+      const { checkpointRunComputerWorkspace } = await import("./computer-workspace.js");
+      const exportWorkspace = vi.fn();
+      const listDirectory = vi.fn();
+      const updateMany = vi.fn();
+      const computer = {
+        id: "sand-team",
+        providerRef: "team-desktop",
+        kind: "sand" as const,
+        botId: "bot",
+      };
+      await checkpointRunComputerWorkspace(
+        {
+          sandbox: { exportWorkspace, listDirectory, describe: () => ({ id: "sand" }) },
+          home: { commit: vi.fn() },
+          prisma: { computer: { updateMany } },
+        } as never,
+        { id: "team", homeKey: "team", scope: "team" },
+        computer,
+        context,
+      );
+      await checkpointRunComputerWorkspace(
+        {
+          sandbox: { exportWorkspace, listDirectory, describe: () => ({ id: "sand" }) },
+          home: {},
+          prisma: { computer: { updateMany } },
+        } as never,
+        { id: "dedicated", homeKey: "dedicated", scope: "dedicated" },
+        { ...computer, kind: "box" },
+        context,
+      );
+      expect(exportWorkspace).not.toHaveBeenCalled();
+      expect(listDirectory).not.toHaveBeenCalled();
+      expect(updateMany).not.toHaveBeenCalled();
+      const skipped = events.filter(
+        (event) => event.message === "workspace checkpoint skipped on sand",
+      );
+      expect(skipped).toHaveLength(2);
+      expect(skipped.every((event) => event.level === "info")).toBe(true);
+      expect(events.some((event) => event.level === "warn" || event.level === "error")).toBe(false);
+    } finally {
+      installLogger(createLogger({ service: "test", level: "off", sinks: [] }));
+    }
+  });
+
+  it("still exports a docker or e2b team workspace", async () => {
+    const { checkpointRunComputerWorkspace } = await import("./computer-workspace.js");
+    const exportWorkspace = vi.fn(async function* () {
+      yield { path: "notes.txt", content: new Uint8Array([1]) };
+    });
+    const listDirectory = vi.fn();
+    const commit = vi.fn(async () => "rev-docker");
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    await checkpointRunComputerWorkspace(
+      {
+        sandbox: { exportWorkspace, listDirectory, describe: () => ({ id: "docker" }) },
+        home: { commit },
+        prisma: { computer: { updateMany } },
+      } as never,
+      { id: "team", homeKey: "team", scope: "team" },
+      { id: "docker", providerRef: "docker", kind: "docker", botId: "bot" },
+      context,
+    );
+    expect(exportWorkspace).toHaveBeenCalledOnce();
+    expect(listDirectory).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(updateMany).toHaveBeenCalled();
+
+    const e2bExport = vi.fn(async function* () {
+      yield { path: "notes.txt", content: new Uint8Array([1]) };
+    });
+    const e2bUpdate = vi.fn(async () => ({ count: 1 }));
+    await checkpointRunComputerWorkspace(
+      {
+        sandbox: { exportWorkspace: e2bExport, describe: () => ({ id: "e2b" }) },
+        home: { commit: vi.fn(async () => "rev-e2b") },
+        prisma: { computer: { updateMany: e2bUpdate } },
+      } as never,
+      { id: "team", homeKey: "team", scope: "team" },
+      { id: "remote", providerRef: "remote", kind: "e2b", botId: "bot" },
+      context,
+    );
+    expect(e2bExport).toHaveBeenCalledOnce();
+    expect(e2bUpdate).toHaveBeenCalled();
   });
 });

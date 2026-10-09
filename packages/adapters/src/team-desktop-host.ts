@@ -38,8 +38,10 @@ export type TeamDesktopCommand = (
  * Talks to Grok Computer's window scripts as the current uid.
  * Display indexes outside 101–150 are rejected before any command or filesystem call.
  * stop-window does not kill the detached start-desktop session or its dbus-daemon;
- * this host does, for 101–150 only. The exec-daemon bearer, listen scope, and
- * token-file mode are host behavior and stay as they are.
+ * this host does, for 101–150 only. A missing X socket means the display is
+ * gone, so that case does not consult the exec port. The exec-daemon bearer,
+ * listen scope, token-file mode, start/stop scripts, and orphan argv matching
+ * stay as they are.
  */
 export function createLinuxTeamDesktopHost(
   deps: { command?: TeamDesktopCommand; orphans?: TeamDesktopOrphanControl } = {},
@@ -77,6 +79,7 @@ export function createLinuxTeamDesktopHost(
     },
     async windowAlive(displayIndex) {
       assertTeamDesktopIndex(displayIndex);
+      if (!(await exists(`/tmp/.X11-unix/X${displayIndex}`))) return false;
       const execPort = teamDesktopPorts(displayIndex).exec;
       if (!(await tcpOpen(execPort))) return false;
       const code = await command("xdpyinfo", ["-display", `:${displayIndex}`], PROBE_TIMEOUT_MS);
