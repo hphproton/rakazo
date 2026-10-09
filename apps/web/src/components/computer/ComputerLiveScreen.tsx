@@ -7,10 +7,18 @@ import {
   screenIframeSandbox,
 } from "../../lib/computer-screen";
 
-/** Delay before another attempt while this frame is still mounted. */
+/** First wait before trying the same seal again after a refetch leaves it in place. */
 export const SAND_SCREEN_RETRY_MS = 1_000;
-/** A socket that never finishes the handshake is dropped and tried again. */
+/** Cap for that wait. A dead seal must not be opened every second. */
+export const SAND_SCREEN_RETRY_MAX_MS = 60_000;
+/** A socket that never finishes the handshake is dropped. */
 export const SAND_SCREEN_CONNECT_MS = 8_000;
+
+/** Backoff after a refetch that did not change the seal. Attempt 1 waits `SAND_SCREEN_RETRY_MS`. */
+export function sandScreenRetryDelay(attempt: number) {
+  const step = Math.min(Math.max(attempt, 1) - 1, 6);
+  return Math.min(SAND_SCREEN_RETRY_MAX_MS, SAND_SCREEN_RETRY_MS * 2 ** step);
+}
 
 const FRAME_CLASS = "h-full w-full border-0 bg-black";
 /**
@@ -31,7 +39,8 @@ export function liveScreenIsInAppRfb(kind: ComputerStatus["kind"] | undefined) {
  * The sand client connects once per socket. A render that repeats the same
  * sealed URL does not reconnect. vnc.html is not loaded, so a thread refresh
  * cannot reload a viewer document. A drop or a handshake that never finishes
- * connects again while this frame stays mounted; unmount cancels that timer.
+ * asks for a fresh seal. The same seal is retried with backoff, and only while
+ * the document is visible. Unmount or hiding the document cancels that wait.
  * A running seat with no stream is not described here.
  */
 export function ComputerLiveScreen({
@@ -40,15 +49,25 @@ export function ComputerLiveScreen({
   title,
   allow,
   pointerEvents,
+  onRejected,
 }: {
   kind: ComputerStatus["kind"] | undefined;
   url: string;
   title: string;
   allow: string;
   pointerEvents: "none" | "auto";
+  /** Read a new screen URL after this socket dies. A hidden document does not call it. */
+  onRejected?: () => unknown;
 }) {
   if (liveScreenIsInAppRfb(kind)) {
-    return <SandScreenFrame url={url} title={title} pointerEvents={pointerEvents} />;
+    return (
+      <SandScreenFrame
+        url={url}
+        title={title}
+        pointerEvents={pointerEvents}
+        onRejected={onRejected}
+      />
+    );
   }
   return (
     <iframe
@@ -66,13 +85,17 @@ function SandScreenFrame({
   url,
   title,
   pointerEvents,
+  onRejected,
 }: {
   url: string;
   title: string;
   pointerEvents: "none" | "auto";
+  onRejected?: () => unknown;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<RFB | null>(null);
+  const onRejectedRef = useRef(onRejected);
+  onRejectedRef.current = onRejected;
   const viewOnly = sandScreenViewOnly(url, pointerEvents === "auto");
   const viewOnlyRef = useRef(viewOnly);
   viewOnlyRef.current = viewOnly;
@@ -101,19 +124,67 @@ function SandScreenFrame({
       window.clearTimeout(connectTimer);
       connectTimer = undefined;
     };
-    const schedule = () => {
-      if (stopped || retry !== undefined) return;
-      retry = window.setTimeout(() => {
-        retry = undefined;
-        connect();
-      }, SAND_SCREEN_RETRY_MS);
+    let attempt = 0;
+    let recovery = 0;
+    let hiddenListener: (() => void) | undefined;
+    const clearHidden = () => {
+      if (!hiddenListener) return;
+      document.removeEventListener("visibilitychange", hiddenListener);
+      hiddenListener = undefined;
     };
-    const drop = (next: RFB) => {
+    const release = (next: RFB) => {
       if (stopped || client !== next) return;
       clearConnectTimer();
       client = null;
       clientRef.current = null;
-      schedule();
+      beginRecovery();
+    };
+    const beginRecovery = () => {
+      if (stopped) return;
+      const token = ++recovery;
+      clearHidden();
+      if (retry !== undefined) {
+        window.clearTimeout(retry);
+        retry = undefined;
+      }
+      const waitUntilVisible = () => {
+        if (stopped || token !== recovery) return;
+        if (!document.hidden) {
+          void recover();
+          return;
+        }
+        const onVisible = () => {
+          if (document.visibilityState === "hidden") return;
+          clearHidden();
+          if (!stopped && token === recovery) void recover();
+        };
+        hiddenListener = onVisible;
+        document.addEventListener("visibilitychange", onVisible);
+      };
+      const recover = async () => {
+        if (stopped || token !== recovery) return;
+        if (document.hidden) {
+          waitUntilVisible();
+          return;
+        }
+        attempt += 1;
+        const delay = sandScreenRetryDelay(attempt);
+        try {
+          await onRejectedRef.current?.();
+        } catch {
+          // A failed read leaves the current seal. The backoff below still applies.
+        }
+        if (stopped || token !== recovery) return;
+        if (document.hidden) {
+          waitUntilVisible();
+          return;
+        }
+        retry = window.setTimeout(() => {
+          retry = undefined;
+          if (!stopped && token === recovery) connect();
+        }, delay);
+      };
+      waitUntilVisible();
     };
     const connect = () => {
       if (stopped || client) return;
@@ -136,18 +207,19 @@ function SandScreenFrame({
             } catch {
               // A half-open client can throw while tearing down.
             }
-            drop(next);
+            release(next);
           }, SAND_SCREEN_CONNECT_MS);
           next.addEventListener("connect", () => {
             clearConnectTimer();
+            attempt = 0;
             if (host.getBoundingClientRect().width > 0) next.scaleViewport = true;
           });
           next.addEventListener("disconnect", () => {
-            drop(next);
+            release(next);
           });
         })
         .catch(() => {
-          schedule();
+          beginRecovery();
         });
     };
 
@@ -171,7 +243,9 @@ function SandScreenFrame({
     connect();
     return () => {
       stopped = true;
+      recovery += 1;
       clearConnectTimer();
+      clearHidden();
       if (retry !== undefined) window.clearTimeout(retry);
       resize?.disconnect();
       const current = client;

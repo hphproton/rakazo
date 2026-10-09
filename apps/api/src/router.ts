@@ -3057,9 +3057,14 @@ export function createRouter(deps: RouterDeps) {
                 upstream: viewUrl,
               })
             : null;
+        const issued = (url: string) => ({
+          url,
+          botGeneration: scope.botGeneration,
+          computerGeneration: scope.computerGeneration,
+        });
         if (sealKey) {
           const cached = takeSandScreenSeal(sealKey);
-          if (cached) return { url: cached };
+          if (cached) return issued(cached);
         }
         const url = addScreenProxyCapability(
           viewUrl,
@@ -3068,7 +3073,7 @@ export function createRouter(deps: RouterDeps) {
           scope,
         );
         if (sealKey) keepSandScreenSeal(sealKey, url);
-        return { url };
+        return issued(url);
       }),
       heartbeat: authed.computer.heartbeat.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
