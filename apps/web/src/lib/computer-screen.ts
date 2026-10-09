@@ -1,11 +1,31 @@
 export interface ComputerScreenResult {
   url: string | null;
   error: string | null;
+  botGeneration: number | null;
+  computerGeneration: number | null;
+}
+
+export interface ScreenSealGeneration {
+  bot: number;
+  computer: number;
+}
+
+export function screenSealGeneration(
+  bot: number | null | undefined,
+  computer: number | null | undefined,
+): ScreenSealGeneration | null {
+  if (typeof bot !== "number" || typeof computer !== "number") return null;
+  if (!Number.isSafeInteger(bot) || !Number.isSafeInteger(computer)) return null;
+  return { bot, computer };
 }
 
 /** Only the latest request for the visible computer may replace its screen or error. */
 export async function loadComputerScreen(options: {
-  load: () => Promise<{ url: string | null }>;
+  load: () => Promise<{
+    url: string | null;
+    botGeneration?: number | null;
+    computerGeneration?: number | null;
+  }>;
   isCurrent: () => boolean;
   commit: (result: ComputerScreenResult) => void;
   fallbackError: string;
@@ -13,11 +33,18 @@ export async function loadComputerScreen(options: {
   let result: ComputerScreenResult;
   try {
     const screen = await options.load();
-    result = { url: screen.url, error: null };
+    result = {
+      url: screen.url,
+      error: null,
+      botGeneration: screen.botGeneration ?? null,
+      computerGeneration: screen.computerGeneration ?? null,
+    };
   } catch (error) {
     result = {
       url: null,
       error: error instanceof Error && error.message ? error.message : options.fallbackError,
+      botGeneration: null,
+      computerGeneration: null,
     };
   }
   if (!options.isCurrent()) return null;
@@ -28,24 +55,37 @@ export async function loadComputerScreen(options: {
 const NOVNC_CAPABILITY = /\/novnc\/session\/(view|control)\/(\d+)\./;
 
 /**
- * Keep a sealed noVNC URL that still has time left so a thread refresh does not
- * change the iframe src. A policy change, a near expiry, or any other URL takes
- * the new value.
+ * Choose which sealed URL stays on screen.
+ *
+ * A refresh used to mint a new capability for the same screen, and a new iframe
+ * src reloaded the viewer. The same generation with time left keeps the current
+ * URL, so that refresh does not remount. A different generation has revoked the
+ * current seal, so the server's fresh URL replaces it. With no generation to
+ * compare, the server URL is used and a revoked seal is not kept.
  */
 export function reuseScreenUrl(
   current: string | null,
   next: string | null,
   now = Date.now(),
+  generation?: {
+    held: ScreenSealGeneration | null;
+    next: ScreenSealGeneration | null;
+  },
 ): string | null {
   if (!next) return null;
-  if (!current) return next;
+  if (!current || current === next) return next;
   const currentMatch = current.match(NOVNC_CAPABILITY);
   const nextMatch = next.match(NOVNC_CAPABILITY);
   if (!currentMatch || !nextMatch) return next;
   if (currentMatch[1] !== nextMatch[1]) return next;
   const expires = Number(currentMatch[2]);
   if (!Number.isFinite(expires) || expires - now <= 60_000) return next;
-  return current;
+  const held = generation?.held ?? null;
+  const incoming = generation?.next ?? null;
+  if (held && incoming && held.bot === incoming.bot && held.computer === incoming.computer) {
+    return current;
+  }
+  return next;
 }
 
 export function embeddableScreenUrl(url: string | null): string | null {

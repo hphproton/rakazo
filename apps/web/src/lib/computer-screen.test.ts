@@ -25,6 +25,8 @@ describe("computer screen requests", () => {
     expect(commit).toHaveBeenLastCalledWith({
       url: null,
       error: "Control stream failed to start",
+      botGeneration: null,
+      computerGeneration: null,
     });
 
     await expect(
@@ -36,6 +38,8 @@ describe("computer screen requests", () => {
     expect(commit).toHaveBeenLastCalledWith({
       url: "https://screen.example/vnc.html",
       error: null,
+      botGeneration: null,
+      computerGeneration: null,
     });
   });
 
@@ -71,6 +75,8 @@ describe("computer screen requests", () => {
       expect(commit).toHaveBeenCalledExactlyOnceWith({
         url: null,
         error: "Latest connection failed",
+        botGeneration: null,
+        computerGeneration: null,
       });
     },
   );
@@ -83,7 +89,12 @@ describe("computer screen requests", () => {
       commit,
       fallbackError: "Could not connect",
     });
-    expect(commit).toHaveBeenCalledExactlyOnceWith({ url: null, error: "Could not connect" });
+    expect(commit).toHaveBeenCalledExactlyOnceWith({
+      url: null,
+      error: "Could not connect",
+      botGeneration: null,
+      computerGeneration: null,
+    });
   });
 });
 
@@ -91,21 +102,53 @@ describe("reuseScreenUrl", () => {
   const now = 1_700_000_000_000;
   const live = (policy: "view" | "control", expires: number, token: string) =>
     `http://127.0.0.1:5173/novnc/session/${policy}/${expires}.${token}/vnc.html?path=/novnc/session/${policy}/${expires}.${token}/websockify`;
+  const generation = (computer: number, bot = 0) => ({ bot, computer });
 
-  it("keeps a sealed noVNC url until it is close to expiry", () => {
-    const current = live("view", now + 120_000, "current-token");
-    const next = live("view", now + 300_000, "next-token");
-    expect(reuseScreenUrl(current, next, now)).toBe(current);
-    expect(reuseScreenUrl(current, live("view", now + 300_000, "soon"), now + 70_000)).toBe(
-      live("view", now + 300_000, "soon"),
-    );
+  it("keeps the current seal on a same-generation repoll", () => {
+    const current = live("view", now + 30 * 60_000, "current-token");
+    const rotated = live("view", now + 50 * 60_000, "rotated-token");
+    const same = {
+      held: generation(171),
+      next: generation(171),
+    };
+    expect(reuseScreenUrl(current, rotated, now, same)).toBe(current);
+    expect(reuseScreenUrl(current, current, now, same)).toBe(current);
+    expect(
+      reuseScreenUrl(current, live("view", now + 50 * 60_000, "soon"), now + 29 * 60_000, same),
+    ).toBe(live("view", now + 50 * 60_000, "soon"));
+  });
+
+  it("adopts the fresh seal when the computer generation changes", () => {
+    const current = live("view", now + 50 * 60_000, "revoked-token");
+    const fresh = live("view", now + 60 * 60_000, "fresh-token");
+    expect(
+      reuseScreenUrl(current, fresh, now, {
+        held: generation(171),
+        next: generation(174),
+      }),
+    ).toBe(fresh);
+    expect(
+      reuseScreenUrl(current, fresh, now, {
+        held: generation(171, 0),
+        next: generation(171, 1),
+      }),
+    ).toBe(fresh);
+  });
+
+  it("adopts the server url when the generation is unknown", () => {
+    const current = live("view", now + 50 * 60_000, "current-token");
+    const fresh = live("view", now + 60 * 60_000, "fresh-token");
+    expect(reuseScreenUrl(current, fresh, now)).toBe(fresh);
+    expect(reuseScreenUrl(current, fresh, now, { held: generation(171), next: null })).toBe(fresh);
+    expect(reuseScreenUrl(current, fresh, now, { held: null, next: generation(174) })).toBe(fresh);
   });
 
   it("takes a new url when the policy changes or the url is not sealed noVNC", () => {
     const current = live("view", now + 120_000, "current-token");
     const control = live("control", now + 300_000, "control-token");
-    expect(reuseScreenUrl(current, control, now)).toBe(control);
-    expect(reuseScreenUrl(current, "https://screen.example/vnc.html", now)).toBe(
+    const same = { held: generation(171), next: generation(171) };
+    expect(reuseScreenUrl(current, control, now, same)).toBe(control);
+    expect(reuseScreenUrl(current, "https://screen.example/vnc.html", now, same)).toBe(
       "https://screen.example/vnc.html",
     );
     expect(reuseScreenUrl(null, control, now)).toBe(control);

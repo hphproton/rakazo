@@ -1136,6 +1136,8 @@ describe("computer screen url", () => {
     expect(response.status).toBe(200);
     const { json } = await response.json();
     const url = new URL(json.url);
+    expect(json.botGeneration).toBe(2);
+    expect(json.computerGeneration).toBe(3);
     expect(url.origin).toBe("http://127.0.0.1:5173");
     expect(openScreenCapability(url.pathname, "fake-test-secret")).toMatchObject({
       scope: {
@@ -1156,6 +1158,8 @@ describe("computer screen url", () => {
     const sandUrl = async () => {
       const { response } = await callScreenUrl(connectScreen, vi.fn(), "sand");
       const { json } = await response.json();
+      expect(json.botGeneration).toBe(2);
+      expect(json.computerGeneration).toBe(3);
       return json.url as string;
     };
     const first = await sandUrl();
@@ -1177,7 +1181,11 @@ describe("computer screen url", () => {
     }));
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      json: { url: "desktop://screen/computer-1?view_only=true" },
+      json: {
+        url: "desktop://screen/computer-1?view_only=true",
+        botGeneration: 2,
+        computerGeneration: 3,
+      },
     });
   });
 

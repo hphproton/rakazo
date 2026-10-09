@@ -183,7 +183,13 @@ import {
 import { startCall, useCallSession } from "../lib/call-session";
 import { newClientId } from "../lib/client-id";
 import { computerPlaceholder } from "../lib/computer-placeholder";
-import { embeddableScreenUrl, loadComputerScreen, reuseScreenUrl } from "../lib/computer-screen";
+import type { ScreenSealGeneration } from "../lib/computer-screen";
+import {
+  embeddableScreenUrl,
+  loadComputerScreen,
+  reuseScreenUrl,
+  screenSealGeneration,
+} from "../lib/computer-screen";
 import { publishComputerCommand } from "../lib/computer-workspace";
 import { desktopBridge } from "../lib/desktop";
 import { scheduleFocusPrompt } from "../lib/focus-prompt";
@@ -501,7 +507,14 @@ export function ShellPage() {
   // bot paints its computer pane instantly instead of blanking it while the
   // thread + screen RPCs round-trip again (see refreshThread / refreshComputerScreen).
   const computerCacheRef = useRef(
-    new Map<string, { computer: ComputerStatus | null; screenUrl: string | null }>(),
+    new Map<
+      string,
+      {
+        computer: ComputerStatus | null;
+        screenUrl: string | null;
+        screenGeneration: ScreenSealGeneration | null;
+      }
+    >(),
   );
   // Caps computerCacheRef so a long session that opens many distinct bots
   // over time doesn't accumulate one entry per bot forever. Re-inserting on
@@ -511,10 +524,18 @@ export function ShellPage() {
 
   function cacheComputerFor(
     botId: string,
-    patch: Partial<{ computer: ComputerStatus | null; screenUrl: string | null }>,
+    patch: Partial<{
+      computer: ComputerStatus | null;
+      screenUrl: string | null;
+      screenGeneration: ScreenSealGeneration | null;
+    }>,
   ) {
     const cache = computerCacheRef.current;
-    const prev = cache.get(botId) ?? { computer: null, screenUrl: null };
+    const prev = cache.get(botId) ?? {
+      computer: null,
+      screenUrl: null,
+      screenGeneration: null,
+    };
     cache.delete(botId);
     cache.set(botId, { ...prev, ...patch });
     if (cache.size > COMPUTER_CACHE_LIMIT) {
@@ -648,6 +669,13 @@ export function ShellPage() {
   const [runningRoutine, setRunningRoutine] = useState(false);
   const [routineError, setRoutineError] = useState<string | null>(null);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
+  const screenUrlRef = useRef<string | null>(null);
+  const heldScreenGeneration = useRef<ScreenSealGeneration | null>(null);
+  function showScreen(url: string | null, generation: ScreenSealGeneration | null) {
+    screenUrlRef.current = url;
+    heldScreenGeneration.current = url ? generation : null;
+    setScreenUrl(url);
+  }
   const [computerOpen, setComputerOpen] = useState(false);
   const [computerBotId, setComputerBotId] = useState<string | undefined>();
   const computerOpenRef = useRef(false);
@@ -1062,11 +1090,16 @@ export function ShellPage() {
         (activeBotId.current === id || computerBotIdRef.current === id) &&
         computerVisible.current,
       commit: (screen) => {
-        setScreenUrl((current) => {
-          const url = reuseScreenUrl(current, screen.url);
-          cacheComputerFor(id, { screenUrl: url });
-          return url;
+        const incoming = screenSealGeneration(screen.botGeneration, screen.computerGeneration);
+        const url = reuseScreenUrl(screenUrlRef.current, screen.url, Date.now(), {
+          held: heldScreenGeneration.current,
+          next: incoming,
         });
+        const replaced = url !== screenUrlRef.current;
+        let generation = heldScreenGeneration.current;
+        if (replaced || generation == null) generation = url ? incoming : null;
+        showScreen(url, generation);
+        cacheComputerFor(id, { screenUrl: url, screenGeneration: generation });
         setComputerError(screen.error);
         setComputerErrorFromScreen(Boolean(screen.error));
       },
@@ -1298,10 +1331,10 @@ export function ShellPage() {
     if (cached) {
       // Paint the last-known computer instantly; refreshThread/refreshComputerScreen
       // below still run and reconcile with fresh data in the background.
-      setScreenUrl(cached.screenUrl);
+      showScreen(cached.screenUrl, cached.screenGeneration);
       commitComputer(cached.computer);
     } else {
-      setScreenUrl(null);
+      showScreen(null, null);
     }
     expandedHistoryThread.current = null;
     historyEpoch.current += 1;
@@ -2667,7 +2700,7 @@ export function ShellPage() {
     const targetScreen = computer?.botId === id ? screenUrl : (cached?.screenUrl ?? null);
     if (computer?.botId !== id) {
       commitComputer(targetComputer);
-      setScreenUrl(targetScreen);
+      showScreen(targetScreen, targetScreen ? (cached?.screenGeneration ?? null) : null);
     }
     setComputerOpen(true);
     computerVisible.current = true;
@@ -2726,6 +2759,10 @@ export function ShellPage() {
   }
 
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl);
+  const refreshRejectedScreen = () => {
+    const id = computerBotIdRef.current ?? activeBotId.current;
+    return id ? refreshComputerScreen(id) : null;
+  };
   const hasControl = userHoldsComputerControl(computer, computerBot?.id);
   const hideScreenLoadError = computerErrorFromScreen && Boolean(embeddedScreenUrl);
   const computerScreenError =
@@ -3756,6 +3793,7 @@ export function ShellPage() {
                       title={t`Bot screen preview`}
                       allow="clipboard-read; clipboard-write"
                       pointerEvents="none"
+                      onRejected={refreshRejectedScreen}
                     />
                   ) : (
                     <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground/80">
@@ -4612,6 +4650,7 @@ export function ShellPage() {
                       title={t`Bot screen`}
                       allow="clipboard-read; clipboard-write; fullscreen"
                       pointerEvents={recordingSkill || !hasControl ? "none" : "auto"}
+                      onRejected={refreshRejectedScreen}
                     />
                     {computerBot ? (
                       <TeachCaptureOverlay

@@ -10,6 +10,7 @@ import {
   ComputerLiveScreen,
   SAND_SCREEN_CONNECT_MS,
   SAND_SCREEN_RETRY_MS,
+  sandScreenRetryDelay,
 } from "./ComputerLiveScreen";
 
 type MockClient = {
@@ -20,6 +21,7 @@ type MockClient = {
   resizeSession: boolean;
   focusOnClick: boolean;
   disconnect: ReturnType<typeof vi.fn>;
+  emitConnect: () => void;
   emitDisconnect: (clean: boolean) => void;
 };
 
@@ -59,6 +61,10 @@ vi.mock("@novnc/novnc", () => ({
           return self.focusOnClick;
         },
         disconnect: this.disconnect,
+        emitConnect() {
+          const event = new Event("connect");
+          for (const handler of self.handlers.get("connect") ?? []) handler(event);
+        },
         emitDisconnect(clean: boolean) {
           removeCanvas();
           const event = new CustomEvent("disconnect", { detail: { clean } });
@@ -85,6 +91,7 @@ function screen(
   kind: ComputerStatus["kind"],
   url: string,
   pointerEvents: "none" | "auto" = "none",
+  onRejected?: () => unknown,
 ) {
   return (
     <ComputerLiveScreen
@@ -97,6 +104,7 @@ function screen(
           : "clipboard-read; clipboard-write; fullscreen"
       }
       pointerEvents={pointerEvents}
+      onRejected={onRejected}
     />
   );
 }
@@ -106,6 +114,7 @@ async function renderScreen(
   url: string,
   pointerEvents: "none" | "auto" = "none",
   card = false,
+  onRejected?: () => unknown,
 ) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");
@@ -116,10 +125,10 @@ async function renderScreen(
       data-testid="computer-preview"
       className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-background"
     >
-      {screen(kind, url, pointerEvents)}
+      {screen(kind, url, pointerEvents, onRejected)}
     </div>
   ) : (
-    screen(kind, url, pointerEvents)
+    screen(kind, url, pointerEvents, onRejected)
   );
   await act(async () => {
     root.render(node);
@@ -133,9 +142,10 @@ async function renderScreen(
       nextKind: ComputerStatus["kind"],
       nextUrl: string,
       nextPointer: "none" | "auto" = pointerEvents,
+      nextRejected: (() => unknown) | undefined = onRejected,
     ) {
       await act(async () => {
-        const next = screen(nextKind, nextUrl, nextPointer);
+        const next = screen(nextKind, nextUrl, nextPointer, nextRejected);
         root.render(
           card ? (
             <div
@@ -193,30 +203,44 @@ describe("ComputerLiveScreen", () => {
     await view.cleanup();
   });
 
-  it("reconnects while the preview stays mounted, including a clean drop", async () => {
+  it("reconnects a dropped preview once, then backs off instead of looping", async () => {
     vi.useFakeTimers();
-    const view = await renderScreen("sand", SEALED, "none", true);
+    const onRejected = vi.fn(async () => undefined);
+    const view = await renderScreen("sand", SEALED, "none", true, onRejected);
     expect(clients).toHaveLength(1);
     expect(view.container.querySelector("canvas[data-screen='live']")).not.toBeNull();
     await act(async () => {
       clients[0]?.emitDisconnect(true);
+      await Promise.resolve();
     });
+    expect(onRejected).toHaveBeenCalledOnce();
     expect(view.container.querySelector("canvas[data-screen='live']")).toBeNull();
     await act(async () => {
-      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS);
+      vi.advanceTimersByTime(sandScreenRetryDelay(1) - 1);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
     expect(clients).toHaveLength(2);
+    expect(clients[1]?.url).toBe(clients[0]?.url);
     expect(view.container.querySelector("canvas[data-screen='live']")).not.toBeNull();
     await act(async () => {
       clients[1]?.emitDisconnect(false);
+      await Promise.resolve();
     });
     await act(async () => {
-      vi.advanceTimersByTime(SAND_SCREEN_RETRY_MS);
+      vi.advanceTimersByTime(sandScreenRetryDelay(1));
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
+    await act(async () => {
+      vi.advanceTimersByTime(sandScreenRetryDelay(2) - sandScreenRetryDelay(1));
       await Promise.resolve();
     });
     expect(clients).toHaveLength(3);
-    expect(view.container.querySelector("[data-testid='sand-screen-frame'] canvas")).not.toBeNull();
 
     const beforeUnmount = clients.length;
     await view.cleanup();
@@ -225,6 +249,89 @@ describe("ComputerLiveScreen", () => {
       await Promise.resolve();
     });
     expect(clients).toHaveLength(beforeUnmount);
+    expect(onRejected).toHaveBeenCalledTimes(2);
+  });
+
+  it("adopts one fresh socket when the seal changes and does not keep the old retry", async () => {
+    vi.useFakeTimers();
+    const fresh = SEALED.replace("sealed-token", "fresh-token").replace(
+      "1710000000000",
+      "1710003600000",
+    );
+    const onRejected = vi.fn(async () => undefined);
+    const view = await renderScreen("sand", SEALED, "none", true, onRejected);
+    expect(clients).toHaveLength(1);
+    await act(async () => {
+      clients[0]?.emitDisconnect(false);
+      await Promise.resolve();
+    });
+    expect(onRejected).toHaveBeenCalledOnce();
+    expect(clients).toHaveLength(1);
+    await view.rerender("sand", fresh, "none", onRejected);
+    expect(clients).toHaveLength(2);
+    expect(clients[1]?.url).toContain("fresh-token");
+    expect(clients[1]?.url).not.toBe(clients[0]?.url);
+    await act(async () => {
+      clients[1]?.emitConnect();
+    });
+    await view.rerender("sand", fresh, "none", onRejected);
+    expect(clients).toHaveLength(2);
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
+    expect(onRejected).toHaveBeenCalledOnce();
+    await view.cleanup();
+  });
+
+  it("does not refetch or reopen a sealed socket while the document is hidden", async () => {
+    vi.useFakeTimers();
+    let hidden = false;
+    const hiddenDescriptor = Object.getOwnPropertyDescriptor(document, "hidden");
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => (hidden ? "hidden" : "visible"),
+    });
+    const onRejected = vi.fn(async () => undefined);
+    try {
+      const view = await renderScreen("sand", SEALED, "none", true, onRejected);
+      hidden = true;
+      await act(async () => {
+        clients[0]?.emitDisconnect(false);
+        await Promise.resolve();
+      });
+      expect(onRejected).not.toHaveBeenCalled();
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+        await Promise.resolve();
+      });
+      expect(clients).toHaveLength(1);
+      expect(onRejected).not.toHaveBeenCalled();
+      hidden = false;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      expect(onRejected).toHaveBeenCalledOnce();
+      await view.cleanup();
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+        await Promise.resolve();
+      });
+      expect(onRejected).toHaveBeenCalledOnce();
+      expect(clients).toHaveLength(1);
+    } finally {
+      if (hiddenDescriptor) Object.defineProperty(document, "hidden", hiddenDescriptor);
+      else Reflect.deleteProperty(document, "hidden");
+      if (visibilityDescriptor) {
+        Object.defineProperty(document, "visibilityState", visibilityDescriptor);
+      } else {
+        Reflect.deleteProperty(document, "visibilityState");
+      }
+    }
   });
 
   it("replaces a preview socket that never finishes connecting", async () => {
