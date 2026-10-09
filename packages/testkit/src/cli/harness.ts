@@ -103,6 +103,7 @@ async function main() {
         "packages/db/src/messaging.postgres.test.ts",
         "packages/memory/src/commit.postgres.test.ts",
         "packages/adapters/src/wakeup.postgres.test.ts",
+        "packages/adapters/src/team-desktop.postgres.test.ts",
         "packages/adapters/src/realtime.postgres.test.ts",
         "packages/adapters/src/job-reconciler.postgres.test.ts",
         "packages/adapters/src/cloud-agent.postgres.test.ts",

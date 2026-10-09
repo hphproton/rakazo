@@ -322,8 +322,11 @@ export function createJobReconciler(
         );
       }
 
+      // A queued run already has a graphile job while it waits out fail_job backoff.
+      // Default replace would zero that job's attempts and run it now, so a setup
+      // failure would retry without the worker's attempt cap. Leave the existing job.
       await Promise.all([
-        ...runs.map((run) => deps.jobs.enqueue(runContinueJob(run.id))),
+        ...runs.map((run) => deps.jobs.enqueue({ ...runContinueJob(run.id), keepExisting: true })),
         ...routines.flatMap((routine) =>
           routine.nextRunAt
             ? [deps.jobs.enqueue(routineWakeupJob(routine.id, routine.nextRunAt))]

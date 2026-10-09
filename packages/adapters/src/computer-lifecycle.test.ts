@@ -935,6 +935,129 @@ describe("computer provisioning", () => {
     }
   });
 
+  it("does not claim a running sand team computer when desktop wake fails", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-team-wake-fail-"));
+    const failure = new Error("team desktop wake failed");
+    const original = {
+      id: "computer-1",
+      homeKey: "bot-1",
+      providerRef: "team-desktop",
+      kind: "sand",
+      scope: "team",
+      state: "running",
+      controlLeaseId: null,
+      updatedAt: new Date("2024-01-01T00:00:00.000Z"),
+    };
+    const prisma = {
+      computer: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(original),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: vi.fn(),
+      prepare: vi.fn().mockRejectedValue(failure),
+      releaseScreen: vi.fn(),
+      destroy: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as SandboxProvider;
+
+    try {
+      await expect(
+        provisionComputer(
+          {
+            prisma,
+            sandbox,
+            home: new LocalAgentHomeStore(dataDir),
+            jobs: {} as JobPublisher,
+            events: {} as ThreadEvents,
+            dataDir,
+          },
+          "computer-1",
+          context,
+        ),
+      ).rejects.toBe(failure);
+      expect(sandbox.prepare).toHaveBeenCalledOnce();
+      expect(sandbox.provision).not.toHaveBeenCalled();
+      expect(prisma.computer.updateMany).not.toHaveBeenCalled();
+      expect(original.state).toBe("running");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still claims booting after a running sand team desktop wakes", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-team-wake-ok-"));
+    const original = {
+      id: "computer-1",
+      homeKey: "bot-1",
+      providerRef: "team-desktop",
+      kind: "sand",
+      scope: "team",
+      state: "running",
+      controlLeaseId: null,
+      updatedAt: new Date("2024-01-01T00:00:00.000Z"),
+    };
+    const ref = {
+      id: "sand:team-desktop",
+      botId: "bot-1",
+      kind: "sand" as const,
+      providerRef: "team-desktop",
+      fresh: false,
+    };
+    const prepare = vi.fn().mockResolvedValue(undefined);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      computer: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(original),
+        updateMany,
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: vi.fn().mockResolvedValue(ref),
+      prepare,
+      importWorkspace: vi.fn(),
+      execute: async function* () {
+        yield { type: "exit" as const, code: 0 };
+      },
+      releaseScreen: vi.fn(),
+      destroy: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as SandboxProvider;
+
+    try {
+      await provisionComputer(
+        {
+          prisma,
+          sandbox,
+          home: new LocalAgentHomeStore(dataDir),
+          jobs: {} as JobPublisher,
+          events: {} as ThreadEvents,
+          dataDir,
+        },
+        "computer-1",
+        context,
+      );
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
+        updateMany.mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(updateMany).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          data: expect.objectContaining({ state: "booting" }),
+        }),
+      );
+      expect(updateMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ state: "running" }),
+        }),
+      );
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { kind: "e2b" as const, providerRef: "provider-2", fresh: true },
     { kind: "box" as const, providerRef: "provider-2", fresh: false },

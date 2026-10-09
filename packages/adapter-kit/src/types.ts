@@ -577,6 +577,11 @@ export type BackgroundJob = {
     payload: BackgroundJobPayloads[Name];
     availableAt?: Date;
     replaceKey?: string;
+    /**
+     * Leave an existing job with `replaceKey` alone, including a worker backoff
+     * and an exhausted attempt cap. Reconciliation uses this so it cannot reset them.
+     */
+    keepExisting?: boolean;
     /** Cap retried executions; omit to use the job queue's default. */
     maxAttempts?: number;
   };

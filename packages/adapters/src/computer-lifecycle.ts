@@ -272,6 +272,18 @@ export async function provisionComputer(
   // worker that observed the same stamp could also claim and provision.
   const observedStamp = reclaimStamp ?? suspendStamp ?? existing.updatedAt;
   const claimStamp = new Date(Math.max(Date.now(), observedStamp.getTime() + 1));
+  // The screen trigger counts running→booting. Team desktop wake is sandbox.prepare
+  // (ensure). Do that first on an already-running sand Team computer: a failed wake
+  // must not claim, or every setup retry cuts every Team bot's screen. A wake that
+  // succeeds still claims, so a normal reconnect keeps the stock transition.
+  if (
+    reconnecting &&
+    existing.state === "running" &&
+    existing.kind === "sand" &&
+    existing.scope === "team"
+  ) {
+    await deps.sandbox.prepare(toComputerRef(existing), context);
+  }
   const claimed = await deps.prisma.computer.updateMany({
     where: {
       id: computerId,
