@@ -5,7 +5,11 @@ import { openScreenCapability, sealScreenCapability } from "@rakazo/core/node/sc
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sandScreenSocketUrl } from "../../lib/computer-screen";
+import {
+  liveScreenInteractive,
+  liveScreenSurfaces,
+  sandScreenSocketUrl,
+} from "../../lib/computer-screen";
 import {
   ComputerLiveScreen,
   SAND_SCREEN_CONNECT_MS,
@@ -431,5 +435,77 @@ describe("ComputerLiveScreen", () => {
     expect(privateComputer.container.querySelector("[data-testid='sand-screen-frame']")).toBeNull();
     expect(clients).toHaveLength(0);
     await privateComputer.cleanup();
+  });
+
+  it("opens one control stream for the overlay and reconnects the card to view once", async () => {
+    expect(liveScreenSurfaces(true)).toEqual(["overlay"]);
+    expect(liveScreenSurfaces(false)).toEqual(["card"]);
+    expect(liveScreenInteractive("overlay")).toBe(true);
+    expect(liveScreenInteractive("card")).toBe(false);
+
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const frame = (overlayOpen: boolean) => {
+      const surfaces = liveScreenSurfaces(overlayOpen);
+      return (
+        <>
+          {surfaces.includes("card") ? (
+            <ComputerLiveScreen
+              kind="sand"
+              url={SEALED}
+              title="Bot screen preview"
+              allow="clipboard-read; clipboard-write"
+              pointerEvents="none"
+            />
+          ) : (
+            <div>Open in full window</div>
+          )}
+          {surfaces.includes("overlay") ? (
+            <ComputerLiveScreen
+              kind="sand"
+              url={CONTROL}
+              title="Bot screen"
+              allow="clipboard-read; clipboard-write; fullscreen"
+              pointerEvents="auto"
+            />
+          ) : null}
+        </>
+      );
+    };
+    await act(async () => {
+      root.render(frame(true));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const openClients = () => clients.filter((client) => client.disconnect.mock.calls.length === 0);
+    expect(openClients()).toHaveLength(1);
+    expect(openClients()[0]?.url).toContain("/session/control/");
+    const control = openClients()[0];
+
+    await act(async () => {
+      root.render(frame(false));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(control?.disconnect).toHaveBeenCalled();
+    expect(openClients()).toHaveLength(1);
+    expect(openClients()[0]?.url).toContain("/session/view/");
+
+    await act(async () => {
+      root.render(frame(false));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clients).toHaveLength(2);
+    expect(openClients()).toHaveLength(1);
+    expect(openClients()[0]?.disconnect).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+    container.remove();
   });
 });

@@ -158,6 +158,18 @@ export function sandScreenSocketUrl(screenUrl: string | null, base: string): str
   return socket.toString();
 }
 
+export type LiveScreenSurface = "card" | "overlay";
+
+/** The card and the takeover overlay must not both hold a live screen. */
+export function liveScreenSurfaces(overlayOpen: boolean): readonly LiveScreenSurface[] {
+  return overlayOpen ? ["overlay"] : ["card"];
+}
+
+/** Only the overlay asks for a control seal. The card stays on view. */
+export function liveScreenInteractive(surface: LiveScreenSurface): boolean {
+  return surface === "overlay";
+}
+
 /** View-only unless the sealed capability allows control and the surface is interactive. */
 export function sandScreenViewOnly(screenUrl: string, interactive: boolean): boolean {
   if (!interactive) return true;

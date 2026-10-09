@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   embeddableScreenUrl,
+  liveScreenInteractive,
+  liveScreenSurfaces,
   loadComputerScreen,
   reuseScreenUrl,
   sandScreenSocketUrl,
@@ -153,6 +155,15 @@ describe("reuseScreenUrl", () => {
     );
     expect(reuseScreenUrl(null, control, now)).toBe(control);
     expect(reuseScreenUrl(current, null, now)).toBeNull();
+  });
+});
+
+describe("live screen surfaces", () => {
+  it("mounts only the overlay while it is open, and only the overlay is interactive", () => {
+    expect(liveScreenSurfaces(true)).toEqual(["overlay"]);
+    expect(liveScreenSurfaces(false)).toEqual(["card"]);
+    expect(liveScreenInteractive("overlay")).toBe(true);
+    expect(liveScreenInteractive("card")).toBe(false);
   });
 });
 

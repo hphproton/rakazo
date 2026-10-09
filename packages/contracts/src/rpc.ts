@@ -501,7 +501,7 @@ export const appContract = {
     commands: oc
       .input(botId)
       .output(z.array(ComputerCommandSchema.extend({ createdAt: z.string() }))),
-    screenUrl: oc.input(botId).output(
+    screenUrl: oc.input(botId.extend({ interactive: z.boolean().optional() })).output(
       z.object({
         url: z.string().nullable(),
         botGeneration: z.number().int().nonnegative().optional(),

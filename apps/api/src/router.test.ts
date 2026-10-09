@@ -1074,6 +1074,13 @@ describe("computer screen url", () => {
     connectScreen: () => Promise<unknown>,
     updateMany = vi.fn(),
     kind = "e2b",
+    input: { interactive?: boolean } = {},
+    computerOverrides: {
+      controlHolder?: string;
+      controlLeaseId?: string | null;
+      controlLeaseExpiresAt?: Date | null;
+      controlBotId?: string | null;
+    } = {},
   ) => {
     const prisma = {
       bot: {
@@ -1081,7 +1088,7 @@ describe("computer screen url", () => {
           id: "bot-1",
           screenGeneration: 2,
           thread: { id: "thread-1" },
-          computer: { ...computerRow, kind },
+          computer: { ...computerRow, kind, ...computerOverrides },
         }),
       },
       computer: { updateMany },
@@ -1105,7 +1112,7 @@ describe("computer screen url", () => {
       new Request("http://127.0.0.1/rpc/computer/screenUrl", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ json: { botId: "bot-1" } }),
+        body: JSON.stringify({ json: { botId: "bot-1", ...input } }),
       }),
       { prefix: "/rpc", context: { actor } },
     );
@@ -1173,6 +1180,35 @@ describe("computer screen url", () => {
       return json.url as string;
     };
     expect(await otherUrl()).not.toBe(await otherUrl());
+  });
+
+  it("forces a view seal when the card asks, and a control seal when the overlay holds the lease", async () => {
+    const connectScreen = vi.fn(async () => ({
+      url: "https://screen.example/vnc.html?token=fake-token",
+    }));
+    const lease = {
+      controlHolder: "user",
+      controlBotId: "bot-1",
+      controlLeaseId: "lease-1",
+      controlLeaseExpiresAt: new Date(Date.now() + 60_000),
+    };
+    const view = await callScreenUrl(connectScreen, vi.fn(), "sand", { interactive: false }, lease);
+    expect(view.response.status).toBe(200);
+    const viewUrl = new URL(((await view.response.json()) as { json: { url: string } }).json.url);
+    expect(viewUrl.pathname).toContain("/novnc/session/view/");
+    expect(viewUrl.pathname).not.toContain("/novnc/session/control/");
+    expect(connectScreen).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ interactive: false, controlToken: undefined }),
+      expect.anything(),
+    );
+
+    const control = await callScreenUrl(connectScreen, vi.fn(), "sand", {}, lease);
+    expect(control.response.status).toBe(200);
+    const controlUrl = new URL(
+      ((await control.response.json()) as { json: { url: string } }).json.url,
+    );
+    expect(controlUrl.pathname).toContain("/novnc/session/control/");
   });
 
   it("returns desktop provider screen URLs without sealing them", async () => {

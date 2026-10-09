@@ -32,7 +32,7 @@ vi.mock("./pi-openai-compatible-provider.js", () => ({
   registerOpenAiCompatibleRuntime: (models: unknown) => models,
 }));
 
-import { PiAgentRuntime } from "./pi-runtime.js";
+import { modelTurnFailure, PiAgentRuntime } from "./pi-runtime.js";
 
 describe("Pi runtime errors", () => {
   it("propagates provider failures instead of completing with error text", async () => {
@@ -62,5 +62,16 @@ describe("Pi runtime errors", () => {
     };
 
     await expect(consume()).rejects.toThrow("WebSocket closed 1006");
+  });
+
+  it("keeps the abort name and cause on a failed model turn", () => {
+    const cause = new Error("provider said the socket closed");
+    const raw = new Error("The operation was aborted");
+    raw.name = "AbortError";
+    raw.cause = cause;
+    const failure = modelTurnFailure("google", raw.message, raw);
+    expect(failure.message).toBe("The operation was aborted");
+    expect(failure.name).toBe("AbortError");
+    expect(failure.cause).toBe(cause);
   });
 });
