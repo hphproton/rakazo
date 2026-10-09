@@ -42,6 +42,7 @@ import {
   PipedreamConnector,
   PostgresRealtimeFanout,
   pipedreamConfigFromEnv,
+  publishTeamDesktopComputerStatus,
   reconcileCloudAgents,
   reconcileComputerUpdates,
   resolveDeploymentModel,
@@ -105,6 +106,7 @@ async function main() {
       reconcileSeconds: teamDesktopEnv.reconcileSeconds,
       members: () => listTeamBMemberBotIds(prisma),
       activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
+      onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
     }),
   );
   if (teamDesktops) {

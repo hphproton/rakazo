@@ -6,7 +6,9 @@ import {
   assertTeamDesktopIndex,
   createTeamDesktopAllocator,
   isTeamDesktopTmpLeftover,
+  publishTeamDesktopComputerStatus,
   TEAM_DESKTOP_FORK_ROOTS,
+  type TeamDesktopCardState,
   TeamDesktopExhaustedError,
   type TeamDesktopHost,
   TeamDesktopLimitError,
@@ -15,6 +17,7 @@ import {
   type TeamDesktopState,
   type TeamDesktopStore,
   teamDesktopAllocatorForProvider,
+  teamDesktopCardState,
   teamDesktopConfigFromEnv,
   teamDesktopMemberBotIds,
   teamDesktopMemberBotWhere,
@@ -144,6 +147,7 @@ function harness(options?: {
   ensureTimeoutMs?: number;
   members?: () => Promise<readonly string[]>;
   activeRuns?: () => Promise<readonly string[]>;
+  onState?: (botId: string, state: TeamDesktopCardState) => void;
 }) {
   const store = new MemoryTeamDesktopStore();
   const host = new FakeTeamDesktopHost();
@@ -156,6 +160,7 @@ function harness(options?: {
     ensureTimeoutMs: options?.ensureTimeoutMs,
     members: options?.members,
     activeRuns: options?.activeRuns,
+    onState: options?.onState,
     now: () => now,
     sleep: async () => {
       now = new Date(now.getTime() + 1_000);
@@ -335,6 +340,49 @@ describe("team desktop lifecycle", () => {
     expect(dumped).not.toContain(token);
     expect(thrown).not.toContain(token);
     expect(dumped).toContain("team desktop reserved");
+  });
+
+  it("reports booting then running, and does not resolve a stopped window", async () => {
+    const seen: Array<{ botId: string; state: string }> = [];
+    const { alloc, store } = harness({
+      onState: (botId, state) => {
+        seen.push({ botId, state });
+      },
+    });
+    await alloc.reserve("bot");
+    expect(await alloc.resolve("bot")).toBeUndefined();
+    const running = await alloc.ensure("bot");
+    expect(seen).toEqual([
+      { botId: "bot", state: "booting" },
+      { botId: "bot", state: "running" },
+    ]);
+    expect(await alloc.resolve("bot")).toEqual(running);
+    await alloc.ensure("bot");
+    expect(seen).toHaveLength(2);
+    await alloc.stop("bot");
+    expect(seen).toEqual([
+      { botId: "bot", state: "booting" },
+      { botId: "bot", state: "running" },
+      { botId: "bot", state: "suspended" },
+    ]);
+    expect(await alloc.resolve("bot")).toBeUndefined();
+    expect(row(store, "bot").state).toBe("stopped");
+    expect(JSON.stringify(seen)).not.toContain(row(store, "bot").ownerToken);
+  });
+
+  it("leaves the row stopped when the window fails to start", async () => {
+    const seen: string[] = [];
+    const { alloc, host, store } = harness({
+      onState: (_botId, state) => {
+        seen.push(state);
+      },
+    });
+    await alloc.reserve("bot");
+    host.failStartWithToken = true;
+    await expect(alloc.ensure("bot")).rejects.toThrow(Error);
+    expect(row(store, "bot").state).toBe("stopped");
+    expect(seen).toEqual(["booting", "suspended"]);
+    expect(await alloc.resolve("bot")).toBeUndefined();
   });
 });
 
@@ -559,6 +607,27 @@ describe("team desktop reconcile", () => {
       true,
     );
   });
+
+  it("stops a booting desktop that never came up when no run is using it", async () => {
+    const { alloc, host, store } = harness();
+    await alloc.reserve("idle");
+    const current = row(store, "idle");
+    store.rows.set("idle", { ...current, state: "booting" });
+    await alloc.reconcile();
+    expect(row(store, "idle").state).toBe("stopped");
+    expect(host.stops).toContain(current.displayIndex);
+  });
+
+  it("leaves a booting desktop alone while its run is still active", async () => {
+    const { alloc, host, store } = harness({ activeRuns: async () => ["busy"] });
+    await alloc.reserve("busy");
+    const current = row(store, "busy");
+    store.rows.set("busy", { ...current, state: "booting" });
+    host.stops.length = 0;
+    await alloc.reconcile();
+    expect(row(store, "busy").state).toBe("booting");
+    expect(host.stops).not.toContain(current.displayIndex);
+  });
 });
 
 describe("team desktop running cap", () => {
@@ -692,6 +761,40 @@ describe("team desktop host bounds", () => {
       "/home/box/.config/chromium/Fork-150",
       "/home/box/chrome-profile/Fork-150",
     ]);
+  });
+
+  it("publishes only the card state for that bot's thread", async () => {
+    const appended: Array<Record<string, unknown>> = [];
+    const prisma = {
+      bot: {
+        findUnique: vi.fn(async () => ({ spaceId: "space-1", thread: { id: "thread-1" } })),
+      },
+    };
+    await publishTeamDesktopComputerStatus(
+      prisma as never,
+      {
+        append: async (input) => {
+          appended.push(input);
+        },
+      },
+      "bot-1",
+      "suspended",
+    );
+    expect(appended).toEqual([
+      {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        type: "computer.status",
+        payload: { status: "suspended" },
+      },
+    ]);
+    expect(JSON.stringify(appended)).not.toMatch(/token|6081|owner/i);
+    expect(teamDesktopCardState("stopped")).toBe("suspended");
+    expect(teamDesktopCardState("reserved")).toBe("suspended");
+    expect(teamDesktopCardState("releasing")).toBe("suspended");
+    expect(teamDesktopCardState("booting")).toBe("booting");
+    expect(teamDesktopCardState("running")).toBe("running");
   });
 
   it("reads idle, reconcile, and cap defaults from the environment", () => {

@@ -1,3 +1,5 @@
+import type { ComputerStatus } from "@rakazo/contracts";
+
 export interface ComputerScreenResult {
   url: string | null;
   error: string | null;
@@ -168,6 +170,29 @@ export function liveScreenSurfaces(overlayOpen: boolean): readonly LiveScreenSur
 /** Only the overlay asks for a control seal. The card stays on view. */
 export function liveScreenInteractive(surface: LiveScreenSurface): boolean {
   return surface === "overlay";
+}
+
+/**
+ * The preview mounts a live frame only while the desktop is running and a URL exists.
+ * Booting keeps the booting placeholder. Asleep and stopped keep their placeholders.
+ */
+export function computerCardShowsLiveScreen(
+  state: ComputerStatus["state"] | undefined,
+  screenUrl: string | null,
+): boolean {
+  return state === "running" && Boolean(screenUrl);
+}
+
+/**
+ * After a socket drops, keep backing off only while the desktop is booting or running.
+ * A null URL for any other state ends the loop. A URL means the server still issued a seal.
+ */
+export function sandScreenKeepsRetrying(
+  url: string | null,
+  state: ComputerStatus["state"] | undefined,
+): boolean {
+  if (url) return true;
+  return state === "running" || state === "booting";
 }
 
 /** View-only unless the sealed capability allows control and the surface is interactive. */

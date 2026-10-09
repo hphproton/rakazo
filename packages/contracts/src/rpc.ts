@@ -111,7 +111,7 @@ const botId = z.object({ botId: Id });
 const TeamDesktopStatusSchema = z.object({
   botId: Id,
   displayIndex: z.number().int().min(101).max(150),
-  state: z.enum(["reserved", "running", "stopped", "releasing"]),
+  state: z.enum(["reserved", "booting", "running", "stopped", "releasing"]),
   lastUsedAt: z.string().nullable(),
 });
 const groupId = z.object({ groupId: Id });

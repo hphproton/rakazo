@@ -109,6 +109,13 @@ export function mountScreenTarget(app: Hono, prisma: PrismaClient, secret: strin
           computer.controlBotId !== scope.botId))
     )
       return c.body(null, 403);
+    // The shared Team computer stays running after this bot's window is idle-stopped.
+    // A seal for that window must not open a socket.
+    const desktop = await prisma.teamDesktop.findUnique({
+      where: { botId: scope.botId },
+      select: { state: true },
+    });
+    if (desktop && desktop.state !== "running") return c.body(null, 403);
     return c.json(target);
   });
 }

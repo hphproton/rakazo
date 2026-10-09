@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { computerPlaceholder } from "./computer-placeholder";
+import { computerCardShowsLiveScreen, sandScreenKeepsRetrying } from "./computer-screen";
 
 vi.mock("@lingui/core/macro", () => ({
   t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
@@ -32,5 +33,26 @@ describe("computerPlaceholder", () => {
       expect(word).not.toContain("Idle");
       for (const off of OFF) expect(word).not.toBe(off);
     }
+  });
+
+  it("shows the asleep label and no live frame until the desktop is running", () => {
+    const stale = "https://app.example/novnc/session/view/1.sealed/vnc.html";
+    expect(computerCardShowsLiveScreen("stopped", stale)).toBe(false);
+    expect(computerCardShowsLiveScreen("stopped", null)).toBe(false);
+    expect(computerPlaceholder("stopped", false, "Chief’s computer")).toBe("Computer is stopped");
+    expect(computerCardShowsLiveScreen("suspended", stale)).toBe(false);
+    expect(computerCardShowsLiveScreen("suspended", null)).toBe(false);
+    expect(computerPlaceholder("suspended", false, "Chief’s computer")).toBe(
+      "Computer is asleep. Open it to wake.",
+    );
+    expect(computerCardShowsLiveScreen("booting", stale)).toBe(false);
+    expect(computerPlaceholder("booting", false, "Chief’s computer")).toBe("Booting live desktop…");
+    expect(computerCardShowsLiveScreen("running", null)).toBe(false);
+    expect(computerCardShowsLiveScreen("running", stale)).toBe(true);
+    expect(sandScreenKeepsRetrying(null, "stopped")).toBe(false);
+    expect(sandScreenKeepsRetrying(null, "suspended")).toBe(false);
+    expect(sandScreenKeepsRetrying(null, "booting")).toBe(true);
+    expect(sandScreenKeepsRetrying(null, "running")).toBe(true);
+    expect(sandScreenKeepsRetrying(stale, "running")).toBe(true);
   });
 });

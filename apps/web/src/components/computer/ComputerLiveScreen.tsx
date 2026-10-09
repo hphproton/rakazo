@@ -40,8 +40,9 @@ export function liveScreenIsInAppRfb(kind: ComputerStatus["kind"] | undefined) {
  * sealed URL does not reconnect. vnc.html is not loaded, so a thread refresh
  * cannot reload a viewer document. A drop or a handshake that never finishes
  * asks for a fresh seal. The same seal is retried with backoff, and only while
- * the document is visible. Unmount or hiding the document cancels that wait.
- * A running seat with no stream is not described here.
+ * the document is visible and the desktop is still booting or running.
+ * `onRejected` returning false, `live` turning false, unmount, or hiding the
+ * document cancels that wait. A running seat with no stream is not described here.
  */
 export function ComputerLiveScreen({
   kind,
@@ -50,14 +51,20 @@ export function ComputerLiveScreen({
   allow,
   pointerEvents,
   onRejected,
+  live = true,
 }: {
   kind: ComputerStatus["kind"] | undefined;
   url: string;
   title: string;
   allow: string;
   pointerEvents: "none" | "auto";
-  /** Read a new screen URL after this socket dies. A hidden document does not call it. */
+  /**
+   * Read a new screen URL after this socket dies. A hidden document does not call it.
+   * Return false when the desktop is stopped so this frame does not open another socket.
+   */
   onRejected?: () => unknown;
+  /** False disconnects and does not retry. True again connects once. */
+  live?: boolean;
 }) {
   if (liveScreenIsInAppRfb(kind)) {
     return (
@@ -66,6 +73,7 @@ export function ComputerLiveScreen({
         title={title}
         pointerEvents={pointerEvents}
         onRejected={onRejected}
+        live={live}
       />
     );
   }
@@ -86,16 +94,20 @@ function SandScreenFrame({
   title,
   pointerEvents,
   onRejected,
+  live,
 }: {
   url: string;
   title: string;
   pointerEvents: "none" | "auto";
   onRejected?: () => unknown;
+  live: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<RFB | null>(null);
   const onRejectedRef = useRef(onRejected);
   onRejectedRef.current = onRejected;
+  const liveRef = useRef(live);
+  liveRef.current = live;
   const viewOnly = sandScreenViewOnly(url, pointerEvents === "auto");
   const viewOnlyRef = useRef(viewOnly);
   viewOnlyRef.current = viewOnly;
@@ -113,7 +125,7 @@ function SandScreenFrame({
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !socketUrl) return;
+    if (!live || !host || !socketUrl) return;
     let stopped = false;
     let client: RFB | null = null;
     let retry: number | undefined;
@@ -169,12 +181,14 @@ function SandScreenFrame({
         }
         attempt += 1;
         const delay = sandScreenRetryDelay(attempt);
+        let again: unknown;
         try {
-          await onRejectedRef.current?.();
+          again = await onRejectedRef.current?.();
         } catch {
           // A failed read leaves the current seal. The backoff below still applies.
         }
         if (stopped || token !== recovery) return;
+        if (again === false || !liveRef.current) return;
         if (document.hidden) {
           waitUntilVisible();
           return;
@@ -253,7 +267,7 @@ function SandScreenFrame({
       clientRef.current = null;
       current?.disconnect();
     };
-  }, [socketUrl]);
+  }, [socketUrl, live]);
 
   return (
     <div

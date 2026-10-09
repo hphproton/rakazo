@@ -24,7 +24,22 @@ export const TEAM_DESKTOP_FORK_ROOTS = [
   "/home/box/chrome-profile",
 ] as const;
 
-export type TeamDesktopState = "reserved" | "running" | "stopped" | "releasing";
+export type TeamDesktopState = "reserved" | "booting" | "running" | "stopped" | "releasing";
+
+/**
+ * Card state, using the computer status words. A window that is not booting
+ * or running is stock asleep (`suspended`), not a new label.
+ */
+export type TeamDesktopCardState = "suspended" | "booting" | "running";
+
+/**
+ * What the computer card should show for this desktop.
+ * Reserved, releasing, and stopped have no window, so the card is asleep.
+ */
+export function teamDesktopCardState(state: TeamDesktopState): TeamDesktopCardState {
+  if (state === "running" || state === "booting") return state;
+  return "suspended";
+}
 
 export interface TeamDesktopRecord {
   botId: string;
@@ -285,6 +300,11 @@ export function createTeamDesktopAllocator(options: {
    * or cap-evicted. When a bot leaves this set, its idle clock starts then.
    */
   activeRuns?: () => Promise<readonly string[]>;
+  /**
+   * Fired when the card-visible state changes. Must not include the owner token.
+   * Callers publish; this allocator does not wait on them.
+   */
+  onState?: (botId: string, state: TeamDesktopCardState) => void | Promise<void>;
 }): TeamDesktopAllocator {
   const idleMinutes = options.idleMinutes ?? TEAM_DESKTOP_DEFAULT_IDLE_MINUTES;
   const maxRunning = options.maxRunning ?? TEAM_DESKTOP_DEFAULT_MAX_RUNNING;
@@ -297,6 +317,7 @@ export function createTeamDesktopAllocator(options: {
   const host = options.host;
   const members = options.members;
   const activeRuns = options.activeRuns;
+  const onState = options.onState;
   const watchedRuns = new Set<string>();
   let tail: Promise<unknown> = Promise.resolve();
   let lastReconcileAt = 0;
@@ -316,6 +337,19 @@ export function createTeamDesktopAllocator(options: {
 
   function isIdle(row: TeamDesktopRecord): boolean {
     return (row.lastUsedAt?.getTime() ?? 0) <= idleCutoff();
+  }
+
+  function holdsRunningSlot(state: TeamDesktopState): boolean {
+    return state === "running" || state === "booting";
+  }
+
+  function notifyCard(botId: string, previous: TeamDesktopState, next: TeamDesktopState) {
+    const before = teamDesktopCardState(previous);
+    const after = teamDesktopCardState(next);
+    if (before === after || !onState) return;
+    void Promise.resolve(onState(botId, after)).catch((error: unknown) => {
+      getLogger().error("team desktop status event failed", error);
+    });
   }
 
   return {
@@ -340,7 +374,9 @@ export function createTeamDesktopAllocator(options: {
     },
     async resolve(botId) {
       const row = await store.getByBot(botId);
-      if (!row || row.state === "releasing") return undefined;
+      // Only a live window is a screen. Stopped and booting must not hand out a viewer,
+      // and this read must not start one.
+      if (row?.state !== "running") return undefined;
       return { displayIndex: row.displayIndex, ownerToken: row.ownerToken };
     },
     async member(botId) {
@@ -411,23 +447,34 @@ export function createTeamDesktopAllocator(options: {
     }
     await makeRoom(botId);
     const current = await requireRow(botId);
+    let cardState = current.state;
     if (!(await alive(current.displayIndex))) {
-      await host.cleanWindow(current.displayIndex);
-      try {
-        await host.startWindow(current.displayIndex, current.ownerToken);
-      } catch (error) {
-        throw scrubbed(error, [current.ownerToken]);
+      if (cardState !== "booting") {
+        await store.update(botId, { state: "booting" });
+        notifyCard(botId, cardState, "booting");
+        cardState = "booting";
       }
-      const started = now().getTime();
-      while (!(await alive(current.displayIndex))) {
-        if (now().getTime() - started >= ensureTimeoutMs) {
-          throw new TeamDesktopError(`Team desktop ${current.displayIndex} did not become ready.`);
+      try {
+        await host.cleanWindow(current.displayIndex);
+        await host.startWindow(current.displayIndex, current.ownerToken);
+        const started = now().getTime();
+        while (!(await alive(current.displayIndex))) {
+          if (now().getTime() - started >= ensureTimeoutMs) {
+            throw new TeamDesktopError(
+              `Team desktop ${current.displayIndex} did not become ready.`,
+            );
+          }
+          await sleep(pollMs);
         }
-        await sleep(pollMs);
+      } catch (error) {
+        await store.update(botId, { state: "stopped" });
+        notifyCard(botId, "booting", "stopped");
+        throw scrubbed(error, [current.ownerToken]);
       }
     }
     const usedAt = now();
     await store.update(botId, { state: "running", lastUsedAt: usedAt });
+    notifyCard(botId, cardState, "running");
     getLogger().info("team desktop running", { botId, displayIndex: current.displayIndex });
     return { displayIndex: current.displayIndex, ownerToken: current.ownerToken };
   }
@@ -437,10 +484,10 @@ export function createTeamDesktopAllocator(options: {
     await releaseFinishedRuns(busy);
     const rows = await store.list();
     const self = rows.find((row) => row.botId === botId);
-    if (self?.state === "running") return;
+    if (self && holdsRunningSlot(self.state)) return;
     while (true) {
       const running = (await store.list()).filter(
-        (row) => row.state === "running" && row.botId !== botId,
+        (row) => holdsRunningSlot(row.state) && row.botId !== botId,
       );
       if (running.length < maxRunning) return;
       const idle = running
@@ -478,6 +525,7 @@ export function createTeamDesktopAllocator(options: {
       );
     }
     await store.update(row.botId, { state: "stopped" });
+    notifyCard(row.botId, row.state, "stopped");
     getLogger().info("team desktop stopped", { botId: row.botId, displayIndex: row.displayIndex });
   }
 
@@ -499,6 +547,7 @@ export function createTeamDesktopAllocator(options: {
       throw scrubbed(error, [row.ownerToken]);
     }
     await store.update(botId, { state: "stopped" });
+    notifyCard(botId, row.state, "stopped");
     getLogger().info("team desktop stopped", { botId, displayIndex: row.displayIndex });
     return toStatus({ ...row, state: "stopped" });
   }
@@ -605,6 +654,16 @@ export function createTeamDesktopAllocator(options: {
       if (!inRange(row.displayIndex)) continue;
       if (row.state === "releasing") {
         await releaseBody(row.botId);
+        continue;
+      }
+      if (row.state === "booting") {
+        if (busy.has(row.botId)) continue;
+        if (await alive(row.displayIndex)) {
+          await store.update(row.botId, { state: "running", lastUsedAt: now() });
+          notifyCard(row.botId, "booting", "running");
+        } else {
+          await markStopped(row);
+        }
         continue;
       }
       if (row.state !== "running") continue;
@@ -766,7 +825,13 @@ function toRecord(row: {
 }
 
 function parseState(state: string): TeamDesktopState {
-  if (state === "reserved" || state === "running" || state === "stopped" || state === "releasing") {
+  if (
+    state === "reserved" ||
+    state === "booting" ||
+    state === "running" ||
+    state === "stopped" ||
+    state === "releasing"
+  ) {
     return state;
   }
   throw new TeamDesktopError("Team desktop state is invalid.");
@@ -807,4 +872,40 @@ function scrubSecrets(text: string, secrets: readonly string[]): string {
     out = out.split(secret).join("[redacted]");
   }
   return out;
+}
+
+/**
+ * Tell the open thread that this bot's desktop changed. The payload is only the
+ * card state. No display index and no owner token.
+ */
+export async function publishTeamDesktopComputerStatus(
+  prisma: PrismaClient,
+  events: {
+    append(input: {
+      spaceId: string;
+      threadId: string;
+      botId: string;
+      type: "computer.status";
+      payload: { status: TeamDesktopCardState };
+    }): Promise<unknown>;
+  },
+  botId: string,
+  state: TeamDesktopCardState,
+): Promise<void> {
+  try {
+    const bot = await prisma.bot.findUnique({
+      where: { id: botId },
+      select: { spaceId: true, thread: { select: { id: true } } },
+    });
+    if (!bot?.thread) return;
+    await events.append({
+      spaceId: bot.spaceId,
+      threadId: bot.thread.id,
+      botId,
+      type: "computer.status",
+      payload: { status: state },
+    });
+  } catch (error) {
+    getLogger().error("team desktop status event failed", error);
+  }
 }

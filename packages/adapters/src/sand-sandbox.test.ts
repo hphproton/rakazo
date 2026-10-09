@@ -945,9 +945,10 @@ describe("sand host router", () => {
     );
     expect(computer.providerRef).toBe("team-desktop");
     expect(desk.urls).toEqual([]);
-    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
-      "http://127.0.0.1:6081?token=101",
-    );
+    expect(
+      (await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url,
+    ).toBeNull();
+    expect(desk.store.rows.has("deputy")).toBe(false);
     expect(desk.urls).toEqual([]);
     await prepareAndExec(desk.sandbox, computer, "deputy");
     expect(desk.urls[0]).toBe("http://127.0.0.1:1339/agent.v1.ControlService/GetCapabilities");
@@ -959,6 +960,57 @@ describe("sand host router", () => {
     expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
       "http://127.0.0.1:6081?token=101",
     );
+  });
+
+  it("opens a stopped team desktop with one ensure, then one connect", async () => {
+    const desk = teamMemberDesk(
+      ["chief"],
+      new Map([
+        ["chief", AGENT_A],
+        ["team-space", AGENT_A],
+      ]),
+    );
+    const context = { ...ctx, botId: "chief" };
+    const computer = await desk.sandbox.provision(
+      { botId: "team-space", homePath: "/tmp" },
+      context,
+    );
+    expect(
+      (await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url,
+    ).toBeNull();
+    expect(desk.urls).toEqual([]);
+    expect(desk.ensureCalls).toBe(0);
+    expect(desk.store.rows.has("chief")).toBe(false);
+
+    await prepareAndExec(desk.sandbox, computer, "chief");
+    expect(desk.store.rows.get("chief")?.state).toBe("running");
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+    await desk.desktops.stop("chief");
+    expect(desk.store.rows.get("chief")?.state).toBe("stopped");
+    const ensuresWhileAsleep = desk.ensureCalls;
+    const callsWhileAsleep = desk.urls.length;
+
+    expect(
+      (await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url,
+    ).toBeNull();
+    expect(desk.ensureCalls).toBe(ensuresWhileAsleep);
+    expect(desk.urls).toHaveLength(callsWhileAsleep);
+    expect(desk.store.rows.get("chief")?.state).toBe("stopped");
+
+    await desk.desktops.ensure("chief");
+    expect(desk.ensureCalls).toBe(ensuresWhileAsleep + 1);
+    expect(desk.store.rows.get("chief")?.state).toBe("running");
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+    expect((await desk.sandbox.connectScreen(computer, { view: "stream" }, context)).url).toBe(
+      "http://127.0.0.1:6081?token=101",
+    );
+    expect(desk.ensureCalls).toBe(ensuresWhileAsleep + 1);
+    expect(desk.urls.every((url) => url.startsWith("http://127.0.0.1:1339/"))).toBe(true);
+    expect(desk.urls.some((url) => url.includes("14020"))).toBe(false);
   });
 
   it("does not call the seat host for a team member that is also in the seat map", async () => {
@@ -1155,6 +1207,19 @@ function teamMemberDesk(members: readonly string[], seats: ReadonlyMap<string, s
     return new Response("no", { status: 404 });
   });
   const store = new MemoryDeskStore();
+  const desktops = createTeamDesktopAllocator({
+    store,
+    host: new QuietTeamDesktopHost(),
+    members: async () => members,
+    now: () => new Date("2026-10-08T12:00:00.000Z"),
+    sleep: async () => undefined,
+  });
+  let ensureCalls = 0;
+  const ensureDesktop = desktops.ensure.bind(desktops);
+  desktops.ensure = (botId) => {
+    ensureCalls += 1;
+    return ensureDesktop(botId);
+  };
   const sandbox = new SandSandboxProvider({
     policy: new MappedSandSeatPolicy(seats),
     host: new ConnectSandHost({
@@ -1162,15 +1227,18 @@ function teamMemberDesk(members: readonly string[], seats: ReadonlyMap<string, s
       token: "test-sand-token",
       fetch: fetchMock,
     }),
-    teamDesktops: createTeamDesktopAllocator({
-      store,
-      host: new QuietTeamDesktopHost(),
-      members: async () => members,
-      now: () => new Date("2026-10-08T12:00:00.000Z"),
-      sleep: async () => undefined,
-    }),
+    teamDesktops: desktops,
   });
-  return { sandbox, urls, seen, store };
+  return {
+    sandbox,
+    urls,
+    seen,
+    store,
+    desktops,
+    get ensureCalls() {
+      return ensureCalls;
+    },
+  };
 }
 
 async function prepareAndExec(
