@@ -59,6 +59,20 @@ describe("embeddableScreenUrl", () => {
     ).toBe("http://192.168.1.20:16080/embed.html");
   });
 
+  it("resolves a relative seal against the API origin", () => {
+    const sealed =
+      "/novnc/session/view/1710000000000.token/embed.html?autoconnect=true&resize=scale&view_only=true&path=websockify";
+    expect(embeddableScreenUrl(sealed, "https://app.example.test")).toBe(
+      "https://app.example.test/novnc/session/view/1710000000000.token/embed.html?autoconnect=true&resize=scale&view_only=true&path=websockify",
+    );
+    expect(embeddableScreenUrl(sealed, "http://10.0.2.2:3100")).toBe(
+      "http://10.0.2.2:3100/novnc/session/view/1710000000000.token/embed.html?autoconnect=true&resize=scale&view_only=true&path=websockify",
+    );
+    expect(embeddableScreenUrl(sealed, "http://127.0.0.1:3100")).toBe(
+      "http://127.0.0.1:3100/novnc/session/view/1710000000000.token/embed.html?autoconnect=true&resize=scale&view_only=true&path=websockify",
+    );
+  });
+
   it("returns null when there is no screen", () => {
     expect(embeddableScreenUrl(null, "http://127.0.0.1:3100")).toBeNull();
   });
@@ -117,6 +131,17 @@ describe("screen stream identity", () => {
     const renewing = view("oldToken", now + 10 * 60_000);
     expect(nextLoadedScreenUrl(renewing, view("newToken", now + 70 * 60_000), true, now)).toBe(
       view("newToken", now + 70 * 60_000),
+    );
+  });
+
+  it("renews a relative seal from the expiry in its path", () => {
+    const issuedAt = now;
+    const readAt = issuedAt + 20 * 60_000;
+    const expiresAt = issuedAt + 60 * 60_000;
+    const reused = `/novnc/session/view/${expiresAt}.reused/embed.html?path=websockify`;
+    expect(screenRenewReadAt(reused, readAt)).toBe(issuedAt);
+    expect(screenStreamKey(reused)).toBe(
+      screenStreamKey(`/novnc/session/view/${expiresAt}.other/embed.html?path=websockify`),
     );
   });
 

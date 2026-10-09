@@ -144,7 +144,11 @@ for (const mode of ["development", "preview"] as const) {
         if ("listen" in server) await listen(server.httpServer!);
         origin = `http://127.0.0.1:${(server.httpServer!.address() as AddressInfo).port}`;
         // Exercise the same capability issuer used by the production API, with a configured web origin.
-        screenUrl = addScreenProxyCapability(`${upstreamOrigin}/embed.html`, secret, origin, scope);
+        // The issuer returns a path. The viewer resolves it against this server.
+        screenUrl = new URL(
+          addScreenProxyCapability(`${upstreamOrigin}/embed.html`, secret, origin, scope),
+          `${origin}/`,
+        ).href;
         stop = async () => {
           await server.close();
           await close(upstream);

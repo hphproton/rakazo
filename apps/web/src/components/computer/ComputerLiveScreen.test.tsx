@@ -385,12 +385,14 @@ describe("ComputerLiveScreen", () => {
       },
       100,
     );
-    const page = new URL(sealed);
-    expect(page.origin).toBe("https://app.example");
+    expect(sealed.startsWith("/novnc/session/view/")).toBe(true);
+    expect(sealed).not.toContain("://");
+    const page = new URL(sealed, window.location.href);
+    expect(page.host).toBe(window.location.host);
     expect(page.search).not.toContain("token=101");
     expect(sealed).not.toContain("14020");
     expect(sealed).not.toContain(":20");
-    const socketPath = new URL(page.searchParams.get("path") ?? "", page.origin).pathname;
+    const socketPath = new URL(page.searchParams.get("path") ?? "websockify", page).pathname;
     expect(openScreenCapability(socketPath, "fake-secret", 101)?.target).toMatchObject({
       protocol: "http:",
       hostname: "127.0.0.1",
@@ -408,6 +410,7 @@ describe("ComputerLiveScreen", () => {
     expect(view.container.querySelector("iframe")).toBeNull();
     expect(clients).toHaveLength(1);
     expect(clients[0]?.url).toBe(sandScreenSocketUrl(sealed, window.location.href));
+    expect(new URL(clients[0]?.url ?? "").host).toBe(window.location.host);
     expect(clients[0]?.url).not.toContain("14020");
     expect(clients[0]?.url).not.toContain(":20");
     await view.cleanup();
