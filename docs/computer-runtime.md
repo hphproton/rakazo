@@ -34,8 +34,8 @@ the filesystem tools and those same refusals; screenshot tools stay hidden.
 Reading a directory lists or skips it instead of calling ReadBinaryFile.
 A ListDirectory permission denial is listed with `ls` on that seat when the
 names are still readable. If listing is still denied, `list_files` returns
-that error to the model and a checkpoint skip leaves the previous snapshot;
-neither fails the run.
+that error to the model and the run continues. A sand run does not checkpoint
+its workspace.
 A Team path that already starts with `/workspace` stays on that root.
 A sand screen reuses its sealed noVNC capability across refreshes until that
 capability is close to expiry, or the upstream, view/control policy, generation,
@@ -121,7 +121,7 @@ Box stop archives the machine and resume reconnects the same opaque box id. Each
 
 ## Persistence
 
-The portable computer workspace is the durable boundary. E2B uses `/home/user/rakazo-home`; Docker and local providers expose the equivalent home. Browser profiles are rooted under `.browser-profiles` in that workspace on E2B. Rakazo checkpoints transferred workspaces into `AgentHomeStore` at run completion or failure, before explicit stop, and before idle suspension. Docker mounts the Rakazo-owned home directly and only advances its revision marker at those boundaries. New or replacement machines import the latest stored workspace before use.
+The portable computer workspace is the durable boundary. E2B uses `/home/user/rakazo-home`; Docker and local providers expose the equivalent home. Browser profiles are rooted under `.browser-profiles` in that workspace on E2B. Rakazo checkpoints transferred workspaces into `AgentHomeStore` at run completion or failure, before explicit stop, and before idle suspension. Sand skips that run-end checkpoint: the files stay on the borrowed computer's disk, the run logs one info line, and it does not list the directory. Docker and E2B still checkpoint here. Sand does not gain an idle sleep or a workspace export. Docker mounts the Rakazo-owned home directly and only advances its revision marker at those boundaries. New or replacement machines import the latest stored workspace before use.
 
 `LocalAgentHomeStore` currently keeps the latest workspace under `DATA_DIR/homes/<computer-home-key>` and checkpoint metadata separately under `DATA_DIR/home-revisions`. Replacements are staged before the current copy is swapped, and checkpoints are serialized per computer. This implementation is latest-only rather than an immutable revision archive. Production deployments must put `DATA_DIR` on a Rakazo-owned persistent volume, encrypt that volume at rest, and include it in off-host backups. The storage interface is deliberately independent of E2B so an object-store-backed implementation can replace the local volume without changing agent tools or sandbox providers.
 

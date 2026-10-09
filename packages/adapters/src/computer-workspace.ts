@@ -112,6 +112,12 @@ export async function checkpointRunComputerWorkspace(
   computer: ComputerRef,
   context: AdapterContext,
 ): Promise<string | undefined> {
+  // The sand computer is borrowed. Its disk is already the workspace, and
+  // listing it fails. Skip before any file call. Docker and E2B still export.
+  if (skipsSandWorkspaceCheckpoint(deps.sandbox, computer)) {
+    getLogger().info("workspace checkpoint skipped on sand");
+    return undefined;
+  }
   if (computerRecord.scope !== "team" || computer.kind === "docker") {
     return checkpointAndRecordComputerWorkspace(deps, computerRecord, computer, context);
   }
@@ -203,6 +209,12 @@ export async function checkpointAndRecordComputerWorkspace(
     data: { homeRevision: revision },
   });
   return revision;
+}
+
+function skipsSandWorkspaceCheckpoint(sandbox: SandboxProvider, computer: ComputerRef): boolean {
+  if (computer.kind === "sand") return true;
+  if (typeof sandbox.describe !== "function") return false;
+  return sandbox.describe().id === "sand";
 }
 
 async function writePortableFile(root: string, file: PortableFile) {

@@ -84,7 +84,11 @@ export interface TeamDesktopHost {
   xSocketExists(displayIndex: number): Promise<boolean>;
   tokenFileExists(displayIndex: number): Promise<boolean>;
   portListening(port: number): Promise<boolean>;
-  /** TCP 127.0.0.1:(14000+N) accepts and `xdpyinfo -display :N` exits 0. */
+  /**
+   * The X socket exists, TCP 127.0.0.1:(14000+N) accepts, and
+   * `xdpyinfo -display :N` exits 0. A listening exec port with no socket is
+   * not a live display.
+   */
   windowAlive(displayIndex: number): Promise<boolean>;
   startWindow(displayIndex: number, ownerToken: string): Promise<void>;
   stopWindow(displayIndex: number): Promise<void>;
@@ -108,6 +112,20 @@ export interface TeamDesktopAllocator {
   resolve(botId: string): Promise<TeamDesktopBinding | undefined>;
   /** True when this bot is a current team member. Hub mirrors are not. */
   member(botId: string): Promise<boolean>;
+  /**
+   * `XN` for this display disappeared. A running or booting row becomes
+   * stopped, which is the card's asleep state, and the orphan cleanup runs
+   * once. An already-stopped row was cleaned by the stop that removed the
+   * socket. Indexes outside 101–150 are ignored.
+   */
+  noteDisplayGone(displayIndex: number): Promise<void>;
+  /**
+   * One pass for process start. A booting or running row with no live X
+   * socket, or a socket whose X server is not up, is stopped and cleaned.
+   * Does not idle-stop a live desktop; the periodic reconcile still does that.
+   */
+  sweepMissingDisplays(): Promise<void>;
+  /** Periodic pass. Also the fallback when the socket watch misses an event. */
   reconcile(): Promise<void>;
   reconcileIfDue(): Promise<void>;
   syncMembership(memberBotIds: readonly string[]): Promise<void>;
@@ -383,6 +401,12 @@ export function createTeamDesktopAllocator(options: {
       if (!members) return false;
       return (await members()).includes(botId);
     },
+    noteDisplayGone(displayIndex) {
+      return exclusive(() => noteDisplayGoneBody(displayIndex));
+    },
+    sweepMissingDisplays() {
+      return exclusive(() => sweepMissingDisplaysBody());
+    },
     reconcile() {
       return exclusive(() => reconcileBody());
     },
@@ -618,6 +642,26 @@ export function createTeamDesktopAllocator(options: {
     }
   }
 
+  async function noteDisplayGoneBody(displayIndex: number): Promise<void> {
+    if (!inRange(displayIndex)) return;
+    // Recreated during the watch debounce: the display is back.
+    if (await host.xSocketExists(displayIndex)) return;
+    const row = (await store.list()).find((candidate) => candidate.displayIndex === displayIndex);
+    // Reserved, releasing, or already stopped. A stop already ran the cleanup.
+    if (!row || (row.state !== "running" && row.state !== "booting")) return;
+    await markStopped(row);
+  }
+
+  async function sweepMissingDisplaysBody(): Promise<void> {
+    for (const row of await store.list()) {
+      if (!inRange(row.displayIndex)) continue;
+      if (row.state !== "running" && row.state !== "booting") continue;
+      const socket = await host.xSocketExists(row.displayIndex);
+      if (socket && (await alive(row.displayIndex))) continue;
+      await markStopped(row);
+    }
+  }
+
   async function reconcileBody(): Promise<void> {
     lastReconcileAt = now().getTime();
     if (members) await syncBody(await members());
@@ -715,6 +759,11 @@ export function createTeamDesktopAllocator(options: {
     throw new TeamDesktopExhaustedError();
   }
 
+  /**
+   * An unheld index still needs a stop when the host has claimed it. The token
+   * file and exec port can exist without an X socket, so they are not the
+   * disappearance signal the socket watch uses.
+   */
   async function occupied(displayIndex: number): Promise<boolean> {
     if (await host.xSocketExists(displayIndex)) return true;
     if (await host.tokenFileExists(displayIndex)) return true;

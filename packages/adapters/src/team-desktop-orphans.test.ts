@@ -387,6 +387,22 @@ describe("team desktop host cleanup", () => {
     expect(cleaned).toMatchObject({ displayIndex: 123, sessions: 1, dbus: 1 });
   });
 
+  it("does not treat a listening exec port as a live display when the X socket is gone", async () => {
+    const displayIndex = 101;
+    const port = teamDesktopPorts(displayIndex).exec;
+    expect(port).toBe(14101);
+    const server = net.createServer();
+    await listen(server, port);
+    try {
+      const command = vi.fn(async () => 0);
+      const host = createLinuxTeamDesktopHost({ command, orphans: quietOrphans() });
+      await expect(host.windowAlive(displayIndex)).resolves.toBe(false);
+      expect(command).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("refuses start when that display's CDP port is already taken", async () => {
     expect(teamDesktopPorts(111).cdp).toBe(9333);
     const displayIndex = 150;

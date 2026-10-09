@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { HUB_SPAWN_KEY_PREFIX, VISIBLE_ROSTER_BOT_WHERE } from "@rakazo/core";
 import type { LogEvent } from "@rakazo/logging";
 import { createLogger, installLogger } from "@rakazo/logging";
@@ -25,6 +28,7 @@ import {
   teamDesktopPurgePaths,
 } from "./team-desktop.js";
 import { createLinuxTeamDesktopHost } from "./team-desktop-host.js";
+import { watchTeamDesktopXSockets } from "./team-desktop-x11.js";
 
 class MemoryTeamDesktopStore implements TeamDesktopStore {
   readonly rows = new Map<string, TeamDesktopRecord>();
@@ -65,6 +69,7 @@ class MemoryTeamDesktopStore implements TeamDesktopStore {
 class FakeTeamDesktopHost implements TeamDesktopHost {
   readonly xSockets = new Set<number>();
   readonly tokenFiles = new Set<number>();
+  tokenChecks = 0;
   readonly ports = new Set<number>();
   readonly alive = new Set<number>();
   readonly starts: Array<{ displayIndex: number; ownerToken: string }> = [];
@@ -91,6 +96,7 @@ class FakeTeamDesktopHost implements TeamDesktopHost {
   }
 
   async tokenFileExists(displayIndex: number) {
+    this.tokenChecks += 1;
     this.guard(displayIndex);
     return this.tokenFiles.has(displayIndex);
   }
@@ -803,6 +809,173 @@ describe("team desktop host bounds", () => {
       reconcileSeconds: 120,
       maxRunning: 4,
     });
+  });
+});
+
+describe("team desktop X socket", () => {
+  it("marks the desktop stopped and cleans once when XN is removed", async () => {
+    const seen: string[] = [];
+    const { alloc, host, store } = harness({
+      onState: (_botId, state) => {
+        seen.push(state);
+      },
+    });
+    await alloc.reserve("bot");
+    await alloc.ensure("bot");
+    const displayIndex = row(store, "bot").displayIndex;
+    host.xSockets.add(displayIndex);
+    host.tokenFiles.add(displayIndex);
+    const dir = await mkdtemp(path.join(tmpdir(), "team-x11-"));
+    const watch = watchTeamDesktopXSockets({
+      directory: dir,
+      debounceMs: 20,
+      onGone: (index) => alloc.noteDisplayGone(index),
+    });
+    try {
+      await writeFile(path.join(dir, `X${displayIndex}`), "");
+      await writeFile(path.join(dir, "X20"), "");
+      await writeFile(path.join(dir, "X100"), "");
+      await writeFile(path.join(dir, "X1010"), "");
+      const cleansBefore = host.cleans.length;
+      host.tokenChecks = 0;
+      host.xSockets.delete(displayIndex);
+      host.alive.delete(displayIndex);
+      await rm(path.join(dir, "X20"));
+      await rm(path.join(dir, "X100"));
+      await rm(path.join(dir, "X1010"));
+      await rm(path.join(dir, `X${displayIndex}`));
+      await vi.waitFor(() => expect(row(store, "bot").state).toBe("stopped"));
+      expect(host.cleans).toHaveLength(cleansBefore + 1);
+      expect(host.cleans.at(-1)).toBe(displayIndex);
+      expect(seen.at(-1)).toBe("suspended");
+      expect(host.tokenChecks).toBe(0);
+      expect(host.stops).not.toContain(20);
+      expect(host.stops).not.toContain(100);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(host.cleans).toHaveLength(cleansBefore + 1);
+      await alloc.noteDisplayGone(displayIndex);
+      expect(host.cleans).toHaveLength(cleansBefore + 1);
+    } finally {
+      watch.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks the desktop stopped and cleans once when Xvfb crashes", async () => {
+    const { alloc, host, store } = harness();
+    await alloc.reserve("bot");
+    await alloc.ensure("bot");
+    const displayIndex = row(store, "bot").displayIndex;
+    host.tokenFiles.add(displayIndex);
+    host.xSockets.delete(displayIndex);
+    host.alive.delete(displayIndex);
+    let listener: ((event: string, filename: string) => void) | undefined;
+    const watch = watchTeamDesktopXSockets({
+      directory: "/unused",
+      debounceMs: 20,
+      socketExists: async () => false,
+      watchDirectory: (_directory, next) => {
+        listener = next;
+        return { close() {} };
+      },
+      onGone: (index) => alloc.noteDisplayGone(index),
+    });
+    try {
+      const cleansBefore = host.cleans.length;
+      host.tokenChecks = 0;
+      if (!listener) throw new Error("display watch did not start");
+      listener("rename", `X${displayIndex}`);
+      listener("rename", `X${displayIndex}`);
+      listener("rename", "X14");
+      listener("rename", "X151");
+      listener("rename", `X${displayIndex}`);
+      await vi.waitFor(() => expect(row(store, "bot").state).toBe("stopped"));
+      expect(host.cleans).toHaveLength(cleansBefore + 1);
+      expect(host.cleans.at(-1)).toBe(displayIndex);
+      expect(host.stops.filter((index) => index === displayIndex)).toHaveLength(1);
+      expect(host.tokenChecks).toBe(0);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(host.cleans).toHaveLength(cleansBefore + 1);
+    } finally {
+      watch.close();
+    }
+  });
+
+  it("sweep stops a stale running row on worker start and does not clean twice", async () => {
+    const { alloc, host, store } = harness();
+    await alloc.reserve("stale");
+    await alloc.ensure("stale");
+    const displayIndex = row(store, "stale").displayIndex;
+    host.xSockets.delete(displayIndex);
+    host.alive.delete(displayIndex);
+    host.tokenFiles.add(displayIndex);
+    const cleansBefore = host.cleans.length;
+    host.tokenChecks = 0;
+    await alloc.sweepMissingDisplays();
+    expect(row(store, "stale").state).toBe("stopped");
+    expect(host.cleans).toHaveLength(cleansBefore + 1);
+    expect(host.tokenChecks).toBe(0);
+    await alloc.sweepMissingDisplays();
+    expect(host.cleans).toHaveLength(cleansBefore + 1);
+  });
+
+  it("sweep stops a stale socket whose X server is already dead", async () => {
+    const { alloc, host, store } = harness();
+    await alloc.reserve("crashed");
+    await alloc.ensure("crashed");
+    const displayIndex = row(store, "crashed").displayIndex;
+    host.xSockets.add(displayIndex);
+    host.alive.delete(displayIndex);
+    const cleansBefore = host.cleans.length;
+    await alloc.sweepMissingDisplays();
+    expect(row(store, "crashed").state).toBe("stopped");
+    expect(host.cleans).toHaveLength(cleansBefore + 1);
+  });
+
+  it("ignores seat sockets and a display that is still up", async () => {
+    const { alloc, host, store } = harness();
+    await alloc.reserve("bot");
+    await alloc.ensure("bot");
+    const displayIndex = row(store, "bot").displayIndex;
+    host.xSockets.add(displayIndex);
+    host.alive.add(displayIndex);
+    const cleansBefore = host.cleans.length;
+    await alloc.noteDisplayGone(20);
+    await alloc.noteDisplayGone(100);
+    await alloc.noteDisplayGone(151);
+    await alloc.noteDisplayGone(1010);
+    await alloc.noteDisplayGone(displayIndex);
+    expect(row(store, "bot").state).toBe("running");
+    expect(host.cleans).toHaveLength(cleansBefore);
+    expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
+  });
+
+  it("does not idle-stop a live desktop; reconcile still does", async () => {
+    const { alloc, host, store, setNow } = harness();
+    const started = new Date("2026-10-07T12:00:00.000Z");
+    setNow(started);
+    await alloc.reserve("idle");
+    await alloc.ensure("idle");
+    const displayIndex = row(store, "idle").displayIndex;
+    host.xSockets.add(displayIndex);
+    host.alive.add(displayIndex);
+    setNow(new Date(started.getTime() + 31 * 60_000));
+    const stopsBefore = host.stops.length;
+    await alloc.sweepMissingDisplays();
+    expect(row(store, "idle").state).toBe("running");
+    expect(host.stops).toHaveLength(stopsBefore);
+    await alloc.reconcile();
+    expect(row(store, "idle").state).toBe("stopped");
+    expect(host.stops).toContain(displayIndex);
+  });
+
+  it("leaves a reserved row alone when its index has no socket", async () => {
+    const { alloc, host, store } = harness();
+    await alloc.reserve("bot");
+    const cleansBefore = host.cleans.length;
+    await alloc.sweepMissingDisplays();
+    expect(row(store, "bot").state).toBe("reserved");
+    expect(host.cleans).toHaveLength(cleansBefore);
   });
 });
 

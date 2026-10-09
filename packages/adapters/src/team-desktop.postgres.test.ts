@@ -103,4 +103,118 @@ describePostgres("team desktop wake (migrated PostgreSQL)", () => {
     expect(row.state).toBe("running");
     expect(row.lastUsedAt).not.toBeNull();
   });
+
+  it("stops a stale running desktop from the socket sweep, then wakes it", async () => {
+    const db = createDb(databaseUrl!);
+    const seen: string[] = [];
+    try {
+      const id = randomUUID();
+      organizationIds.push(id);
+      userIds.push(id);
+      const createdAt = new Date();
+      await db.prisma.user.create({
+        data: {
+          id,
+          name: "Desktop socket",
+          email: `${id}@example.test`,
+          emailVerified: true,
+        },
+      });
+      await db.prisma.organization.create({
+        data: { id, name: "Desktop socket", slug: id, createdAt },
+      });
+      await db.prisma.space.create({
+        data: { id, organizationId: id, name: "Desktop socket", isDefault: true },
+      });
+      const bot = await db.prisma.bot.create({
+        data: { spaceId: id, userId: id, name: "Desktop socket", color: "ink" },
+      });
+      const displayIndex = 121;
+      await db.prisma.teamDesktop.create({
+        data: {
+          botId: bot.id,
+          displayIndex,
+          ownerToken: "desktop-owner-placeholder",
+          state: "running",
+        },
+      });
+
+      const sockets = new Set<number>();
+      const alive = new Set<number>();
+      const cleans: number[] = [];
+      const host: TeamDesktopHost = {
+        async xSocketExists(index) {
+          if (index !== displayIndex) return true;
+          return sockets.has(index);
+        },
+        async tokenFileExists() {
+          return false;
+        },
+        async portListening() {
+          return false;
+        },
+        async windowAlive(index) {
+          if (index !== displayIndex) return true;
+          return alive.has(index);
+        },
+        async startWindow(index) {
+          const current = await db.prisma.teamDesktop.findUniqueOrThrow({
+            where: { botId: bot.id },
+          });
+          expect(current.state).toBe("booting");
+          alive.add(index);
+          sockets.add(index);
+        },
+        async stopWindow() {
+          return undefined;
+        },
+        async cleanWindow(index) {
+          cleans.push(index);
+        },
+        async cleanOrphans() {
+          return undefined;
+        },
+        async purge() {
+          return undefined;
+        },
+      };
+      const alloc = createTeamDesktopAllocator({
+        store: createPrismaTeamDesktopStore(db.prisma),
+        host,
+        onState: (_botId, state) => {
+          seen.push(state);
+        },
+      });
+
+      await alloc.sweepMissingDisplays();
+      const stopped = await db.prisma.teamDesktop.findUniqueOrThrow({ where: { botId: bot.id } });
+      expect(stopped.state).toBe("stopped");
+      expect(stopped.ownerToken).toBe("desktop-owner-placeholder");
+      expect(seen).toEqual(["suspended"]);
+      expect(cleans).toEqual([displayIndex]);
+
+      await alloc.sweepMissingDisplays();
+      await alloc.noteDisplayGone(displayIndex);
+      await alloc.noteDisplayGone(20);
+      expect(cleans).toEqual([displayIndex]);
+
+      const binding = await alloc.ensure(bot.id);
+      expect(binding.displayIndex).toBe(displayIndex);
+      expect(binding.ownerToken).toBe("desktop-owner-placeholder");
+      const running = await db.prisma.teamDesktop.findUniqueOrThrow({ where: { botId: bot.id } });
+      expect(running.state).toBe("running");
+      expect(seen).toEqual(["suspended", "booting", "running"]);
+
+      sockets.delete(displayIndex);
+      alive.delete(displayIndex);
+      await alloc.noteDisplayGone(displayIndex);
+      const again = await db.prisma.teamDesktop.findUniqueOrThrow({ where: { botId: bot.id } });
+      expect(again.state).toBe("stopped");
+      expect(cleans).toEqual([displayIndex, displayIndex, displayIndex]);
+      expect(seen).toEqual(["suspended", "booting", "running", "suspended"]);
+    } finally {
+      await db.prisma.$disconnect();
+      await db.pool.end();
+    }
+  });
 });

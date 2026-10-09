@@ -84,6 +84,32 @@ Allocation runs only when the resolved provider is `sand`. `fake`, `docker`,
 (`spawnKey` starting with `hub:`) never get a row. When 101–150 is full, extra
 members stay without a row and bot or roster calls still succeed.
 
+The worker watches `/tmp/.X11-unix`. When `XN` for N in 101–150 disappears,
+that team desktop is marked stopped and the existing orphan cleanup runs for N.
+Seat sockets are ignored. Worker start reconciles `team_desktops` rows against
+the live socket and X server once. The periodic reconcile remains, because a
+frozen machine can miss watch events. The watch is debounced so one
+disappearance cleans once. A sand run skips the workspace checkpoint with one
+info line and does not call ListDirectory. Docker and E2B are unchanged. Sand
+does not gain an idle sleep or a workspace export.
+
+The X socket is the signal that the display is gone. These host details remain,
+because the socket is not the same signal:
+
+- `start-window` and `stop-window` still create and stop the window.
+- Orphan cleanup still matches `start-desktop.sh` and `/tmp/sand-window-N/` in
+  the process command, and a `dbus-daemon` whose `DISPLAY` is `:N`.
+  `stop-window` does not kill that session.
+- `/tmp/sand-window-tokens.d/N` still blocks index reuse and still marks an
+  unheld index occupied. A claim can exist before the socket. The watch does
+  not follow that directory, `/tmp/sand-desktop`, or `desktop-health.json`.
+- Readiness is still the exec port `14000+N` plus `xdpyinfo` after the socket
+  is present. A missing socket is enough to call the display down; a listening
+  port is not. CDP `9222+N`, VNC, and pty ports stay collision checks. The
+  router stays `127.0.0.1:1339` and the viewer stays `6081?token=N`.
+- Purge still deletes only `Fork-N` for N in 101–150, plus that index's X lock
+  and socket names.
+
 ## `none`
 
 Runs API/web without provisioning bot computers.

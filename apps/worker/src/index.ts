@@ -54,6 +54,7 @@ import {
   syncTeamBDesktops,
   teamDesktopAllocatorForProvider,
   teamDesktopConfigFromEnv,
+  watchTeamDesktopXSockets,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey, resolveSupervisorToken } from "@rakazo/core";
 import {
@@ -109,11 +110,27 @@ async function main() {
       onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
     }),
   );
+  let stopDisplayWatch: (() => void) | undefined;
   if (teamDesktops) {
     try {
       await syncTeamBDesktops(prisma, teamDesktops);
     } catch (error) {
       logger.error("team desktop membership sync failed", error);
+    }
+    // Watch before the sweep so a socket that vanishes during the sweep is
+    // still seen. The sweep's own stop is deduped by the stopped row.
+    try {
+      const displayWatch = watchTeamDesktopXSockets({
+        onGone: (displayIndex) => teamDesktops.noteDisplayGone(displayIndex),
+      });
+      stopDisplayWatch = () => displayWatch.close();
+    } catch (error) {
+      logger.error("team desktop display watch failed", error);
+    }
+    try {
+      await teamDesktops.sweepMissingDisplays();
+    } catch (error) {
+      logger.error("team desktop display sweep failed", error);
     }
   }
   const sandbox = createRunSandbox(sandboxProvider, {
@@ -277,6 +294,7 @@ async function main() {
     leadership: createPostgresReconciliationLeadership(pool),
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+    // Fallback for a socket watch that missed an event while the machine was frozen.
     reconcileTeamDesktops: teamDesktops ? () => teamDesktops.reconcileIfDue() : undefined,
   });
   reconciler.start();
@@ -286,6 +304,7 @@ async function main() {
     if (stopping) return;
     stopping = true;
     try {
+      stopDisplayWatch?.();
       await reconciler.stop();
       await jobHost.stop();
       await jobs.close();

@@ -421,6 +421,7 @@ export function createRunWorkspaceCheckpoint(checkpoint: () => Promise<unknown>)
 /**
  * A sand ControlService 403 during checkpoint must not fail the turn. The
  * previous workspace snapshot stays; the model reply is still persisted.
+ * A sand run skips the checkpoint before this and does not list the workspace.
  */
 export async function flushRunWorkspaceCheckpoint(checkpoint: {
   flush(): Promise<unknown>;
