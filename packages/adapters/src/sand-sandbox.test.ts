@@ -20,11 +20,13 @@ import {
   isDirectoryReadError,
   SAND_AGENT_HEADER,
   SAND_DISPLAY_HEADER,
+  SAND_TEAM_BROWSER,
   SAND_WINDOW_OWNER_HEADER,
   SandHostError,
   SandPathIsDirectoryError,
   sandHostBaseUrl,
   sandImageMeta,
+  sandTeamExecEnv,
 } from "./sand-host.js";
 import { SAND_WORKSPACE, SandSandboxProvider, sandWorkspacePath } from "./sand-sandbox.js";
 import type { SandSeatPolicy, SandSeatRequest } from "./sand-seat.js";
@@ -77,6 +79,10 @@ class RecordingHost implements SandHost {
   files = new Map<string, Uint8Array>();
   screenshot: Uint8Array = PNG;
   screen: string | null = null;
+  execScript: (request: SandExecRequest) => { stdout: string; code: number } = () => ({
+    stdout: "ok\n",
+    code: 0,
+  });
 
   async capabilities(agentId: string) {
     this.calls.push({ method: "capabilities", agentId });
@@ -89,8 +95,9 @@ class RecordingHost implements SandHost {
     _signal: AbortSignal,
   ): AsyncIterable<ProcessEvent> {
     this.calls.push({ method: "exec", agentId, body: request });
-    yield { type: "stdout", data: "ok\n" };
-    yield { type: "exit", code: 0 };
+    const result = this.execScript(request);
+    if (result.stdout) yield { type: "stdout", data: result.stdout };
+    yield { type: "exit", code: result.code };
   }
 
   async listDirectory(agentId: string, path: string): Promise<SandDirectoryEntry[]> {
@@ -194,13 +201,21 @@ describe("sand sandbox provider", () => {
       capabilities: {
         graphical: true,
         multiScreen: false,
-        pty: false,
+        pty: true,
         snapshots: false,
-        takeover: false,
+        takeover: true,
       },
     });
     const described: SandboxProvider = sandbox;
-    expect(described.pageBrowser).toBeUndefined();
+    expect(described.pageBrowser).toEqual(expect.any(Function));
+    const seatPage = await described.pageBrowser!(
+      { id: "sand:seat", botId: "bot-a", kind: "sand", providerRef: AGENT_A },
+      { command: "snapshot" },
+      ctx,
+    );
+    expect(seatPage).toMatchObject({ ok: false, fallback: "computer_act" });
+    expect(sandbox.describe().capabilities.snapshots).toBe(false);
+    expect(host.calls.filter((call) => call.method !== "capabilities")).toEqual([]);
     const computer = await sandbox.provision({ botId: "bot-a", homePath: "/home/rakazo" }, ctx);
     expect(computer).toMatchObject({
       id: `sand:${AGENT_A}`,
@@ -211,6 +226,15 @@ describe("sand sandbox provider", () => {
     });
     await sandbox.prepare(computer, ctx);
     expect(host.calls.map((call) => call.method)).toEqual(["capabilities"]);
+    await expect(
+      sandbox.connectTerminal(computer, { controlToken: "lease-1" }, ctx),
+    ).rejects.toThrow(/terminal is unavailable/);
+    const beforeControl = host.calls.length;
+    await sandbox.setScreenControl(computer, false, ctx, "lease-1");
+    expect(host.calls).toHaveLength(beforeControl);
+    const shot = await sandbox.snapshot(computer, ctx);
+    expect(shot.id).toBe(`sand-workspace-${AGENT_A}`);
+    expect(host.calls).toHaveLength(beforeControl);
     const before = host.calls.length;
     await sandbox.stop(computer, ctx);
     await sandbox.destroy(computer, ctx);
@@ -538,6 +562,114 @@ describe("sand sandbox provider", () => {
     await expect(
       sandbox.act(computer, { actions: [{ kind: "launch", application: "xterm" }] }, ctx),
     ).rejects.toThrow(SAND_HAND_REFUSAL);
+    expect(host.calls.filter((call) => call.method === "exec")).toEqual([]);
+  });
+
+  it("runs focus, open, and launch on a team desktop and sets BROWSER", async () => {
+    const host = new RecordingHost();
+    host.execScript = (request) => {
+      if (request.argv[0] === "xdotool" && request.argv[1] === "search") {
+        return { stdout: "", code: 1 };
+      }
+      return { stdout: "ok\n", code: 0 };
+    };
+    const sandbox = new SandSandboxProvider({
+      policy: new FixedSeatPolicy({ "bot-a": AGENT_A }),
+      host,
+      teamDesktops: {
+        async resolve() {
+          return undefined;
+        },
+        async ensure() {
+          return { displayIndex: 121, ownerToken: "fixture-owner-token" };
+        },
+      },
+    });
+    const computer = await sandbox.provision({ botId: "bot-a", homePath: "/tmp" }, ctx);
+    const team = { ...ctx, botId: "bot-a" };
+    let stdout = "";
+    for await (const event of sandbox.execute(
+      computer,
+      { argv: ["echo", "desk"], env: { DISPLAY: ":1", PATH: "/usr/bin", FOO: "bar" } },
+      team,
+    )) {
+      if (event.type === "stdout") stdout += event.data;
+    }
+    expect(stdout).toContain("ok");
+    const shell = host.calls.at(-1);
+    expect(shell?.body).toMatchObject({
+      env: sandTeamExecEnv({ DISPLAY: ":1", PATH: "/usr/bin", FOO: "bar" }),
+    });
+    const shellBody = shell?.body as { env?: Record<string, string> } | undefined;
+    expect(shellBody?.env?.PATH).toBe("/usr/bin");
+    expect(shellBody?.env?.BROWSER).toBe(SAND_TEAM_BROWSER);
+
+    host.calls.length = 0;
+    const acted = await sandbox.act(
+      computer,
+      {
+        actions: [
+          { kind: "pointer", type: "click", x: 1, y: 2, button: "left" },
+          { kind: "open", path: "https://example.com" },
+          { kind: "focus", application: "google-chrome" },
+          { kind: "launch", application: "xterm" },
+        ],
+        observe: true,
+      },
+      team,
+    );
+    expect(acted.completed).toBe(4);
+    expect(acted.observation?.image.byteLength).toBeGreaterThan(0);
+    const execs = host.calls.filter((call) => call.method === "exec").map((call) => call.body);
+    expect(execs).toEqual([
+      expect.objectContaining({
+        argv: ["xdg-open", "https://example.com"],
+        env: { BROWSER: SAND_TEAM_BROWSER },
+      }),
+      expect.objectContaining({
+        argv: ["xdotool", "search", "--class", "google-chrome"],
+        env: { BROWSER: SAND_TEAM_BROWSER },
+      }),
+      expect.objectContaining({
+        argv: ["setsid", "-f", SAND_TEAM_BROWSER],
+        env: { BROWSER: SAND_TEAM_BROWSER },
+      }),
+      expect.objectContaining({
+        argv: ["setsid", "-f", "xterm"],
+        env: { BROWSER: SAND_TEAM_BROWSER },
+      }),
+    ]);
+    const computerUse = host.calls.filter((call) => call.method === "computerUse");
+    expect(computerUse).toHaveLength(2);
+    expect(computerUse[0]?.body).toEqual([
+      { click: { coordinate: { x: 1, y: 2 }, button: "LEFT", count: 1 } },
+    ]);
+    expect(computerUse[1]?.body).toEqual([{ screenshot: {} }]);
+
+    const seen: Array<{ displayIndex: number; command: string }> = [];
+    const browsing = new SandSandboxProvider({
+      policy: new FixedSeatPolicy({ "bot-a": AGENT_A }),
+      host,
+      teamDesktops: {
+        async resolve() {
+          return undefined;
+        },
+        async ensure() {
+          return { displayIndex: 121, ownerToken: "fixture-owner-token" };
+        },
+      },
+      runPageBrowser: async (input) => {
+        seen.push({ displayIndex: input.displayIndex, command: input.command.command });
+        return { ok: true, url: "https://example.com", title: "Example" };
+      },
+    });
+    const page = await browsing.pageBrowser(
+      computer,
+      { command: "navigate", url: "https://example.com" },
+      team,
+    );
+    expect(page).toMatchObject({ ok: true, url: "https://example.com" });
+    expect(seen).toEqual([{ displayIndex: 121, command: "navigate" }]);
   });
 
   it("returns a reported screen url and refuses display :1 and :3", async () => {
