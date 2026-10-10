@@ -50,7 +50,9 @@ export default function Computer() {
   const navigation = useNavigation();
   const { botId, name: nameParam } = useLocalSearchParams<{ botId?: string; name?: string }>();
   const name = nameParam || t("Bot");
+  const computerRef = useRef<ComputerStatus | null>(null);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
+  computerRef.current = computer;
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +176,10 @@ export default function Computer() {
       return true;
     } catch (err) {
       if (!action.isActive()) return false;
-      setError(errorText(err, t("Could not open computer")));
+      autoBooted.current = null;
+      if (computerRef.current?.state !== "running") {
+        setError(errorText(err, t("Could not open computer")));
+      }
       throw err;
     } finally {
       if (action.isActive() && showBooting) setBootingCount((count) => count - 1);
@@ -286,7 +291,23 @@ export default function Computer() {
       contentInsetAdjustmentBehavior="automatic"
     >
       {error ? (
-        <Text style={{ color: tokens.mutedForeground, marginBottom: 12 }}>{error}</Text>
+        <View style={{ marginBottom: 12, gap: 8 }}>
+          <Text style={{ color: tokens.mutedForeground }}>{error}</Text>
+          <NativeActionButton
+            label={t("Try again.")}
+            prominence="secondary"
+            style={{ alignSelf: "flex-start" }}
+            onPress={() => {
+              autoBooted.current = null;
+              setError(null);
+              void bootComputer({
+                takeControl: false,
+                overlay: computer?.state !== "running",
+                force: true,
+              }).catch(() => undefined);
+            }}
+          />
+        </View>
       ) : null}
       <View
         style={{

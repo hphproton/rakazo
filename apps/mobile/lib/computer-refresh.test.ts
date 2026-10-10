@@ -122,7 +122,7 @@ describe("computer refresh lifecycle", () => {
 });
 
 describe("computer action lifecycle", () => {
-  it("keeps overlapping actions valid and pauses polling until both finish", async () => {
+  it("keeps overlapping actions valid and reads status without the screen", async () => {
     vi.useFakeTimers();
     const fixture = setup();
     fixture.controller.start();
@@ -145,19 +145,21 @@ describe("computer action lifecycle", () => {
       release.finish();
     })();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(fixture.readStatus).toHaveBeenCalledTimes(1);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(6);
+    expect(fixture.readScreen).toHaveBeenCalledTimes(1);
     bootMutation.resolve();
     await bootWork;
     expect(fixture.readScreen).toHaveBeenLastCalledWith(5);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(fixture.readStatus).toHaveBeenCalledTimes(2);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(12);
+    expect(fixture.readScreen).toHaveBeenCalledTimes(2);
     releaseMutation.resolve();
     await releaseWork;
-    expect(fixture.readStatus).toHaveBeenCalledTimes(3);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(13);
     await vi.advanceTimersByTimeAsync(1999);
-    expect(fixture.readStatus).toHaveBeenCalledTimes(3);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(13);
     await vi.advanceTimersByTimeAsync(1);
-    expect(fixture.readStatus).toHaveBeenCalledTimes(4);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(14);
     fixture.controller.dispose();
   });
 
@@ -172,8 +174,9 @@ describe("computer action lifecycle", () => {
     oldScreen.resolve("https://obsolete.example.test");
     await vi.advanceTimersByTimeAsync(5000);
     expect(fixture.onScreen).not.toHaveBeenCalled();
-    expect(fixture.onReady).not.toHaveBeenCalled();
-    expect(fixture.readStatus).toHaveBeenCalledTimes(1);
+    expect(fixture.onReady).toHaveBeenCalledTimes(2);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(3);
+    expect(fixture.readScreen).toHaveBeenCalledTimes(1);
     await action.refresh();
     action.finish();
     expect(fixture.onScreen).toHaveBeenCalledExactlyOnceWith("https://screen.example.test");
@@ -260,11 +263,28 @@ describe("computer action lifecycle", () => {
     await old.refresh();
     old.finish();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(fixture.readStatus).toHaveBeenCalledTimes(2);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(7);
+    expect(fixture.readScreen).toHaveBeenCalledTimes(2);
     await current.refresh();
     current.finish();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(fixture.readStatus).toHaveBeenCalledTimes(4);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(9);
+    fixture.controller.dispose();
+  });
+});
+
+describe("status during an open action", () => {
+  it("reads status while a boot is in flight and leaves the screen unread", async () => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    fixture.controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const action = fixture.controller.beginAction();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(fixture.readStatus).toHaveBeenCalledTimes(3);
+    expect(fixture.readScreen).toHaveBeenCalledTimes(1);
+    expect(fixture.onStatus).toHaveBeenCalledTimes(3);
+    action.finish();
     fixture.controller.dispose();
   });
 });

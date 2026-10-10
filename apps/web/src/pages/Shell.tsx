@@ -2596,7 +2596,9 @@ export function ShellPage() {
         takeControl: false,
         overlay: action === "boot",
         force: true,
-      }).catch(() => undefined);
+      }).catch(() => {
+        if (autoBooted.current === botId) autoBooted.current = null;
+      });
     })();
     return () => {
       cancelled = true;
@@ -2845,9 +2847,16 @@ export function ShellPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => computerBot && void refreshComputerScreen(computerBot.id)}
+          onClick={() => {
+            if (!computerBot) return;
+            if (computerErrorFromScreen) {
+              void refreshComputerScreen(computerBot.id);
+              return;
+            }
+            void openComputer(computerBot.id);
+          }}
         >
-          <Trans>Retry screen</Trans>
+          {computerErrorFromScreen ? <Trans>Retry screen</Trans> : <Trans>Try again</Trans>}
         </Button>
       </div>
     ) : null;
