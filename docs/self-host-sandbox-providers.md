@@ -62,10 +62,18 @@ and an unset map refuses every bot. A stored ref from another provider, includin
 This does not create an agent. It does not point a screen at display `:1` or
 `:3`. Selecting `sand` does not change the default for any other deployment.
 
-Sand desktop hands are observe and the action kinds click, move, down, up,
-type, key, scroll, and wait. `focus`, `open_path`, and `launch_app` are refused.
-There is no pty, snapshot, takeover, extra screen, or page browser. A directory
-is listed or skipped; it is not passed to ReadBinaryFile.
+Sand desktop hands on a dedicated seat are observe and the action kinds click,
+move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and
+`launch_app` are refused there. A dedicated seat has no pty, snapshot,
+takeover, extra screen, or page browser. A Team desktop in 101–150 runs
+`focus`, `open_path`, and `launch_app` through that display's exec daemon
+(`xdotool`, `xdg-open`, `setsid`) and sets `BROWSER=/usr/local/bin/box-chrome`
+when the caller did not. `PATH` is left unchanged. Its page browser uses
+box-chrome on `127.0.0.1:9222+N`. Its shell is a sealed bridge to the pty
+websocket on `13600+N`; that websocket has no auth token and is not exposed.
+Takeover uses the existing control viewer. Snapshots stay off: the host has
+no snapshot API. A directory is listed or skipped; it is not passed to
+ReadBinaryFile.
 
 `SAND_HOST_TOKEN` is an optional bearer. A team member reserves a desktop on
 demand and is sent to `http://127.0.0.1:1339` with `x-sand-display` and
