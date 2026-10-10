@@ -67,7 +67,9 @@ move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and
 `launch_app` are refused there. A dedicated seat has no pty, snapshot,
 takeover, extra screen, or page browser. A Team desktop in 101–150 runs
 `focus`, `open_path`, and `launch_app` through that display's exec daemon
-(`xdotool`, `xdg-open`, `setsid`) and sets `BROWSER=/usr/local/bin/box-chrome`
+(`xdotool`, `xdg-open`, or a detached spawn). A start resolves an executable
+or a `.desktop` entry, discards stdio, and returns once the process is spawned.
+An unknown name is an error. Team exec sets `BROWSER=/usr/local/bin/box-chrome`
 when the caller did not. `PATH` is left unchanged. Its page browser uses
 box-chrome on `127.0.0.1:9222+N`. Its shell is a sealed bridge to the pty
 websocket on `13600+N`; that websocket has no auth token and is not exposed.

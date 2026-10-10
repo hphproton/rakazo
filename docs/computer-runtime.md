@@ -31,9 +31,11 @@ kinds click, move, down, up, type, key, scroll, and wait. `focus`,
 `open_path`, and `launch_app` are refused there. A dedicated seat has no pty,
 snapshot, takeover, or page browser.
 A Team desktop in 101–150 runs those three actions on that display's exec
-daemon: `focus` raises a window with `xdotool` or starts it with `setsid`,
-`open_path` uses `xdg-open`, and `launch_app` starts the application with
-`setsid`. Browser names start `/usr/local/bin/box-chrome`. Team exec requests
+daemon: `focus` raises a window with `xdotool` or starts it detached,
+`open_path` uses `xdg-open`, and `launch_app` starts the application. A start
+resolves an executable or a `.desktop` entry, discards stdio, and returns once
+the process is spawned. An unknown name is an error. Browser names start
+`/usr/local/bin/box-chrome`. Team exec requests
 set `BROWSER=/usr/local/bin/box-chrome` when the caller did not set `BROWSER`.
 `PATH` is left unchanged. The page browser attaches to that desktop's
 box-chrome on `127.0.0.1:9222+N`. The shell is a sealed local bridge to the

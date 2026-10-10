@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveBotWorkspacePath } from "./computer-support.js";
 import { checkpointRunningComputer } from "./computer-workspace.js";
 import { LocalAgentHomeStore } from "./home.js";
+import { teamDesktopSpawnArgv } from "./sand-desktop-hands.js";
 import { SAND_HAND_REFUSAL } from "./sand-hand.js";
 import type {
   SandComputerAction,
@@ -623,7 +624,7 @@ describe("sand sandbox provider", () => {
     const execs = host.calls.filter((call) => call.method === "exec").map((call) => call.body);
     expect(execs).toEqual([
       expect.objectContaining({
-        argv: ["xdg-open", "https://example.com"],
+        argv: teamDesktopSpawnArgv(["xdg-open", "https://example.com"]),
         env: { BROWSER: SAND_TEAM_BROWSER },
       }),
       expect.objectContaining({
@@ -631,11 +632,11 @@ describe("sand sandbox provider", () => {
         env: { BROWSER: SAND_TEAM_BROWSER },
       }),
       expect.objectContaining({
-        argv: ["setsid", "-f", SAND_TEAM_BROWSER],
+        argv: teamDesktopSpawnArgv([SAND_TEAM_BROWSER]),
         env: { BROWSER: SAND_TEAM_BROWSER },
       }),
       expect.objectContaining({
-        argv: ["setsid", "-f", "xterm"],
+        argv: teamDesktopSpawnArgv(["xterm"]),
         env: { BROWSER: SAND_TEAM_BROWSER },
       }),
     ]);
