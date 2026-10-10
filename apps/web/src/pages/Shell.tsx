@@ -1137,7 +1137,7 @@ export function ShellPage() {
     return snap;
   }
 
-  async function refreshComputerScreen(id: string) {
+  async function refreshComputerScreen(id: string, options?: { replace?: boolean }) {
     if (!computerVisible.current) return null;
     const overlay = computerOpenRef.current;
     const request = ++screenRequest.current;
@@ -1156,19 +1156,31 @@ export function ShellPage() {
       commit: (screen) => {
         const incoming = screenSealGeneration(screen.botGeneration, screen.computerGeneration);
         if (overlay) {
-          const url = reuseScreenUrl(overlayScreenUrlRef.current, screen.url, Date.now(), {
-            held: overlayGeneration.current,
-            next: incoming,
-          });
+          const url = reuseScreenUrl(
+            overlayScreenUrlRef.current,
+            screen.url,
+            Date.now(),
+            {
+              held: overlayGeneration.current,
+              next: incoming,
+            },
+            options?.replace,
+          );
           const replaced = url !== overlayScreenUrlRef.current;
           let generation = overlayGeneration.current;
           if (replaced || generation == null) generation = url ? incoming : null;
           showOverlayScreen(url, generation);
         } else {
-          const url = reuseScreenUrl(screenUrlRef.current, screen.url, Date.now(), {
-            held: heldScreenGeneration.current,
-            next: incoming,
-          });
+          const url = reuseScreenUrl(
+            screenUrlRef.current,
+            screen.url,
+            Date.now(),
+            {
+              held: heldScreenGeneration.current,
+              next: incoming,
+            },
+            options?.replace,
+          );
           const replaced = url !== screenUrlRef.current;
           let generation = heldScreenGeneration.current;
           if (replaced || generation == null) generation = url ? incoming : null;
@@ -2706,6 +2718,9 @@ export function ShellPage() {
     const wasOpen = overlayWasOpen.current;
     overlayWasOpen.current = computerOpen;
     if (!wasOpen || computerOpen) return;
+    overlayScreenUrlRef.current = null;
+    overlayGeneration.current = null;
+    setOverlayScreenUrl(null);
     const id = computerBotIdRef.current ?? active?.id;
     if (id) void refreshComputerScreen(id);
   }, [computerOpen, active?.id]);
@@ -2810,7 +2825,7 @@ export function ShellPage() {
   const refreshRejectedScreen = async () => {
     const id = computerBotIdRef.current ?? activeBotId.current;
     if (!id) return false;
-    const url = await refreshComputerScreen(id);
+    const url = await refreshComputerScreen(id, { replace: true });
     const status = url ? null : await rpc.computer.status({ botId: id }).catch(() => null);
     if (status && (computerBotIdRef.current === id || activeBotId.current === id)) {
       commitComputer(status);

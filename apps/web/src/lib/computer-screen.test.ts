@@ -145,6 +145,17 @@ describe("reuseScreenUrl", () => {
     expect(reuseScreenUrl(current, fresh, now, { held: null, next: generation(174) })).toBe(fresh);
   });
 
+  it("does not reuse a control seal, and a rejection takes the server url", () => {
+    const current = live("control", now + 30 * 60_000, "old-lease");
+    const fresh = live("control", now + 50 * 60_000, "new-lease");
+    const same = { held: generation(171), next: generation(171) };
+    expect(reuseScreenUrl(current, fresh, now, same)).toBe(fresh);
+    const view = live("view", now + 30 * 60_000, "view-token");
+    const rotated = live("view", now + 50 * 60_000, "rotated-token");
+    expect(reuseScreenUrl(view, rotated, now, same)).toBe(view);
+    expect(reuseScreenUrl(view, rotated, now, same, true)).toBe(rotated);
+  });
+
   it("takes a new url when the policy changes or the url is not sealed noVNC", () => {
     const current = live("view", now + 120_000, "current-token");
     const control = live("control", now + 300_000, "control-token");
