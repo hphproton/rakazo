@@ -32,6 +32,14 @@ export function sandHandRefuses(kind: string): boolean {
   return SAND_REFUSED_KINDS.has(kind);
 }
 
+/**
+ * Dedicated sand seats keep the refusal surface. A team computer uses the
+ * stock open, launch, and focus tools on its own display.
+ */
+export function sandSeatHands(providerId: string, scope: string): boolean {
+  return providerId === "sand" && scope !== "team";
+}
+
 /** Turn guidance for a sand computer. Non-vision models keep the filesystem sentence and the same refusals. */
 export function sandComputerInstruction(seesDesktop: boolean): string {
   return seesDesktop ? VISION_INSTRUCTION : `${FILESYSTEM_SENTENCE} ${SAND_HAND_REFUSAL}`;

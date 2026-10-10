@@ -328,6 +328,7 @@ import {
   sandComputerInstruction,
   sandHandRefuses,
   sandHandToolSurface,
+  sandSeatHands,
 } from "./sand-hand.js";
 import { isDirectoryReadError, isSandControlDenied, SandHostError } from "./sand-host.js";
 import {
@@ -3774,7 +3775,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const attachedFilesPrompt = currentTurnFilesInstruction(currentTurnFiles);
         const sandboxDescription = deps.sandbox.describe();
         const graphical = computer.kind !== "desktop" && sandboxDescription.capabilities.graphical;
-        const sandHands = sandboxDescription.id === "sand";
+        const sandHands = sandSeatHands(sandboxDescription.id, computerMode);
         // Gate on the model this run will actually call — the pair written to the run row
         // above. Deriving it a second time here dropped the deployment fallback, so a
         // vision-capable default was gated as "scripted" and lost its screenshot tools.
@@ -3827,7 +3828,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const voiceCall = callEndRun || isCallClientNonce(sourceClientNonce);
         const graphicalToolsAllowed = graphical && acceptsImages && !heldForTakeover;
         const pageBrowserAllowed =
-          graphical && browser.describe().capabilities.page && !heldForTakeover;
+          graphical && browser.describe().capabilities.page && !heldForTakeover && !sandHands;
         const disabledBuiltinTools = disabledBuiltinToolSet(bot.disabledBuiltinTools);
         const builtins = [
           ...selectBuiltinToolsForRun({
