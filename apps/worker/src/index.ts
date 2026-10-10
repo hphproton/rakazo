@@ -20,6 +20,7 @@ import {
   createRunSandbox,
   createRunSecretWriter,
   createTeamDesktopAllocator,
+  createTeamDesktopChromeStarter,
   createWebProvider,
   databaseCapacityBackoffMs,
   ExpoPushProvider,
@@ -116,6 +117,9 @@ async function main() {
       members: () => listTeamBMemberBotIds(prisma),
       activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
       onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
+      startBrowser: createTeamDesktopChromeStarter({
+        token: sandboxProviderOptionsFromEnv(process.env).sandHostToken,
+      }),
     }),
   );
   let stopDisplayWatch: (() => void) | undefined;

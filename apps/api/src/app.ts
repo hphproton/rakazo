@@ -36,6 +36,7 @@ import {
   createRunSecretWriter,
   createSecretStore,
   createTeamDesktopAllocator,
+  createTeamDesktopChromeStarter,
   createWebProvider,
   deletePushToken,
   destroyBot,
@@ -287,6 +288,9 @@ export async function createApp(
       members: () => listTeamBMemberBotIds(prisma),
       activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
       onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
+      startBrowser: createTeamDesktopChromeStarter({
+        token: sandboxProviderOptionsFromEnv().sandHostToken,
+      }),
     }),
   );
   if (teamDesktops) {

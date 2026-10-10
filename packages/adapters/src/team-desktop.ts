@@ -193,7 +193,8 @@ export function teamDesktopPorts(displayIndex: number): {
 } {
   assertTeamDesktopIndex(displayIndex);
   // Sand desktops bind the browser debugger at 9222+N (display 111 → 9333).
-  // The Docker computer runtime uses 9221+display and is a different process.
+  // The listener has to be that display's Chrome. The Docker computer runtime
+  // uses 9221+display and is a different process.
   return {
     cdp: 9222 + displayIndex,
     exec: 14000 + displayIndex,
@@ -330,6 +331,15 @@ export function createTeamDesktopAllocator(options: {
    * Callers publish; this allocator does not wait on them.
    */
   onState?: (botId: string, state: TeamDesktopCardState) => void | Promise<void>;
+  /**
+   * Starts this display's Chrome once the window is up. A failure leaves the
+   * desktop running; the page browser will not attach to anything else.
+   */
+  startBrowser?: (desktop: {
+    botId: string;
+    displayIndex: number;
+    ownerToken: string;
+  }) => Promise<void>;
 }): TeamDesktopAllocator {
   const idleMinutes = options.idleMinutes ?? TEAM_DESKTOP_DEFAULT_IDLE_MINUTES;
   const maxRunning = options.maxRunning ?? TEAM_DESKTOP_DEFAULT_MAX_RUNNING;
@@ -343,6 +353,7 @@ export function createTeamDesktopAllocator(options: {
   const members = options.members;
   const activeRuns = options.activeRuns;
   const onState = options.onState;
+  const startBrowser = options.startBrowser;
   const watchedRuns = new Set<string>();
   let tail: Promise<unknown> = Promise.resolve();
   let lastReconcileAt = 0;
@@ -524,6 +535,20 @@ export function createTeamDesktopAllocator(options: {
     await store.update(botId, { state: "running", lastUsedAt: usedAt });
     notifyCard(botId, cardState, "running");
     getLogger().info("team desktop running", { botId, displayIndex: current.displayIndex });
+    if (startBrowser) {
+      try {
+        await startBrowser({
+          botId,
+          displayIndex: current.displayIndex,
+          ownerToken: current.ownerToken,
+        });
+      } catch (error) {
+        getLogger().error(
+          "team desktop chrome start failed",
+          scrubbed(error, [current.ownerToken]),
+        );
+      }
+    }
     return { displayIndex: current.displayIndex, ownerToken: current.ownerToken };
   }
 

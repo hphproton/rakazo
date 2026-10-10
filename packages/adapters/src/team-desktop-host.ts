@@ -12,6 +12,7 @@ import {
   teamDesktopPorts,
   teamDesktopPurgePaths,
 } from "./team-desktop.js";
+import { teamDesktopCdpStatus } from "./team-desktop-chrome.js";
 import {
   cleanTeamDesktopOrphans,
   linuxTeamDesktopOrphanControl,
@@ -44,10 +45,16 @@ export type TeamDesktopCommand = (
  * stay as they are.
  */
 export function createLinuxTeamDesktopHost(
-  deps: { command?: TeamDesktopCommand; orphans?: TeamDesktopOrphanControl } = {},
+  deps: {
+    command?: TeamDesktopCommand;
+    orphans?: TeamDesktopOrphanControl;
+    /** Tests point this at a fake process table. Production reads /proc. */
+    procRoot?: string;
+  } = {},
 ): TeamDesktopHost {
   const command = deps.command ?? defaultCommand;
   const orphans = deps.orphans ?? linuxTeamDesktopOrphanControl();
+  const procRoot = deps.procRoot;
 
   async function safeClean(displayIndexes: readonly number[]): Promise<void> {
     try {
@@ -89,7 +96,7 @@ export function createLinuxTeamDesktopHost(
       assertTeamDesktopIndex(displayIndex);
       if (!ownerToken) throw new Error("Team desktop owner token is missing.");
       await safeClean([displayIndex]);
-      await assertCdpPortFree(displayIndex);
+      await assertCdpPortFree(displayIndex, procRoot);
       const code = await command(
         START_WINDOW_BIN,
         [String(displayIndex), ownerToken],
@@ -174,12 +181,15 @@ function tcpOpen(port: number): Promise<boolean> {
 }
 
 /**
- * A foreign listener (a stray browser on 9222+N) would make the desktop's own
- * browser fail to bind. Wait briefly so a session we just signaled can drop
- * the port, then refuse the start.
+ * A foreign listener on 9222+N is not this desktop's Chrome, and it would
+ * make that Chrome fail to bind. This display's own Chrome may already hold
+ * the port. Wait briefly so a session we just signaled can drop any other
+ * socket, then refuse the start.
  */
-async function assertCdpPortFree(displayIndex: number): Promise<void> {
+async function assertCdpPortFree(displayIndex: number, procRoot?: string): Promise<void> {
   const port = teamDesktopPorts(displayIndex).cdp;
+  if (!(await tcpOpen(port))) return;
+  if ((await teamDesktopCdpStatus(displayIndex, procRoot)) === "owned") return;
   let waited = 0;
   while (await tcpOpen(port)) {
     if (waited >= CDP_BUSY_WAIT_MS) throw new Error(teamDesktopCdpBusyMessage(displayIndex));

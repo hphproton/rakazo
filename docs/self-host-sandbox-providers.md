@@ -70,8 +70,11 @@ takeover, extra screen, or page browser. A Team desktop in 101–150 runs
 (`xdotool`, `xdg-open`, or a detached spawn). A start resolves an executable
 or a `.desktop` entry, discards stdio, and returns once the process is spawned.
 An unknown name is an error. Team exec sets `BROWSER=/usr/local/bin/box-chrome`
-when the caller did not. `PATH` is left unchanged. Its page browser uses
-box-chrome on `127.0.0.1:9222+N`. Its shell is a sealed bridge to the pty
+when the caller did not. `PATH` is left unchanged. Waking the desktop starts
+that browser on display `:N` with profile `/home/box/chrome-profile/Fork-N`
+and the debugger on `127.0.0.1:9222+N`. The page browser starts it the same
+way when it is not already listening, then attaches only when the process
+on that port is that Chrome. Its shell is a sealed bridge to the pty
 websocket on `13600+N`; that websocket has no auth token and is not exposed.
 Takeover uses the existing control viewer. Snapshots stay off: the host has
 no snapshot API. A directory is listed or skipped; it is not passed to
