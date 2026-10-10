@@ -14,6 +14,7 @@ import {
   isConversationalRun,
   isSecretAskBlock,
   messagingChannelId,
+  releasedTakeoverComputerBlocks,
   resolveAskChoice,
   sanitizeJsonValue,
 } from "@rakazo/core";
@@ -1040,9 +1041,30 @@ export async function finalizeComputerControlRelease(
       select: { thread: { select: { id: true } } },
     });
     if (!bot?.thread) return { threadId: null, seq: null, runId };
+
+    // The computer card and the open transcript live on the run thread.
+    // A group run is not the bot's own thread, so the release has to land there too.
+    let runThreadId: string | null = null;
+    if (input.runId) {
+      const waiting = await tx.run.findUnique({
+        where: { id: input.runId },
+        select: { threadId: true },
+      });
+      runThreadId = waiting?.threadId ?? null;
+      if (runThreadId) {
+        await tx.$queryRaw`SELECT id FROM threads WHERE id = ${runThreadId} FOR UPDATE`;
+        await settleReleasedTakeoverCardsInTransaction(tx, {
+          spaceId: input.spaceId,
+          threadId: runThreadId,
+          botId: input.botId,
+          runId: input.runId,
+        });
+      }
+    }
+
     const event = await appendEventInTransaction(tx, {
       spaceId: input.spaceId,
-      threadId: bot.thread.id,
+      threadId: runThreadId ?? bot.thread.id,
       botId: input.botId,
       runId: runId ?? undefined,
       type: "computer.takeover.released",
@@ -1060,6 +1082,53 @@ export async function finalizeComputerControlRelease(
     await notifyRealtime(realtime, committed.threadId, committed.seq);
   }
   return { runId: committed.runId };
+}
+
+/**
+ * Clear a pending takeover computer card when the run resumes.
+ * Release already settles the card; this covers a card that is still pending.
+ */
+export async function settleReleasedTakeoverCards(
+  prisma: PrismaClient,
+  input: { spaceId: string; threadId: string; botId: string; runId: string },
+  notify?: (threadId: string, seq: number) => Promise<void>,
+): Promise<void> {
+  const seq = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.$queryRaw`SELECT id FROM threads WHERE id = ${input.threadId} FOR UPDATE`;
+    return settleReleasedTakeoverCardsInTransaction(tx, input);
+  });
+  if (seq !== null) await notify?.(input.threadId, seq);
+}
+
+async function settleReleasedTakeoverCardsInTransaction(
+  tx: Prisma.TransactionClient,
+  input: { spaceId: string; threadId: string; botId: string; runId: string },
+): Promise<number | null> {
+  const messages = await tx.message.findMany({
+    where: { threadId: input.threadId, runId: input.runId, role: "bot" },
+    select: { id: true, blocks: true },
+  });
+  let lastSeq: number | null = null;
+  for (const message of messages) {
+    const parsed = MessageBlockSchema.array().safeParse(message.blocks);
+    if (!parsed.success) continue;
+    const blocks = releasedTakeoverComputerBlocks(parsed.data);
+    if (!blocks) continue;
+    await tx.message.update({
+      where: { id: message.id },
+      data: { blocks: blocks as Prisma.InputJsonValue },
+    });
+    const updated = await appendEventInTransaction(tx, {
+      spaceId: input.spaceId,
+      threadId: input.threadId,
+      botId: input.botId,
+      type: "thread.message.updated",
+      runId: input.runId,
+      payload: { messageId: message.id, role: "bot", blocks },
+    });
+    lastSeq = updated.seq;
+  }
+  return lastSeq;
 }
 
 export async function appendEvent(

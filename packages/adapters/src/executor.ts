@@ -88,6 +88,7 @@ import {
   renderHubDirectory,
   resolveActionApprovalDetail,
   sandboxCommandTimeoutMs,
+  TAKEOVER_COMPUTER_PENDING_STATE,
   type ToolCallStreak,
   toolRequiresApproval,
   toolRequiresExplicitApproval,
@@ -121,6 +122,7 @@ import {
   retireModelCredential,
   SpaceLimitError,
   searchHistory,
+  settleReleasedTakeoverCards,
   type ThreadEvents,
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
@@ -3323,6 +3325,18 @@ export function createRunExecutor(deps: ExecutorDeps) {
       if (leaseTarget.computerSwitching) {
         await requeueComputerRun(deps, runId, workerId, fence, resumeCheckpoint, heldForTakeover);
         return;
+      }
+      if (takeoverResume) {
+        await settleReleasedTakeoverCards(
+          deps.prisma,
+          {
+            spaceId: run.spaceId,
+            threadId: run.threadId,
+            botId: run.botId,
+            runId,
+          },
+          (threadId, seq) => deps.events.notify(threadId, seq),
+        );
       }
       let computerLease: ComputerExecutionLease | null = null;
       try {
@@ -6860,7 +6874,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 deps,
                 run,
                 "bot",
-                [{ kind: "computer", state: "Needs you", text: safeReason }],
+                [{ kind: "computer", state: TAKEOVER_COMPUTER_PENDING_STATE, text: safeReason }],
                 true,
               );
               await flushRunWorkspaceCheckpoint(workspaceCheckpoint);

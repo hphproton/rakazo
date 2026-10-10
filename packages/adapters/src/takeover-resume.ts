@@ -29,7 +29,7 @@ export function takeoverResumeFromRelease(reason: unknown): {
   return {
     checkpoint: "takeover",
     promptNote:
-      "The user finished the login. Continue from where you left off. Do not request takeover again.",
+      "The user returned control. Continue from where you left off. Do not request takeover again.",
   };
 }
 
