@@ -90,6 +90,6 @@ export function toComputerStatus(
     homeRevision: computer?.homeRevision ?? null,
     busyBotName,
     canUpdate: computerSupportsUpdate(kind),
-    terminalAvailable: computerSupportsTerminal(kind),
+    terminalAvailable: computerSupportsTerminal(kind, computer?.scope),
   };
 }

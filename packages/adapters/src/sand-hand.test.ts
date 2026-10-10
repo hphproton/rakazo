@@ -8,6 +8,7 @@ import {
   sandComputerInstruction,
   sandHandRefuses,
   sandHandToolSurface,
+  sandSeatHands,
 } from "./sand-hand.js";
 import { sandImageMeta } from "./sand-host.js";
 
@@ -125,6 +126,9 @@ describe("sand hand tool surface", () => {
     expect(sandHandRefuses("open")).toBe(true);
     expect(sandHandRefuses("launch")).toBe(true);
     expect(sandHandRefuses("click")).toBe(false);
+    expect(sandSeatHands("sand", "dedicated")).toBe(true);
+    expect(sandSeatHands("sand", "team")).toBe(false);
+    expect(sandSeatHands("docker", "team")).toBe(false);
   });
 
   it("hides screenshot tools without vision and drops open and launch when sand hands are on", () => {

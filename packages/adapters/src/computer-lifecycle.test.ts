@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   acquireComputerExecutionLease,
   ComputerBusyError,
+  computerSupportsTerminal,
   computerSupportsUpdate,
   holdComputerExecutionLeaseForTakeover,
   provisionComputer,
@@ -2085,6 +2086,10 @@ describe("computer replacement", () => {
   it("exposes update availability by sandbox kind", () => {
     expect(computerSupportsUpdate("e2b")).toBe(true);
     expect(computerSupportsUpdate("desktop")).toBe(false);
+    expect(computerSupportsTerminal("docker")).toBe(true);
+    expect(computerSupportsTerminal("sand")).toBe(false);
+    expect(computerSupportsTerminal("sand", "dedicated")).toBe(false);
+    expect(computerSupportsTerminal("sand", "team")).toBe(true);
   });
 
   it("replaces a wedged computer and restores the durable home", async () => {

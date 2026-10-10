@@ -635,8 +635,12 @@ export function computerSupportsUpdate(kind: string): boolean {
   return kind !== "desktop";
 }
 
-/** Kinds whose provider opens a user terminal through the shared Linux screen gateway. */
-export function computerSupportsTerminal(kind: string): boolean {
+/**
+ * Kinds whose provider opens a user terminal through the shared screen gateway.
+ * Sand seats stay closed. A team desktop shells through its sealed pty bridge.
+ */
+export function computerSupportsTerminal(kind: string, scope?: string): boolean {
+  if (kind === "sand") return scope === "team";
   return (
     kind === "docker" || kind === "e2b" || kind === "daytona" || kind === "box" || kind === "fake"
   );

@@ -2185,6 +2185,24 @@ describe("computer terminal and file transfer", () => {
     );
   });
 
+  it("offers a shell on a team desktop and not on a sand seat", async () => {
+    const seat = setup({ ...controlled, kind: "sand", scope: "dedicated" });
+    await expect(seat.call("terminalUrl", {})).resolves.toEqual({
+      status: 200,
+      body: { json: { url: null } },
+    });
+    expect(seat.sandbox.connectTerminal).not.toHaveBeenCalled();
+
+    const team = setup({ ...controlled, kind: "sand", scope: "team" });
+    const opened = await team.call("terminalUrl", {});
+    expect(opened.status).toBe(200);
+    expect(team.sandbox.connectTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "sand" }),
+      { controlToken: "lease-1", cwd: "bots/bot-1" },
+      expect.anything(),
+    );
+  });
+
   it("offers no terminal on host computers", async () => {
     const { sandbox, call } = setup({ ...controlled, kind: "desktop" });
     await expect(call("terminalUrl", {})).resolves.toEqual({

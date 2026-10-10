@@ -26,11 +26,22 @@ display through `x-sand-display` and `x-sand-window-owner` on
 `http://127.0.0.1:1339`. A private computer, a missing computer, or an archived
 bot keeps the seat map. A desktop with a run still in progress is not idle-stopped. The pod
 workspace is `/workspace`, shared by sand windows, and it is not a Team B
-container. Sand hands are `computer_observe` plus `computer_act` kinds click,
-move, down, up, type, key, scroll, and wait. `focus`, `open_path`, and
-`launch_app` are refused. The provider is graphical, without a pty, snapshots,
-takeover, multiple screens, or a page browser. A model that cannot see keeps
-the filesystem tools and those same refusals; screenshot tools stay hidden.
+container. Sand hands on a dedicated seat are `computer_observe` plus `computer_act`
+kinds click, move, down, up, type, key, scroll, and wait. `focus`,
+`open_path`, and `launch_app` are refused there. A dedicated seat has no pty,
+snapshot, takeover, or page browser.
+A Team desktop in 101–150 runs those three actions on that display's exec
+daemon: `focus` raises a window with `xdotool` or starts it with `setsid`,
+`open_path` uses `xdg-open`, and `launch_app` starts the application with
+`setsid`. Browser names start `/usr/local/bin/box-chrome`. Team exec requests
+set `BROWSER=/usr/local/bin/box-chrome` when the caller did not set `BROWSER`.
+`PATH` is left unchanged. The page browser attaches to that desktop's
+box-chrome on `127.0.0.1:9222+N`. The shell is a sealed local bridge to the
+desktop's pty websocket. That websocket has no auth token, so it is not given
+to the browser. Takeover uses the existing control viewer and lease.
+Snapshots stay off: the host has no snapshot API, and a workspace export is
+not a snapshot. A model that cannot see keeps the filesystem tools and, on a
+dedicated seat, those same refusals; screenshot tools stay hidden.
 Reading a directory lists or skips it instead of calling ReadBinaryFile.
 A ListDirectory permission denial is listed with `ls` on that seat when the
 names are still readable. If listing is still denied, `list_files` returns

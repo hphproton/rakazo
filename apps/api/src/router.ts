@@ -3159,7 +3159,7 @@ export function createRouter(deps: RouterDeps) {
           !computer?.providerRef ||
           computer.state !== "running" ||
           !deps.sandbox.connectTerminal ||
-          !computerSupportsTerminal(computer.kind)
+          !computerSupportsTerminal(computer.kind, computer.scope)
         ) {
           return { url: null };
         }

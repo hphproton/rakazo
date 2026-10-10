@@ -8,11 +8,14 @@ import type {
   ComputerObservation,
   ComputerRef,
   ControlLeaseRef,
+  PageBrowserCommand,
+  PageBrowserResult,
   PortableFile,
   ProcessEvent,
   SandboxProvider,
   ScreenRequest,
   ScreenSession,
+  TerminalRequest,
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import {
@@ -20,6 +23,7 @@ import {
   computerObservation,
   normalizeWorkspacePath,
 } from "./computer-support.js";
+import { isTeamDesktopHand, runTeamDesktopHand } from "./sand-desktop-hands.js";
 import { SAND_HAND_REFUSAL, sandHandRefuses } from "./sand-hand.js";
 import type { SandComputerAction, SandDirectoryEntry, SandHost } from "./sand-host.js";
 import {
@@ -30,7 +34,10 @@ import {
   SandPathIsDirectoryError,
   sandExecEnv,
   sandImageMeta,
+  sandTeamExecEnv,
 } from "./sand-host.js";
+import { pageBrowserFallback, runSandPageBrowser } from "./sand-page-browser.js";
+import { SandPtyBridge } from "./sand-pty.js";
 import type { SandSeatPolicy } from "./sand-seat.js";
 import {
   requireSandSeat,
@@ -39,7 +46,12 @@ import {
 } from "./sand-seat.js";
 import { createStepSignal } from "./step-signal.js";
 import type { TeamDesktopBinding } from "./team-desktop.js";
-import { TeamDesktopMissingError, teamDesktopViewerUrl } from "./team-desktop.js";
+import {
+  TEAM_DESKTOP_MAX_INDEX,
+  TEAM_DESKTOP_MIN_INDEX,
+  TeamDesktopMissingError,
+  teamDesktopViewerUrl,
+} from "./team-desktop.js";
 
 /** Shared pod workspace for every sand window. Not a Team B container home. */
 export const SAND_WORKSPACE = "/workspace";
@@ -57,14 +69,37 @@ export interface TeamDesktopGateway {
 }
 
 export class SandSandboxProvider implements SandboxProvider {
+  private readonly terminals: SandPtyBridge;
+
   constructor(
     private readonly opts: {
       policy: SandSeatPolicy;
       host: SandHost;
       /** Present when this process owns Team B desktop allocation. */
       teamDesktops?: TeamDesktopGateway;
+      /** Test seam. Production runs the stock page-browser helper. */
+      runPageBrowser?: typeof runSandPageBrowser;
+      /** Test seam. Production dials 13600+N on loopback. */
+      ptyBridge?: SandPtyBridge;
     },
-  ) {}
+  ) {
+    this.terminals = opts.ptyBridge ?? new SandPtyBridge();
+  }
+
+  async pageBrowser(
+    computer: ComputerRef,
+    request: PageBrowserCommand,
+    context: AdapterContext,
+  ): Promise<PageBrowserResult> {
+    const route = await this.session(computer, context, true);
+    if (!route.displayIndex) return pageBrowserFallback(request.command);
+    const run = this.opts.runPageBrowser ?? runSandPageBrowser;
+    return run({
+      displayIndex: route.displayIndex,
+      command: request,
+      signal: context.signal,
+    });
+  }
 
   describe() {
     return {
@@ -73,9 +108,9 @@ export class SandSandboxProvider implements SandboxProvider {
       adapterVersion: "0.1.0",
       capabilities: {
         graphical: true,
-        pty: false,
+        pty: true,
         snapshots: false,
-        takeover: false,
+        takeover: true,
         persistentHome: true,
         multiScreen: false,
       },
@@ -162,9 +197,10 @@ export class SandSandboxProvider implements SandboxProvider {
       const route = await this.session(computer, context, true);
       // The deadline is already on step.signal. timeoutMs 0 keeps exec from
       // arming a second one on the same command.
+      const env = route.displayIndex ? sandTeamExecEnv(request.env) : sandExecEnv(request.env);
       yield* route.host.exec(
         route.agentId,
-        { argv: request.argv, cwd, env: sandExecEnv(request.env), timeoutMs: 0 },
+        { argv: request.argv, cwd, env, timeoutMs: 0 },
         step.signal,
       );
     } catch (error) {
@@ -207,6 +243,31 @@ export class SandSandboxProvider implements SandboxProvider {
     return { url, mimeType: "text/html", close: async () => undefined };
   }
 
+  async connectTerminal(
+    computer: ComputerRef,
+    request: TerminalRequest,
+    context: AdapterContext,
+  ): Promise<{ url: string }> {
+    const route = await this.session(computer, context, true);
+    if (!route.displayIndex) throw new Error("terminal is unavailable on this computer");
+    return {
+      url: await this.terminals.open(
+        route.displayIndex,
+        request.controlToken,
+        sandWorkspacePath(request.cwd),
+      ),
+    };
+  }
+
+  async setScreenControl(
+    _computer: ComputerRef,
+    interactive: boolean,
+    _context: AdapterContext,
+    controlToken?: string,
+  ): Promise<void> {
+    if (!interactive && controlToken) this.terminals.release(controlToken);
+  }
+
   async sendInput(
     computer: ComputerRef,
     input: ComputerInput,
@@ -229,8 +290,12 @@ export class SandSandboxProvider implements SandboxProvider {
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const route = await this.session(computer, context, true);
-    const actions = boundedComputerActions(request.actions).map(toSandAction);
-    const sent = request.observe === false ? actions : [...actions, { screenshot: {} }];
+    const actions = boundedComputerActions(request.actions);
+    if (route.displayIndex) {
+      return this.actOnTeamDesktop(route, actions, request.observe !== false, context.signal);
+    }
+    const translated = actions.map(toSandAction);
+    const sent = request.observe === false ? translated : [...translated, { screenshot: {} }];
     const result = await route.host.computerUse(route.agentId, sent, context.signal);
     return {
       completed: actions.length,
@@ -434,32 +499,69 @@ export class SandSandboxProvider implements SandboxProvider {
     computer: ComputerRef,
     context: AdapterContext,
     wake: boolean,
-  ): Promise<{ host: SandHost; agentId: string }> {
+  ): Promise<{ host: SandHost; agentId: string; displayIndex?: number }> {
     const gateway = this.opts.teamDesktops;
     const botId = context.botId || computer.botId;
     if (gateway && wake) {
       try {
         const binding = await gateway.ensure(botId);
-        const host =
-          this.opts.host instanceof ConnectSandHost
-            ? this.opts.host.withDisplay(binding)
-            : this.opts.host;
-        return { host, agentId: botId };
+        return this.desktopSession(binding, botId);
       } catch (error) {
         if (!(error instanceof TeamDesktopMissingError)) throw error;
       }
     } else if (gateway) {
       const resolved = await gateway.resolve(botId);
-      if (resolved) {
-        const host =
-          this.opts.host instanceof ConnectSandHost
-            ? this.opts.host.withDisplay(resolved)
-            : this.opts.host;
-        return { host, agentId: botId };
-      }
+      if (resolved) return this.desktopSession(resolved, botId);
     }
     const seat = this.seat(computer, context);
     return { host: this.opts.host, agentId: seat.agentId };
+  }
+
+  private desktopSession(binding: TeamDesktopBinding, botId: string) {
+    const host =
+      this.opts.host instanceof ConnectSandHost
+        ? this.opts.host.withDisplay(binding)
+        : this.opts.host;
+    const displayIndex = teamDisplayIndex(binding.displayIndex);
+    return { host, agentId: botId, ...(displayIndex ? { displayIndex } : {}) };
+  }
+
+  /**
+   * Team-desktop focus, open, and launch run as exec on that display.
+   * Pointer actions stay on computer-use. A screenshot, when requested, is last.
+   */
+  private async actOnTeamDesktop(
+    route: { host: SandHost; agentId: string },
+    actions: ComputerAction[],
+    observe: boolean,
+    signal: AbortSignal,
+  ) {
+    let pending: SandComputerAction[] = [];
+    let observation: ComputerObservation | undefined;
+    const flush = async (screenshot: boolean) => {
+      if (pending.length === 0 && !screenshot) return;
+      const sent = screenshot ? [...pending, { screenshot: {} }] : [...pending];
+      pending = [];
+      const result = await route.host.computerUse(route.agentId, sent, signal);
+      if (screenshot) observation = observationFrom(result.screenshot, result.cursor);
+    };
+    for (const action of actions) {
+      if (!isTeamDesktopHand(action)) {
+        pending.push(toSandAction(action));
+        continue;
+      }
+      await flush(false);
+      await runTeamDesktopHand(
+        action,
+        (argv) => collectExec(route.host, route.agentId, argv, signal),
+        sandWorkspacePath,
+      );
+    }
+    await flush(observe);
+    return {
+      completed: actions.length,
+      ...(observation ? { observation } : {}),
+    };
   }
 
   private seat(computer: ComputerRef, context: AdapterContext) {
@@ -624,6 +726,43 @@ function observationFrom(
     height: image.height,
     ...(cursor ? { cursor } : {}),
   });
+}
+
+function teamDisplayIndex(displayIndex: number): number | undefined {
+  if (
+    !Number.isInteger(displayIndex) ||
+    displayIndex < TEAM_DESKTOP_MIN_INDEX ||
+    displayIndex > TEAM_DESKTOP_MAX_INDEX
+  ) {
+    return undefined;
+  }
+  return displayIndex;
+}
+
+async function collectExec(
+  host: SandHost,
+  agentId: string,
+  argv: string[],
+  signal: AbortSignal,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let stdout = "";
+  let stderr = "";
+  let code = 0;
+  for await (const event of host.exec(
+    agentId,
+    {
+      argv,
+      cwd: SAND_WORKSPACE,
+      env: sandTeamExecEnv(undefined),
+      timeoutMs: boundedSandboxCommandTimeoutMs(undefined),
+    },
+    signal,
+  )) {
+    if (event.type === "stdout") stdout += event.data;
+    if (event.type === "stderr") stderr += event.data;
+    if (event.type === "exit") code = event.code;
+  }
+  return { code, stdout, stderr };
 }
 
 async function drainExec(

@@ -127,6 +127,24 @@ export function sandExecEnv(env: Record<string, string> | undefined): Record<str
   return kept;
 }
 
+/**
+ * Absolute browser the Grok window daemon exports as `BROWSER`.
+ * Team-desktop exec sets the same value. It does not add a PATH entry.
+ */
+export const SAND_TEAM_BROWSER = "/usr/local/bin/box-chrome";
+
+/**
+ * Exec environment for a team desktop. The window daemon already has `DISPLAY`
+ * and merges its process environment under the request, so a request that
+ * omits `BROWSER` still inherits box-chrome there. Setting it here keeps the
+ * same absolute value when the caller did not. `PATH` is copied through unchanged.
+ */
+export function sandTeamExecEnv(env: Record<string, string> | undefined): Record<string, string> {
+  const kept = sandExecEnv(env);
+  if (!Object.hasOwn(kept, "BROWSER")) kept.BROWSER = SAND_TEAM_BROWSER;
+  return kept;
+}
+
 export function sandImageMeta(bytes: Uint8Array): {
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   width: number;

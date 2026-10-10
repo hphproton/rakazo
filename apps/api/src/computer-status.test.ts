@@ -51,6 +51,23 @@ describe("toComputerStatus", () => {
       }).canUpdate,
     ).toBe(true);
   });
+
+  it("offers a shell on a team desktop and not on a sand seat", () => {
+    const base = {
+      state: "running",
+      controlHolder: "none",
+      homeRevision: "r1",
+    };
+    expect(
+      toComputerStatus("bot-1", { ...base, kind: "sand", scope: "team" }).terminalAvailable,
+    ).toBe(true);
+    expect(
+      toComputerStatus("bot-1", { ...base, kind: "sand", scope: "dedicated" }).terminalAvailable,
+    ).toBe(false);
+    expect(
+      toComputerStatus("bot-1", { ...base, kind: "docker", scope: "team" }).terminalAvailable,
+    ).toBe(true);
+  });
 });
 
 describe("executionBlocksUserTakeover", () => {
