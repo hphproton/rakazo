@@ -55,10 +55,13 @@ class MemoryTeamDesktopStore implements TeamDesktopStore {
     this.rows.set(row.botId, { ...row });
   }
 
-  async update(botId: string, patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt">>) {
+  async update(
+    botId: string,
+    patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt" | "updatedAt">>,
+  ) {
     const row = this.rows.get(botId);
     if (!row) throw new Error(`missing ${botId}`);
-    this.rows.set(botId, { ...row, ...patch, updatedAt: new Date() });
+    this.rows.set(botId, { ...row, ...patch, updatedAt: patch.updatedAt ?? row.updatedAt });
   }
 
   async delete(botId: string) {
@@ -153,6 +156,7 @@ function harness(options?: {
   ensureTimeoutMs?: number;
   members?: () => Promise<readonly string[]>;
   activeRuns?: () => Promise<readonly string[]>;
+  activeLeases?: () => Promise<readonly string[]>;
   onState?: (botId: string, state: TeamDesktopCardState) => void;
   startBrowser?: (desktop: {
     botId: string;
@@ -171,6 +175,7 @@ function harness(options?: {
     ensureTimeoutMs: options?.ensureTimeoutMs,
     members: options?.members,
     activeRuns: options?.activeRuns,
+    activeLeases: options?.activeLeases,
     onState: options?.onState,
     startBrowser: options?.startBrowser,
     now: () => now,
@@ -621,12 +626,18 @@ describe("team desktop reconcile", () => {
     expect(host.purges).toContain(130);
     expect(row(store, "dead").state).toBe("stopped");
     expect(row(store, "dead").ownerToken).toBe(deadToken);
-    expect(row(store, "idle").state).toBe("stopped");
+    expect(row(store, "idle").state).toBe("running");
     expect(row(store, "live").state).toBe("running");
     expect(host.stops).not.toContain(liveIndex);
+    expect(host.stops).not.toContain(idleIndex);
+    expect(host.orphanPasses).toBe(1);
+
+    await alloc.reconcile();
+
+    expect(row(store, "idle").state).toBe("stopped");
+    expect(host.stops).toContain(idleIndex);
     expect(host.cleans).toEqual(expect.arrayContaining([130, deadIndex, idleIndex]));
     expect(host.cleans).not.toContain(liveIndex);
-    expect(host.orphanPasses).toBe(1);
     expect(host.cleans.every((index) => index >= 101 && index <= 150)).toBe(true);
     expect(host.probedIndexes.every((index) => index >= 101 && index <= 150)).toBe(true);
     expect(host.probedPorts.every((port) => displayForPort(port) !== undefined)).toBe(true);
@@ -658,13 +669,73 @@ describe("team desktop reconcile", () => {
   });
 
   it("stops a booting desktop that never came up when no run is using it", async () => {
-    const { alloc, host, store } = harness();
+    const { alloc, host, store, now } = harness();
     await alloc.reserve("idle");
     const current = row(store, "idle");
-    store.rows.set("idle", { ...current, state: "booting" });
+    store.rows.set("idle", {
+      ...current,
+      state: "booting",
+      updatedAt: new Date(now().getTime() - 21_000),
+    });
     await alloc.reconcile();
     expect(row(store, "idle").state).toBe("stopped");
     expect(host.stops).toContain(current.displayIndex);
+  });
+
+  it("leaves a booting desktop alone until its ensure deadline", async () => {
+    const { alloc, host, store, now } = harness();
+    await alloc.reserve("idle");
+    const current = row(store, "idle");
+    store.rows.set("idle", { ...current, state: "booting", updatedAt: now() });
+    host.stops.length = 0;
+    await alloc.reconcile();
+    expect(row(store, "idle").state).toBe("booting");
+    expect(host.stops).not.toContain(current.displayIndex);
+  });
+
+  it("does not stop a desktop another process is still booting", async () => {
+    const store = new MemoryTeamDesktopStore();
+    const host = new FakeTeamDesktopHost();
+    let now = new Date("2026-10-07T12:00:00.000Z");
+    const tails = new Map<number, Promise<unknown>>();
+    let waiters = 0;
+    const withDisplayLock = async <T>(displayIndex: number, run: () => Promise<T>): Promise<T> => {
+      const previous = tails.get(displayIndex) ?? Promise.resolve();
+      if (tails.has(displayIndex)) waiters += 1;
+      const result = previous.then(run, run);
+      tails.set(
+        displayIndex,
+        result.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      return result;
+    };
+    const shared = {
+      store,
+      host,
+      now: () => now,
+      sleep: async () => undefined,
+      withDisplayLock,
+    };
+    const api = createTeamDesktopAllocator(shared);
+    const worker = createTeamDesktopAllocator(shared);
+    await api.reserve("bot");
+    host.blockStart = true;
+    const booting = api.ensure("bot");
+    await vi.waitFor(() => expect(host.releaseStart).toBeTypeOf("function"));
+    now = new Date(now.getTime() + 60_000);
+    const reconciling = worker.reconcile();
+    await vi.waitFor(() => expect(waiters).toBeGreaterThan(0));
+    expect(row(store, "bot").state).toBe("booting");
+    expect(host.stops).not.toContain(row(store, "bot").displayIndex);
+    host.blockStart = false;
+    host.releaseStart?.();
+    await booting;
+    await reconciling;
+    expect(row(store, "bot").state).toBe("running");
+    expect(host.stops).not.toContain(row(store, "bot").displayIndex);
   });
 
   it("leaves a booting desktop alone while its run is still active", async () => {
@@ -676,6 +747,132 @@ describe("team desktop reconcile", () => {
     await alloc.reconcile();
     expect(row(store, "busy").state).toBe("booting");
     expect(host.stops).not.toContain(current.displayIndex);
+  });
+
+  it("refreshes last use for an open control lease and does not idle-stop it", async () => {
+    let leases = ["chief"];
+    const { alloc, host, store, setNow, now } = harness({
+      activeLeases: async () => leases,
+    });
+    const started = new Date("2026-10-07T12:00:00.000Z");
+    setNow(started);
+    await alloc.ensure("chief");
+    const index = row(store, "chief").displayIndex;
+    host.alive.add(index);
+    await alloc.reconcile();
+    setNow(new Date(started.getTime() + 31 * 60_000));
+    await alloc.reconcile();
+    expect(row(store, "chief").state).toBe("running");
+    expect(row(store, "chief").lastUsedAt?.toISOString()).toBe(now().toISOString());
+    expect(host.stops).not.toContain(index);
+
+    leases = [];
+    setNow(new Date(now().getTime() + 31 * 60_000));
+    await alloc.reconcile();
+    expect(row(store, "chief").state).toBe("stopped");
+    expect(host.stops).toContain(index);
+  });
+
+  it("does not treat a control lease as use while the desktop is booting or stopped", async () => {
+    const { alloc, store, now } = harness({ activeLeases: async () => ["bot"] });
+    await alloc.reserve("bot");
+    const current = row(store, "bot");
+    store.rows.set("bot", { ...current, state: "booting", lastUsedAt: null, updatedAt: now() });
+    await alloc.reconcile();
+    expect(row(store, "bot").state).toBe("booting");
+    expect(row(store, "bot").lastUsedAt).toBeNull();
+
+    await alloc.stop("bot");
+    const stoppedAt = row(store, "bot").lastUsedAt?.toISOString() ?? null;
+    await alloc.reconcile();
+    expect(row(store, "bot").state).toBe("stopped");
+    expect(row(store, "bot").lastUsedAt?.toISOString() ?? null).toBe(stoppedAt);
+  });
+});
+
+describe("team desktop last use", () => {
+  it("moves lastUsedAt for a running desktop and leaves other states", async () => {
+    const { alloc, store, advance, now } = harness();
+    await alloc.ensure("live");
+    const before = row(store, "live").lastUsedAt?.getTime();
+    advance(60_000);
+    await alloc.touch("live");
+    expect(row(store, "live").state).toBe("running");
+    expect(row(store, "live").lastUsedAt?.getTime()).toBe(now().getTime());
+    expect(before).not.toBe(now().getTime());
+
+    await alloc.reserve("asleep");
+    store.rows.set("asleep", { ...row(store, "asleep"), state: "stopped", lastUsedAt: null });
+    await alloc.touch("asleep");
+    expect(row(store, "asleep").state).toBe("stopped");
+    expect(row(store, "asleep").lastUsedAt).toBeNull();
+
+    store.rows.set("asleep", { ...row(store, "asleep"), state: "booting", lastUsedAt: null });
+    await alloc.touch("asleep");
+    expect(row(store, "asleep").state).toBe("booting");
+    expect(row(store, "asleep").lastUsedAt).toBeNull();
+    await expect(alloc.touch("missing")).resolves.toBeUndefined();
+  });
+
+  it("logs idle, dead, cap, release, and an explicit stop", async () => {
+    const events: LogEvent[] = [];
+    installLogger(
+      createLogger({
+        service: "test",
+        level: "info",
+        sinks: [
+          {
+            write(event) {
+              events.push(event);
+            },
+          },
+        ],
+      }),
+    );
+    const started = new Date("2026-10-07T12:00:00.000Z");
+    const capped = harness({ maxRunning: 1, now: started });
+    await capped.alloc.ensure("explicit");
+    const explicitIndex = row(capped.store, "explicit").displayIndex;
+    await capped.alloc.stop("explicit");
+    await capped.alloc.ensure("older");
+    const olderIndex = row(capped.store, "older").displayIndex;
+    capped.setNow(new Date(started.getTime() + 31 * 60_000));
+    await capped.alloc.ensure("newer");
+    const newerIndex = row(capped.store, "newer").displayIndex;
+    await capped.alloc.release("newer");
+
+    const dead = harness({ now: started });
+    await dead.alloc.ensure("dead");
+    const deadIndex = row(dead.store, "dead").displayIndex;
+    dead.host.alive.delete(deadIndex);
+    await dead.alloc.reconcile();
+
+    const idle = harness({ now: started });
+    await idle.alloc.ensure("idle");
+    const idleIndex = row(idle.store, "idle").displayIndex;
+    idle.host.alive.add(idleIndex);
+    idle.setNow(new Date(started.getTime() + 31 * 60_000));
+    await idle.alloc.reconcile();
+    await idle.alloc.reconcile();
+
+    const stopped = events.filter((event) => event.message === "team desktop stopped");
+    expect(stopped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ displayIndex: explicitIndex, reason: "stop" }),
+        expect.objectContaining({ displayIndex: olderIndex, reason: "cap" }),
+        expect.objectContaining({ displayIndex: deadIndex, reason: "dead" }),
+        expect.objectContaining({ displayIndex: idleIndex, reason: "idle" }),
+      ]),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "team desktop released",
+          displayIndex: newerIndex,
+          reason: "release",
+        }),
+      ]),
+    );
   });
 });
 
@@ -1005,6 +1202,9 @@ describe("team desktop X socket", () => {
     setNow(new Date(started.getTime() + 31 * 60_000));
     const stopsBefore = host.stops.length;
     await alloc.sweepMissingDisplays();
+    expect(row(store, "idle").state).toBe("running");
+    expect(host.stops).toHaveLength(stopsBefore);
+    await alloc.reconcile();
     expect(row(store, "idle").state).toBe("running");
     expect(host.stops).toHaveLength(stopsBefore);
     await alloc.reconcile();

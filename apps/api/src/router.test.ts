@@ -2061,6 +2061,108 @@ describe("computer screen url", () => {
   });
 });
 
+describe("team desktop use clock", () => {
+  const actor = {
+    spaceId: "workspace-1",
+    userId: "user-1",
+    email: "user@rakazo.test",
+    isDeploymentOwner: true,
+  } satisfies Actor;
+  const runningComputer = {
+    id: "computer-1",
+    state: "running",
+    providerRef: "sandbox-ref-1",
+    homeKey: "home-1",
+    kind: "sand",
+    scope: "team",
+    controlHolder: "none",
+    controlLeaseId: null as string | null,
+    controlLeaseExpiresAt: null as Date | null,
+    controlBotId: null as string | null,
+    controlRunId: null as string | null,
+  };
+
+  async function call(
+    procedure: "computer/heartbeat" | "computer/takeover",
+    computer: typeof runningComputer,
+  ) {
+    const touch = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      bot: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "bot-1",
+          screenGeneration: 1,
+          thread: { id: "thread-1" },
+          computer,
+        }),
+      },
+      computer: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      computerExecutionLease: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (run: (tx: { $queryRaw: () => Promise<unknown[]> }) => unknown) =>
+        run({ $queryRaw: async () => [] }),
+      ),
+    } as unknown as PrismaClient;
+    const deps = {
+      prisma,
+      sandbox: {},
+      jobs: { enqueue: vi.fn().mockResolvedValue(undefined) },
+      events: { append: vi.fn().mockResolvedValue(undefined) },
+      teamDesktops: { touch },
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "sand",
+      },
+      dataDir: "/tmp/rakazo-router-test",
+    } as unknown as RouterDeps;
+    const handler = new RPCHandler(createRouter(deps));
+    const { response } = await handler.handle(
+      new Request(`http://127.0.0.1/rpc/${procedure}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: { botId: "bot-1" } }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+    return { response, touch };
+  }
+
+  it("refreshes a running team desktop when the computer heartbeats", async () => {
+    const { response, touch } = await call("computer/heartbeat", runningComputer);
+    expect(response.status).toBe(200);
+    expect(touch).toHaveBeenCalledWith("bot-1");
+  });
+
+  it("does not refresh a team desktop when the computer is not running", async () => {
+    const { response, touch } = await call("computer/heartbeat", {
+      ...runningComputer,
+      state: "stopped",
+    });
+    expect(response.status).toBe(200);
+    expect(touch).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a running team desktop when control is granted", async () => {
+    const { response, touch } = await call("computer/takeover", runningComputer);
+    expect(response.status).toBe(200);
+    expect(touch).toHaveBeenCalledWith("bot-1");
+  });
+
+  it("refreshes a running team desktop when the control lease is already held", async () => {
+    const { response, touch } = await call("computer/takeover", {
+      ...runningComputer,
+      controlHolder: "user",
+      controlLeaseId: "lease-1",
+      controlLeaseExpiresAt: new Date(Date.now() + 60_000),
+      controlBotId: "bot-1",
+    });
+    expect(response.status).toBe(200);
+    expect(touch).toHaveBeenCalledWith("bot-1");
+  });
+});
+
 describe("computer terminal and file transfer", () => {
   const actor = {
     spaceId: "workspace-1",

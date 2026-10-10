@@ -35,6 +35,7 @@ import {
   LocalArtifactStore,
   listTeamBMemberBotIds,
   listTeamDesktopActiveRunBotIds,
+  listTeamDesktopControlLeaseBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingEnvFromProcess,
@@ -55,6 +56,7 @@ import {
   syncTeamBDesktops,
   teamDesktopAllocatorForProvider,
   teamDesktopConfigFromEnv,
+  teamDesktopDisplayLock,
   watchTeamDesktopXSockets,
   withSecretPersistence,
 } from "@rakazo/adapters";
@@ -116,10 +118,12 @@ async function main() {
       reconcileSeconds: teamDesktopEnv.reconcileSeconds,
       members: () => listTeamBMemberBotIds(prisma),
       activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
+      activeLeases: () => listTeamDesktopControlLeaseBotIds(prisma),
       onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
       startBrowser: createTeamDesktopChromeStarter({
         token: sandboxProviderOptionsFromEnv(process.env).sandHostToken,
       }),
+      withDisplayLock: teamDesktopDisplayLock(prisma),
     }),
   );
   let stopDisplayWatch: (() => void) | undefined;

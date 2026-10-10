@@ -63,7 +63,7 @@ export function createComputerRefresh(options: {
 
   function schedule() {
     clearTimeout(timer);
-    if (!active || activeActions > 0 || pendingRevision === revision) return;
+    if (!active || pendingRevision === revision) return;
     timer = setTimeout(() => void refresh({ poll: true }).catch(() => undefined), 2000);
   }
 
@@ -77,7 +77,10 @@ export function createComputerRefresh(options: {
       const status = await options.readStatus();
       if (!current()) return;
       options.onStatus(status);
-      if (screenStale(status, !poll)) {
+      // A boot holds an action for as long as the request takes. Keep reading
+      // status so the screen can leave "booting" without a reload, and leave
+      // the screen URL alone until that action finishes.
+      if (!(poll && activeActions > 0) && screenStale(status, !poll)) {
         try {
           const url = await options.readScreen(screenAttempts);
           if (!current()) return;
@@ -115,6 +118,7 @@ export function createComputerRefresh(options: {
       if (started) {
         activeActions += 1;
         invalidate();
+        schedule();
       }
       return {
         isActive,

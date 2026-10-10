@@ -60,11 +60,15 @@ const NOVNC_CAPABILITY = /\/novnc\/session\/(view|control)\/(\d+)\./;
 /**
  * Choose which sealed URL stays on screen.
  *
- * A refresh used to mint a new capability for the same screen, and a new iframe
- * src reloaded the viewer. The same generation with time left keeps the current
- * URL, so that refresh does not remount. A different generation has revoked the
- * current seal, so the server's fresh URL replaces it. With no generation to
- * compare, the server URL is used and a revoked seal is not kept.
+ * A view refresh used to mint a new capability for the same screen, and a new
+ * iframe src reloaded the viewer. The same generation with time left keeps the
+ * current view URL, so that refresh does not remount. A different generation
+ * has revoked the current seal, so the server's fresh URL replaces it. With no
+ * generation to compare, the server URL is used and a revoked seal is not kept.
+ *
+ * A control URL is never kept. Each overlay session and each rejected control
+ * seal must take the server URL, which is bound to the current lease.
+ * `replace` does the same for a view seal after the viewer rejected it.
  */
 export function reuseScreenUrl(
   current: string | null,
@@ -74,13 +78,14 @@ export function reuseScreenUrl(
     held: ScreenSealGeneration | null;
     next: ScreenSealGeneration | null;
   },
+  replace = false,
 ): string | null {
   if (!next) return null;
-  if (!current || current === next) return next;
+  if (replace || !current || current === next) return next;
   const currentMatch = current.match(NOVNC_CAPABILITY);
   const nextMatch = next.match(NOVNC_CAPABILITY);
   if (!currentMatch || !nextMatch) return next;
-  if (currentMatch[1] !== nextMatch[1]) return next;
+  if (currentMatch[1] !== nextMatch[1] || currentMatch[1] === "control") return next;
   const expires = Number(currentMatch[2]);
   if (!Number.isFinite(expires) || expires - now <= 60_000) return next;
   const held = generation?.held ?? null;

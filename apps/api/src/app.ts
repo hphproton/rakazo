@@ -55,6 +55,7 @@ import {
   LocalArtifactStore,
   listTeamBMemberBotIds,
   listTeamDesktopActiveRunBotIds,
+  listTeamDesktopControlLeaseBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingPlatformsFromEnv,
@@ -76,6 +77,7 @@ import {
   stripeBillingConfigFromEnv,
   syncTeamBDesktops,
   teamDesktopAllocatorForProvider,
+  teamDesktopDisplayLock,
   toTeamChatInbound,
   withSecretPersistence,
 } from "@rakazo/adapters";
@@ -287,10 +289,12 @@ export async function createApp(
       reconcileSeconds: env.teamDesktopReconcileSeconds,
       members: () => listTeamBMemberBotIds(prisma),
       activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
+      activeLeases: () => listTeamDesktopControlLeaseBotIds(prisma),
       onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
       startBrowser: createTeamDesktopChromeStarter({
         token: sandboxProviderOptionsFromEnv().sandHostToken,
       }),
+      withDisplayLock: teamDesktopDisplayLock(prisma),
     }),
   );
   if (teamDesktops) {
