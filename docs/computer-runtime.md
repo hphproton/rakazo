@@ -41,8 +41,10 @@ set `BROWSER=/usr/local/bin/box-chrome` when the caller did not set `BROWSER`.
 `/usr/local/bin/box-chrome` on that display with profile
 `/home/box/chrome-profile/Fork-N` and the debugger on `127.0.0.1:9222+N`.
 The page browser starts that Chrome the same way when it is not already
-listening, then attaches only when the process on that port is that Chrome.
-Any other listener is refused. The shell is a sealed local bridge to the
+listening, then attaches only when that listener is Chrome, its profile is
+exactly `/home/box/chrome-profile/Fork-N`, and `--remote-debugging-address`
+is `127.0.0.1`. Chrome's process environment is not read. Any other listener
+is refused. The shell is a sealed local bridge to the
 desktop's pty websocket. That websocket has no auth token, so it is not given
 to the browser. Takeover uses the existing control viewer and lease.
 Snapshots stay off: the host has no snapshot API, and a workspace export is

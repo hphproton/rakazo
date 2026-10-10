@@ -57,9 +57,10 @@ export function teamDesktopCdpRefusedMessage(displayIndex: number): string {
 
 /**
  * Who holds the listen socket on 127.0.0.1:9222+N.
- * Owned means a Chrome whose DISPLAY is :N (or :N.0) and whose --user-data-dir
- * is the Fork-N profile. Another display's Chrome, a non-Chrome process, or a
- * non-loopback bind is not owned.
+ * Owned means that socket's process is Chrome, its --user-data-dir is the
+ * Fork-N profile, and its --remote-debugging-address is 127.0.0.1.
+ * Fork-N is the display. Chrome rewrites its environment, so DISPLAY is not read.
+ * Another profile, a non-Chrome process, or a non-loopback bind is not owned.
  */
 export async function teamDesktopCdpStatus(
   displayIndex: number,
@@ -77,7 +78,7 @@ export async function teamDesktopCdpStatus(
   const browsers: string[] = [];
   for (const pid of names) {
     if (!/^\d+$/.test(pid)) continue;
-    if (await browserMatches(procRoot, pid, profile, displayIndex)) browsers.push(pid);
+    if (await browserMatches(procRoot, pid, profile)) browsers.push(pid);
   }
   for (const pid of browsers) {
     const sockets = await socketInodes(procRoot, pid);
@@ -174,17 +175,12 @@ function parseTcpListeners(text: string, port: number): { loopback: Set<string>;
   return { loopback, any };
 }
 
-async function browserMatches(
-  procRoot: string,
-  pid: string,
-  profile: string,
-  displayIndex: number,
-): Promise<boolean> {
+async function browserMatches(procRoot: string, pid: string, profile: string): Promise<boolean> {
   const args = await commandArgs(procRoot, pid);
   if (!args || args.length === 0 || isRenderer(args)) return false;
   if (!sameProfile(userDataDir(args), profile)) return false;
-  if (!displayMatches(await readDisplay(procRoot, pid), displayIndex)) return false;
-  return isChromeExecutable(await readExe(procRoot, pid), args[0] ?? "");
+  if (!loopbackDebuggingAddress(debuggingAddress(args))) return false;
+  return isChromeExe(await readExe(procRoot, pid));
 }
 
 function isRenderer(args: readonly string[]): boolean {
@@ -206,16 +202,27 @@ function sameProfile(actual: string | undefined, expected: string): boolean {
   return stripped === expected;
 }
 
-function displayMatches(value: string | undefined, displayIndex: number): boolean {
-  return value === `:${displayIndex}` || value === `:${displayIndex}.0`;
+function debuggingAddress(args: readonly string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "--remote-debugging-address") return args[index + 1];
+    if (arg.startsWith("--remote-debugging-address=")) {
+      return arg.slice("--remote-debugging-address=".length);
+    }
+  }
+  return undefined;
 }
 
-function isChromeExecutable(exe: string | undefined, argv0: string): boolean {
-  const names = [exe, argv0]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .map(baseName);
-  if (names.some((name) => NOT_CHROME.has(name))) return false;
-  return names.some((name) => looksLikeChrome(name));
+function loopbackDebuggingAddress(value: string | undefined): boolean {
+  return value === "127.0.0.1";
+}
+
+/** `/proc/pid/exe`, not argv. Chrome's process title overwrites argv. */
+function isChromeExe(exe: string | undefined): boolean {
+  if (!exe) return false;
+  const name = baseName(exe);
+  if (NOT_CHROME.has(name)) return false;
+  return looksLikeChrome(name);
 }
 
 function looksLikeChrome(name: string): boolean {
@@ -246,16 +253,6 @@ async function commandArgs(procRoot: string, pid: string): Promise<string[] | un
   }
   const text = raw.toString("utf8").trim();
   return text ? text.split(/\s+/) : [];
-}
-
-async function readDisplay(procRoot: string, pid: string): Promise<string | undefined> {
-  const raw = await readBytes(procRoot, pid, "environ");
-  if (!raw) return undefined;
-  for (const entry of raw.toString("utf8").split("\0")) {
-    if (!entry.startsWith("DISPLAY=")) continue;
-    return entry.slice("DISPLAY=".length);
-  }
-  return undefined;
 }
 
 async function readExe(procRoot: string, pid: string): Promise<string | undefined> {
