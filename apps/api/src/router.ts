@@ -118,6 +118,7 @@ import {
   TeamDesktopLimitError,
   TeamDesktopMissingError,
   takeoverLeaseMs,
+  teamDesktopWakeFailureReason,
   toComputerRef,
   touchRunningComputer,
   UNAVAILABLE_MODEL_FOR_AUTH_MESSAGE,
@@ -2593,6 +2594,10 @@ export function createRouter(deps: RouterDeps) {
             try {
               await deps.teamDesktops.ensure(input.botId);
             } catch (error) {
+              getLogger().info("team desktop wake failed", {
+                botId: input.botId,
+                reason: teamDesktopWakeFailureReason(error),
+              });
               throw mapTeamDesktopError(error);
             }
           }

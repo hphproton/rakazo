@@ -33,12 +33,13 @@ import {
   type MessageReaction,
   normalizeCreateBotProfile,
 } from "@rakazo/contracts";
-import type { HubFamilyChip, HubTopicChipPlan } from "@rakazo/core";
+import type { ComputerWakeErrors, HubFamilyChip, HubTopicChipPlan } from "@rakazo/core";
 import {
   attachmentsForThread,
   buildComposerMentionOptions,
   type ComposerMention,
   clampMentionHighlightIndex,
+  clearComputerWakeError,
   cronFromPreset,
   formatMessageTime,
   groupVoiceChats,
@@ -57,6 +58,7 @@ import {
   peerReceiptDisplayName,
   plainTextFromMarkdown,
   projectMessageReactions,
+  rememberComputerWakeError,
   reorderBotTo,
   replyAttachment,
   resolveComposerSendPlan,
@@ -70,6 +72,7 @@ import {
   timeSeparatorIds,
   truncateSlashDescription,
   userVisibleMessages,
+  visibleComputerWakeError,
   withLiveStreamingProgress,
 } from "@rakazo/core";
 import {
@@ -737,9 +740,10 @@ export function ShellPage() {
     offsetTop: number;
   } | null>(null);
   const [computerError, setComputerError] = useState<string | null>(null);
-  // Screen-load failures can sit beside a still-valid embed URL; boot and
-  // takeover failures must stay visible even when a URL remains.
+  // Screen-load failures can sit beside a still-valid embed URL. A wake
+  // failure is per bot and is not cleared by a status or screen refresh.
   const [computerErrorFromScreen, setComputerErrorFromScreen] = useState(false);
+  const [wakeErrors, setWakeErrors] = useState<ComputerWakeErrors>(() => new Map());
   useEffect(() => {
     if (!computerOpen) {
       setComputerViewport(null);
@@ -1187,6 +1191,7 @@ export function ShellPage() {
           showScreen(url, generation);
           cacheComputerFor(id, { screenUrl: url, screenGeneration: generation });
         }
+        // A null screen is not a wake result. Leave the per-bot wake failure alone.
         setComputerError(screen.error);
         setComputerErrorFromScreen(Boolean(screen.error));
       },
@@ -2532,6 +2537,7 @@ export function ShellPage() {
     if (overlay && needsBoot) setBooting(true);
     setComputerError(null);
     setComputerErrorFromScreen(false);
+    setWakeErrors((current) => clearComputerWakeError(current, targetBotId));
     try {
       if (needsBoot) {
         const status = await rpc.computer.boot({ botId: targetBotId });
@@ -2544,10 +2550,17 @@ export function ShellPage() {
         if (!stillThisBoot() || !stillThisBot()) return;
       }
       await refreshComputerFor(targetBotId);
+      if (!stillThisBoot() || !stillThisBot()) return;
+      setWakeErrors((current) => clearComputerWakeError(current, targetBotId));
     } catch (error) {
       if (!stillThisBoot() || !stillThisBot()) return;
-      setComputerError(errorText(error, t`Could not take control`));
-      setComputerErrorFromScreen(false);
+      setWakeErrors((current) =>
+        rememberComputerWakeError(
+          current,
+          targetBotId,
+          errorText(error, t`Could not take control`),
+        ),
+      );
       throw error;
     } finally {
       if (stillThisBoot()) setBooting(false);
@@ -2625,6 +2638,8 @@ export function ShellPage() {
   useEffect(() => () => cancelFocusPrompt(), []);
 
   useEffect(() => {
+    // Screen errors clear when the computer is no longer busy. A wake failure
+    // stays in wakeErrors across this change and across status refreshes.
     if (!computer?.busyBotName) {
       setComputerError(null);
       setComputerErrorFromScreen(false);
@@ -2777,7 +2792,7 @@ export function ShellPage() {
       });
       return true;
     } catch {
-      // computerError already set in bootComputer
+      // The wake failure stays on this bot until the next wake starts or one succeeds.
       return false;
     }
   }
@@ -2840,26 +2855,41 @@ export function ShellPage() {
   const hideScreenLoadError =
     computerErrorFromScreen &&
     Boolean(screenSurfaces.includes("overlay") ? embeddedOverlayUrl : embeddedScreenUrl);
-  const computerScreenError =
-    computerError && !hideScreenLoadError ? (
-      <div role="alert" className="flex flex-col items-center gap-3 px-6 text-center text-sm">
-        <p className="text-destructive">{computerError}</p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            if (!computerBot) return;
-            if (computerErrorFromScreen) {
-              void refreshComputerScreen(computerBot.id);
-              return;
-            }
-            void openComputer(computerBot.id);
-          }}
-        >
-          {computerErrorFromScreen ? <Trans>Retry screen</Trans> : <Trans>Try again</Trans>}
-        </Button>
-      </div>
-    ) : null;
+  const wakeBotId = computerBot?.id ?? active?.id;
+  const wakeFailure = visibleComputerWakeError(wakeErrors, wakeBotId, computer?.state);
+  const computerScreenError = wakeFailure ? (
+    <div role="alert" className="flex flex-col items-center gap-3 px-6 text-center text-sm">
+      <p className="text-destructive">{wakeFailure}</p>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          if (!wakeBotId) return;
+          void openComputer(wakeBotId);
+        }}
+      >
+        <Trans>Try again</Trans>
+      </Button>
+    </div>
+  ) : computerError && !hideScreenLoadError ? (
+    <div role="alert" className="flex flex-col items-center gap-3 px-6 text-center text-sm">
+      <p className="text-destructive">{computerError}</p>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          if (!computerBot) return;
+          if (computerErrorFromScreen) {
+            void refreshComputerScreen(computerBot.id);
+            return;
+          }
+          void openComputer(computerBot.id);
+        }}
+      >
+        {computerErrorFromScreen ? <Trans>Retry screen</Trans> : <Trans>Try again</Trans>}
+      </Button>
+    </div>
+  ) : null;
   const computerPreviewScreen =
     !computerOpen &&
     computer?.kind !== "desktop" &&

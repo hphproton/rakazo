@@ -19,6 +19,7 @@ export * from "./composer-mention-picker.js";
 export * from "./composer-mentions.js";
 export * from "./composer-slash.js";
 export * from "./computer-updates.js";
+export * from "./computer-wake-error.js";
 export * from "./cron.js";
 export * from "./echo.js";
 export * from "./events.js";

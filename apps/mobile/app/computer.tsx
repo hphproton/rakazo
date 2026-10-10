@@ -1,4 +1,10 @@
 import type { ComputerMode, ComputerReleaseReason } from "@rakazo/contracts";
+import type { ComputerWakeErrors } from "@rakazo/core";
+import {
+  clearComputerWakeError,
+  rememberComputerWakeError,
+  visibleComputerWakeError,
+} from "@rakazo/core";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import type { RefObject } from "react";
@@ -56,6 +62,7 @@ export default function Computer() {
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wakeErrors, setWakeErrors] = useState<ComputerWakeErrors>(() => new Map());
   const [readyBotId, setReadyBotId] = useState<string | null>(null);
   const [bootingCount, setBootingCount] = useState(0);
   const [switchingCount, setSwitchingCount] = useState(0);
@@ -164,6 +171,7 @@ export default function Computer() {
     const needsBoot = force || computer?.state !== "running" || !screenUrl;
     const showBooting = overlay && needsBoot;
     if (showBooting) setBootingCount((count) => count + 1);
+    setWakeErrors((current) => clearComputerWakeError(current, botId));
     try {
       if (needsBoot)
         await rpc("computer/boot", { botId }, { timeoutMs: COMPUTER_LIFECYCLE_TIMEOUT_MS });
@@ -173,13 +181,14 @@ export default function Computer() {
       await action.refresh({ screenAttempts: SCREEN_URL_OPEN_ATTEMPTS });
       if (!action.isActive()) return false;
       setError(null);
+      setWakeErrors((current) => clearComputerWakeError(current, botId));
       return true;
     } catch (err) {
       if (!action.isActive()) return false;
       autoBooted.current = null;
-      if (computerRef.current?.state !== "running") {
-        setError(errorText(err, t("Could not open computer")));
-      }
+      setWakeErrors((current) =>
+        rememberComputerWakeError(current, botId, errorText(err, t("Could not open computer"))),
+      );
       throw err;
     } finally {
       if (action.isActive() && showBooting) setBootingCount((count) => count - 1);
@@ -234,7 +243,7 @@ export default function Computer() {
       setComputerOpen(true);
       setScreenError(null);
     } catch {
-      // error already set
+      // The wake failure stays on this bot until the next wake starts or one succeeds.
     }
   }
 
@@ -283,6 +292,25 @@ export default function Computer() {
 
   const placeholder =
     screenError ?? previewPlaceholder(computer?.state, booting, name, computer?.mode);
+  const wakeFailure = visibleComputerWakeError(wakeErrors, botId, computer?.state);
+  const retryWake = () => {
+    void bootComputer({
+      takeControl: false,
+      overlay: computer?.state !== "running",
+      force: true,
+    }).catch(() => undefined);
+  };
+  function wakeFailureBody() {
+    if (!wakeFailure) return null;
+    return (
+      <View
+        style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16, gap: 8 }}
+      >
+        <Text style={{ color: tokens.mutedForeground, textAlign: "center" }}>{wakeFailure}</Text>
+        <NativeActionButton label={t("Try again.")} prominence="secondary" onPress={retryWake} />
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -334,18 +362,22 @@ export default function Computer() {
             }}
           />
         ) : (
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}>
-            <Text style={{ color: tokens.mutedForeground, textAlign: "center" }}>
-              {placeholder}
-            </Text>
-          </View>
+          (wakeFailureBody() ?? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}>
+              <Text style={{ color: tokens.mutedForeground, textAlign: "center" }}>
+                {placeholder}
+              </Text>
+            </View>
+          ))
         )}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t("Open computer")}
-          onPress={() => void openComputer({ takeControl: false })}
-          style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }}
-        />
+        {wakeFailure ? null : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("Open computer")}
+            onPress={() => void openComputer({ takeControl: false })}
+            style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }}
+          />
+        )}
       </View>
       <View
         style={{
@@ -541,13 +573,20 @@ export default function Computer() {
                     }}
                   />
                 ) : (
-                  <View
-                    style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}
-                  >
-                    <Text style={{ color: tokens.mutedForeground, textAlign: "center" }}>
-                      {placeholder}
-                    </Text>
-                  </View>
+                  (wakeFailureBody() ?? (
+                    <View
+                      style={{
+                        flex: 1,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 16,
+                      }}
+                    >
+                      <Text style={{ color: tokens.mutedForeground, textAlign: "center" }}>
+                        {placeholder}
+                      </Text>
+                    </View>
+                  ))
                 )}
               </View>
               {hasControl ? (

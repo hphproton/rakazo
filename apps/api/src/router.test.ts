@@ -14,6 +14,7 @@ import {
   LocalAgentHomeStore,
   SandSeatUnmappedError,
   screenLeaseIdForRun,
+  TeamDesktopError,
   TeamDesktopLimitError,
 } from "@rakazo/adapters";
 import type { Actor, Bot, ProductEvent } from "@rakazo/contracts";
@@ -2160,6 +2161,96 @@ describe("team desktop use clock", () => {
     });
     expect(response.status).toBe(200);
     expect(touch).toHaveBeenCalledWith("bot-1");
+  });
+});
+
+describe("team desktop wake failure", () => {
+  const actor = {
+    spaceId: "workspace-1",
+    userId: "user-1",
+    email: "user@rakazo.test",
+    isDeploymentOwner: true,
+  } satisfies Actor;
+
+  afterEach(() => {
+    installLogger(createLogger({ service: "rakazo-api", level: "off", sinks: [] }));
+  });
+
+  it("logs team desktop wake failed when ensure rejects", async () => {
+    const sink = createTestSink();
+    installLogger(createLogger({ service: "rakazo-api", level: "info", sinks: [sink] }));
+    const ensure = vi
+      .fn()
+      .mockRejectedValue(new TeamDesktopError("Team desktop 103 did not become ready."));
+    const prisma = {
+      bot: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "bot-1",
+          name: "Chief",
+          screenGeneration: 1,
+          thread: { id: "thread-1" },
+          computer: {
+            id: "computer-1",
+            state: "running",
+            providerRef: "sandbox-ref-1",
+            homeKey: "home-1",
+            kind: "sand",
+            scope: "team",
+            maintenanceId: null,
+            controlHolder: "none",
+            controlLeaseId: null,
+            controlLeaseExpiresAt: null,
+            controlBotId: null,
+            controlRunId: null,
+          },
+        }),
+      },
+    } as unknown as PrismaClient;
+    const deps = {
+      prisma,
+      sandbox: {},
+      jobs: { enqueue: vi.fn().mockResolvedValue(undefined) },
+      events: { append: vi.fn().mockResolvedValue(undefined) },
+      teamDesktops: {
+        ensure,
+        status: vi.fn().mockResolvedValue({
+          botId: "bot-1",
+          displayIndex: 103,
+          state: "stopped",
+          lastUsedAt: null,
+        }),
+        member: vi.fn().mockResolvedValue(true),
+        touch: vi.fn().mockResolvedValue(undefined),
+      },
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "sand",
+      },
+      dataDir: "/tmp/rakazo-router-test",
+    } as unknown as RouterDeps;
+    const handler = new RPCHandler(createRouter(deps));
+    const { response } = await handler.handle(
+      new Request("http://127.0.0.1/rpc/computer/boot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: { botId: "bot-1" } }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+    expect(response.status).toBe(400);
+    expect(ensure).toHaveBeenCalledWith("bot-1");
+    expect(sink.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "team desktop wake failed",
+          botId: "bot-1",
+          reason: "timeout",
+        }),
+      ]),
+    );
   });
 });
 

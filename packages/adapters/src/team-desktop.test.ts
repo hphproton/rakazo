@@ -12,6 +12,7 @@ import {
   publishTeamDesktopComputerStatus,
   TEAM_DESKTOP_FORK_ROOTS,
   type TeamDesktopCardState,
+  TeamDesktopError,
   TeamDesktopExhaustedError,
   type TeamDesktopHost,
   TeamDesktopLimitError,
@@ -26,6 +27,7 @@ import {
   teamDesktopMemberBotWhere,
   teamDesktopPorts,
   teamDesktopPurgePaths,
+  teamDesktopWakeFailureReason,
 } from "./team-desktop.js";
 import { createLinuxTeamDesktopHost } from "./team-desktop-host.js";
 import { watchTeamDesktopXSockets } from "./team-desktop-x11.js";
@@ -577,6 +579,18 @@ describe("team desktop membership", () => {
     const { alloc, store } = harness();
     await alloc.ensure("bot");
     expect(row(store, "bot").state).toBe("running");
+  });
+});
+
+describe("team desktop wake failure reason", () => {
+  it("names a timeout, a cap, and a start failure", () => {
+    expect(
+      teamDesktopWakeFailureReason(new TeamDesktopError("Team desktop 103 did not become ready.")),
+    ).toBe("timeout");
+    expect(teamDesktopWakeFailureReason(new TeamDesktopLimitError(4))).toBe("cap");
+    expect(teamDesktopWakeFailureReason(new TeamDesktopExhaustedError())).toBe("exhausted");
+    expect(teamDesktopWakeFailureReason(new TeamDesktopMissingError("bot"))).toBe("missing");
+    expect(teamDesktopWakeFailureReason(new TeamDesktopError("start-window failed"))).toBe("start");
   });
 });
 
