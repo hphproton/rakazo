@@ -178,6 +178,17 @@ export class TeamDesktopMissingError extends TeamDesktopError {
   }
 }
 
+/** Short reason for a failed computer wake. Messages stay off the log. */
+export function teamDesktopWakeFailureReason(error: unknown): string {
+  if (error instanceof TeamDesktopLimitError) return "cap";
+  if (error instanceof TeamDesktopExhaustedError) return "exhausted";
+  if (error instanceof TeamDesktopMissingError) return "missing";
+  if (error instanceof TeamDesktopError && error.message.includes("did not become ready")) {
+    return "timeout";
+  }
+  return "start";
+}
+
 export class TeamDesktopConflictError extends Error {
   constructor() {
     super("team desktop unique conflict");
