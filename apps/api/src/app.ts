@@ -76,6 +76,7 @@ import {
   stripeBillingConfigFromEnv,
   syncTeamBDesktops,
   teamDesktopAllocatorForProvider,
+  teamDesktopDisplayLock,
   toTeamChatInbound,
   withSecretPersistence,
 } from "@rakazo/adapters";
@@ -291,6 +292,7 @@ export async function createApp(
       startBrowser: createTeamDesktopChromeStarter({
         token: sandboxProviderOptionsFromEnv().sandHostToken,
       }),
+      withDisplayLock: teamDesktopDisplayLock(prisma),
     }),
   );
   if (teamDesktops) {

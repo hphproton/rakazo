@@ -55,6 +55,7 @@ import {
   syncTeamBDesktops,
   teamDesktopAllocatorForProvider,
   teamDesktopConfigFromEnv,
+  teamDesktopDisplayLock,
   watchTeamDesktopXSockets,
   withSecretPersistence,
 } from "@rakazo/adapters";
@@ -120,6 +121,7 @@ async function main() {
       startBrowser: createTeamDesktopChromeStarter({
         token: sandboxProviderOptionsFromEnv(process.env).sandHostToken,
       }),
+      withDisplayLock: teamDesktopDisplayLock(prisma),
     }),
   );
   let stopDisplayWatch: (() => void) | undefined;

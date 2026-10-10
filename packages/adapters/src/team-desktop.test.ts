@@ -55,10 +55,13 @@ class MemoryTeamDesktopStore implements TeamDesktopStore {
     this.rows.set(row.botId, { ...row });
   }
 
-  async update(botId: string, patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt">>) {
+  async update(
+    botId: string,
+    patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt" | "updatedAt">>,
+  ) {
     const row = this.rows.get(botId);
     if (!row) throw new Error(`missing ${botId}`);
-    this.rows.set(botId, { ...row, ...patch, updatedAt: new Date() });
+    this.rows.set(botId, { ...row, ...patch, updatedAt: patch.updatedAt ?? row.updatedAt });
   }
 
   async delete(botId: string) {
@@ -658,13 +661,73 @@ describe("team desktop reconcile", () => {
   });
 
   it("stops a booting desktop that never came up when no run is using it", async () => {
-    const { alloc, host, store } = harness();
+    const { alloc, host, store, now } = harness();
     await alloc.reserve("idle");
     const current = row(store, "idle");
-    store.rows.set("idle", { ...current, state: "booting" });
+    store.rows.set("idle", {
+      ...current,
+      state: "booting",
+      updatedAt: new Date(now().getTime() - 21_000),
+    });
     await alloc.reconcile();
     expect(row(store, "idle").state).toBe("stopped");
     expect(host.stops).toContain(current.displayIndex);
+  });
+
+  it("leaves a booting desktop alone until its ensure deadline", async () => {
+    const { alloc, host, store, now } = harness();
+    await alloc.reserve("idle");
+    const current = row(store, "idle");
+    store.rows.set("idle", { ...current, state: "booting", updatedAt: now() });
+    host.stops.length = 0;
+    await alloc.reconcile();
+    expect(row(store, "idle").state).toBe("booting");
+    expect(host.stops).not.toContain(current.displayIndex);
+  });
+
+  it("does not stop a desktop another process is still booting", async () => {
+    const store = new MemoryTeamDesktopStore();
+    const host = new FakeTeamDesktopHost();
+    let now = new Date("2026-10-07T12:00:00.000Z");
+    const tails = new Map<number, Promise<unknown>>();
+    let waiters = 0;
+    const withDisplayLock = async <T>(displayIndex: number, run: () => Promise<T>): Promise<T> => {
+      const previous = tails.get(displayIndex) ?? Promise.resolve();
+      if (tails.has(displayIndex)) waiters += 1;
+      const result = previous.then(run, run);
+      tails.set(
+        displayIndex,
+        result.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      return result;
+    };
+    const shared = {
+      store,
+      host,
+      now: () => now,
+      sleep: async () => undefined,
+      withDisplayLock,
+    };
+    const api = createTeamDesktopAllocator(shared);
+    const worker = createTeamDesktopAllocator(shared);
+    await api.reserve("bot");
+    host.blockStart = true;
+    const booting = api.ensure("bot");
+    await vi.waitFor(() => expect(host.releaseStart).toBeTypeOf("function"));
+    now = new Date(now.getTime() + 60_000);
+    const reconciling = worker.reconcile();
+    await vi.waitFor(() => expect(waiters).toBeGreaterThan(0));
+    expect(row(store, "bot").state).toBe("booting");
+    expect(host.stops).not.toContain(row(store, "bot").displayIndex);
+    host.blockStart = false;
+    host.releaseStart?.();
+    await booting;
+    await reconciling;
+    expect(row(store, "bot").state).toBe("running");
+    expect(host.stops).not.toContain(row(store, "bot").displayIndex);
   });
 
   it("leaves a booting desktop alone while its run is still active", async () => {

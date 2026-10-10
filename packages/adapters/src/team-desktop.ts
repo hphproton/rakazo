@@ -13,6 +13,8 @@ export const TEAM_DESKTOP_DEFAULT_IDLE_MINUTES = 30;
 export const TEAM_DESKTOP_DEFAULT_RECONCILE_SECONDS = 120;
 export const TEAM_DESKTOP_DEFAULT_MAX_RUNNING = 4;
 export const TEAM_DESKTOP_ENSURE_TIMEOUT_MS = 15_000;
+/** Extra time past the ensure timeout before reconcile may stop a booting row. */
+export const TEAM_DESKTOP_BOOT_GRACE_MARGIN_MS = 5_000;
 
 const POLL_MS = 200;
 
@@ -71,7 +73,7 @@ export interface TeamDesktopStore {
   insert(row: TeamDesktopRecord): Promise<void>;
   update(
     botId: string,
-    patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt">>,
+    patch: Partial<Pick<TeamDesktopRecord, "state" | "lastUsedAt" | "updatedAt">>,
   ): Promise<void>;
   delete(botId: string): Promise<void>;
 }
@@ -340,6 +342,11 @@ export function createTeamDesktopAllocator(options: {
     displayIndex: number;
     ownerToken: string;
   }) => Promise<void>;
+  /**
+   * Cross-process exclusion for one display. API ensure and worker reconcile
+   * share it. Absent in tests that only need the booting grace deadline.
+   */
+  withDisplayLock?: <T>(displayIndex: number, run: () => Promise<T>) => Promise<T>;
 }): TeamDesktopAllocator {
   const idleMinutes = options.idleMinutes ?? TEAM_DESKTOP_DEFAULT_IDLE_MINUTES;
   const maxRunning = options.maxRunning ?? TEAM_DESKTOP_DEFAULT_MAX_RUNNING;
@@ -354,6 +361,7 @@ export function createTeamDesktopAllocator(options: {
   const activeRuns = options.activeRuns;
   const onState = options.onState;
   const startBrowser = options.startBrowser;
+  const withDisplayLock = options.withDisplayLock ?? ((_displayIndex, run) => run());
   const watchedRuns = new Set<string>();
   let tail: Promise<unknown> = Promise.resolve();
   let lastReconcileAt = 0;
@@ -507,33 +515,37 @@ export function createTeamDesktopAllocator(options: {
     await makeRoom(botId);
     const current = await requireRow(botId);
     let cardState = current.state;
-    if (!(await alive(current.displayIndex))) {
-      if (cardState !== "booting") {
-        await store.update(botId, { state: "booting" });
-        notifyCard(botId, cardState, "booting");
-        cardState = "booting";
-      }
-      try {
-        await host.cleanWindow(current.displayIndex);
-        await host.startWindow(current.displayIndex, current.ownerToken);
-        const started = now().getTime();
-        while (!(await alive(current.displayIndex))) {
-          if (now().getTime() - started >= ensureTimeoutMs) {
-            throw new TeamDesktopError(
-              `Team desktop ${current.displayIndex} did not become ready.`,
-            );
-          }
-          await sleep(pollMs);
+    // The lock is held for the whole start, including the running write, so
+    // another process cannot stop this display while it is coming up.
+    await withDisplayLock(current.displayIndex, async () => {
+      if (!(await alive(current.displayIndex))) {
+        if (cardState !== "booting") {
+          await store.update(botId, { state: "booting", updatedAt: now() });
+          notifyCard(botId, cardState, "booting");
+          cardState = "booting";
         }
-      } catch (error) {
-        await store.update(botId, { state: "stopped" });
-        notifyCard(botId, "booting", "stopped");
-        throw scrubbed(error, [current.ownerToken]);
+        try {
+          await host.cleanWindow(current.displayIndex);
+          await host.startWindow(current.displayIndex, current.ownerToken);
+          const started = now().getTime();
+          while (!(await alive(current.displayIndex))) {
+            if (now().getTime() - started >= ensureTimeoutMs) {
+              throw new TeamDesktopError(
+                `Team desktop ${current.displayIndex} did not become ready.`,
+              );
+            }
+            await sleep(pollMs);
+          }
+        } catch (error) {
+          await store.update(botId, { state: "stopped", updatedAt: now() });
+          notifyCard(botId, "booting", "stopped");
+          throw scrubbed(error, [current.ownerToken]);
+        }
       }
-    }
-    const usedAt = now();
-    await store.update(botId, { state: "running", lastUsedAt: usedAt });
-    notifyCard(botId, cardState, "running");
+      const usedAt = now();
+      await store.update(botId, { state: "running", lastUsedAt: usedAt, updatedAt: usedAt });
+      notifyCard(botId, cardState, "running");
+    });
     getLogger().info("team desktop running", { botId, displayIndex: current.displayIndex });
     if (startBrowser) {
       try {
@@ -750,13 +762,7 @@ export function createTeamDesktopAllocator(options: {
         continue;
       }
       if (row.state === "booting") {
-        if (busy.has(row.botId)) continue;
-        if (await alive(row.displayIndex)) {
-          await store.update(row.botId, { state: "running", lastUsedAt: now() });
-          notifyCard(row.botId, "booting", "running");
-        } else {
-          await markStopped(row);
-        }
+        await reconcileBooting(row, busy);
         continue;
       }
       if (row.state !== "running") continue;
@@ -768,6 +774,40 @@ export function createTeamDesktopAllocator(options: {
       if (busy.has(row.botId)) continue;
       if ((row.lastUsedAt?.getTime() ?? 0) <= cutoff) await stopBody(row.botId);
     }
+  }
+
+  /**
+   * A booting row is in use until its ensure deadline. Re-read under the
+   * display lock so a start that already finished is not stopped.
+   */
+  async function reconcileBooting(
+    row: TeamDesktopRecord,
+    busy: ReadonlySet<string>,
+  ): Promise<void> {
+    await withDisplayLock(row.displayIndex, async () => {
+      const fresh = await store.getByBot(row.botId);
+      if (fresh == null || fresh.state !== "booting" || !inRange(fresh.displayIndex)) return;
+      if (busy.has(fresh.botId)) return;
+      if (await alive(fresh.displayIndex)) {
+        const usedAt = now();
+        await store.update(fresh.botId, {
+          state: "running",
+          lastUsedAt: usedAt,
+          updatedAt: usedAt,
+        });
+        notifyCard(fresh.botId, "booting", "running");
+        return;
+      }
+      if (bootWithinGrace(fresh)) return;
+      await markStopped(fresh);
+    });
+  }
+
+  function bootWithinGrace(row: TeamDesktopRecord): boolean {
+    return (
+      now().getTime() - row.updatedAt.getTime() <
+      ensureTimeoutMs + TEAM_DESKTOP_BOOT_GRACE_MARGIN_MS
+    );
   }
 
   async function currentBusy(): Promise<Set<string>> {
@@ -836,6 +876,26 @@ export function createTeamDesktopAllocator(options: {
   }
 }
 
+/**
+ * One Postgres advisory lock per display, shared by the API and the worker.
+ * The transaction is held for the start, which is longer than a query, so the
+ * timeout stays above the ensure deadline.
+ */
+export function teamDesktopDisplayLock(prisma: PrismaClient) {
+  return async function withDisplayLock<T>(
+    displayIndex: number,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    return prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('team-desktop-display'), ${displayIndex})`;
+        return await run();
+      },
+      { maxWait: 20_000, timeout: 60_000 },
+    );
+  };
+}
+
 export function createPrismaTeamDesktopStore(prisma: PrismaClient): TeamDesktopStore {
   return {
     async getByBot(botId) {
@@ -855,7 +915,8 @@ export function createPrismaTeamDesktopStore(prisma: PrismaClient): TeamDesktopS
       }
     },
     async update(botId, patch) {
-      await prisma.teamDesktop.update({ where: { botId }, data: patch });
+      const { updatedAt: _clock, ...data } = patch;
+      await prisma.teamDesktop.update({ where: { botId }, data });
     },
     async delete(botId) {
       await prisma.teamDesktop.deleteMany({ where: { botId } });
