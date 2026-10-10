@@ -52,6 +52,7 @@ import {
   TeamDesktopMissingError,
   teamDesktopViewerUrl,
 } from "./team-desktop.js";
+import { launchTeamDesktopChrome } from "./team-desktop-chrome.js";
 
 /** Shared pod workspace for every sand window. Not a Team B container home. */
 export const SAND_WORKSPACE = "/workspace";
@@ -93,11 +94,14 @@ export class SandSandboxProvider implements SandboxProvider {
   ): Promise<PageBrowserResult> {
     const route = await this.session(computer, context, true);
     if (!route.displayIndex) return pageBrowserFallback(request.command);
+    const displayIndex = route.displayIndex;
     const run = this.opts.runPageBrowser ?? runSandPageBrowser;
     return run({
-      displayIndex: route.displayIndex,
+      displayIndex,
       command: request,
       signal: context.signal,
+      launchChrome: () =>
+        launchTeamDesktopChrome(route.host, route.agentId, displayIndex, context.signal),
     });
   }
 

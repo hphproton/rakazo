@@ -154,6 +154,11 @@ function harness(options?: {
   members?: () => Promise<readonly string[]>;
   activeRuns?: () => Promise<readonly string[]>;
   onState?: (botId: string, state: TeamDesktopCardState) => void;
+  startBrowser?: (desktop: {
+    botId: string;
+    displayIndex: number;
+    ownerToken: string;
+  }) => Promise<void>;
 }) {
   const store = new MemoryTeamDesktopStore();
   const host = new FakeTeamDesktopHost();
@@ -167,6 +172,7 @@ function harness(options?: {
     members: options?.members,
     activeRuns: options?.activeRuns,
     onState: options?.onState,
+    startBrowser: options?.startBrowser,
     now: () => now,
     sleep: async () => {
       now = new Date(now.getTime() + 1_000);
@@ -262,6 +268,43 @@ describe("team desktop index selection", () => {
 });
 
 describe("team desktop lifecycle", () => {
+  it("starts the desktop browser once the window is up", async () => {
+    const seen: number[] = [];
+    let failBrowser = false;
+    const { alloc, host, store } = harness({
+      startBrowser: async (desktop) => {
+        seen.push(desktop.displayIndex);
+        if (failBrowser) throw new Error("browser failed");
+      },
+    });
+    const running = await alloc.ensure("bot");
+    expect(seen).toEqual([running.displayIndex]);
+    expect(host.starts).toEqual([
+      { displayIndex: running.displayIndex, ownerToken: expect.any(String) },
+    ]);
+    await alloc.ensure("bot");
+    expect(seen).toEqual([running.displayIndex, running.displayIndex]);
+    expect(host.starts).toHaveLength(1);
+    failBrowser = true;
+    await expect(alloc.ensure("bot")).resolves.toMatchObject({
+      displayIndex: running.displayIndex,
+    });
+    expect(row(store, "bot").state).toBe<TeamDesktopState>("running");
+  });
+
+  it("does not start the browser when the window does not come up", async () => {
+    const seen: number[] = [];
+    const { alloc, host } = harness({
+      startBrowser: async (desktop) => {
+        seen.push(desktop.displayIndex);
+      },
+    });
+    host.failStartWithToken = true;
+    await expect(alloc.ensure("bot")).rejects.toThrow(/start-window failed/);
+    expect(seen).toEqual([]);
+    expect(host.starts).toHaveLength(1);
+  });
+
   it("reserves, wakes, stops, wakes the same index and token, then releases", async () => {
     const { alloc, host, store } = harness();
     const reserved = await alloc.reserve("bot");

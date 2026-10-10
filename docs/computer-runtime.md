@@ -37,8 +37,12 @@ resolves an executable or a `.desktop` entry, discards stdio, and returns once
 the process is spawned. An unknown name is an error. Browser names start
 `/usr/local/bin/box-chrome`. Team exec requests
 set `BROWSER=/usr/local/bin/box-chrome` when the caller did not set `BROWSER`.
-`PATH` is left unchanged. The page browser attaches to that desktop's
-box-chrome on `127.0.0.1:9222+N`. The shell is a sealed local bridge to the
+`PATH` is left unchanged. Waking the desktop starts
+`/usr/local/bin/box-chrome` on that display with profile
+`/home/box/chrome-profile/Fork-N` and the debugger on `127.0.0.1:9222+N`.
+The page browser starts that Chrome the same way when it is not already
+listening, then attaches only when the process on that port is that Chrome.
+Any other listener is refused. The shell is a sealed local bridge to the
 desktop's pty websocket. That websocket has no auth token, so it is not given
 to the browser. Takeover uses the existing control viewer and lease.
 Snapshots stay off: the host has no snapshot API, and a workspace export is
