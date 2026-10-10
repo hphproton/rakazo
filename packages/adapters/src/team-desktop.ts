@@ -134,10 +134,18 @@ export interface TeamDesktopAllocator {
    * Does not idle-stop a live desktop; the periodic reconcile still does that.
    */
   sweepMissingDisplays(): Promise<void>;
-  /** Periodic pass. Also the fallback when the socket watch misses an event. */
+  /**
+   * Periodic pass. Also the fallback when the socket watch misses an event.
+   * The first pass after this process starts does not idle-stop.
+   */
   reconcile(): Promise<void>;
   reconcileIfDue(): Promise<void>;
   syncMembership(memberBotIds: readonly string[]): Promise<void>;
+  /**
+   * Refresh last use for a running desktop. Stopped, reserved, booting, and
+   * releasing rows stay as they are.
+   */
+  touch(botId: string): Promise<void>;
 }
 
 export class TeamDesktopError extends Error {
@@ -329,6 +337,11 @@ export function createTeamDesktopAllocator(options: {
    */
   activeRuns?: () => Promise<readonly string[]>;
   /**
+   * Bots with an open user control lease. A running desktop in this set has
+   * its last use refreshed and is not idle-stopped.
+   */
+  activeLeases?: () => Promise<readonly string[]>;
+  /**
    * Fired when the card-visible state changes. Must not include the owner token.
    * Callers publish; this allocator does not wait on them.
    */
@@ -359,6 +372,7 @@ export function createTeamDesktopAllocator(options: {
   const host = options.host;
   const members = options.members;
   const activeRuns = options.activeRuns;
+  const activeLeases = options.activeLeases;
   const onState = options.onState;
   const startBrowser = options.startBrowser;
   const withDisplayLock = options.withDisplayLock ?? ((_displayIndex, run) => run());
@@ -405,7 +419,7 @@ export function createTeamDesktopAllocator(options: {
     },
     stop(botId) {
       return exclusive(async () => {
-        const status = await stopBody(botId);
+        const status = await stopBody(botId, "stop");
         if (!status) throw new TeamDesktopMissingError(botId);
         return status;
       });
@@ -462,6 +476,9 @@ export function createTeamDesktopAllocator(options: {
     },
     syncMembership(memberBotIds) {
       return exclusive(() => syncBody(memberBotIds));
+    },
+    touch(botId) {
+      return exclusive(() => touchBody(botId));
     },
   };
 
@@ -580,7 +597,7 @@ export function createTeamDesktopAllocator(options: {
         .sort((a, b) => (a.lastUsedAt?.getTime() ?? 0) - (b.lastUsedAt?.getTime() ?? 0));
       const victim = idle[0];
       if (!victim) throw new TeamDesktopLimitError(maxRunning);
-      await stopBody(victim.botId);
+      await stopBody(victim.botId, "cap");
     }
   }
 
@@ -611,10 +628,17 @@ export function createTeamDesktopAllocator(options: {
     }
     await store.update(row.botId, { state: "stopped" });
     notifyCard(row.botId, row.state, "stopped");
-    getLogger().info("team desktop stopped", { botId: row.botId, displayIndex: row.displayIndex });
+    getLogger().info("team desktop stopped", {
+      botId: row.botId,
+      displayIndex: row.displayIndex,
+      reason: "dead",
+    });
   }
 
-  async function stopBody(botId: string): Promise<TeamDesktopStatus | null> {
+  async function stopBody(
+    botId: string,
+    reason: "idle" | "cap" | "stop",
+  ): Promise<TeamDesktopStatus | null> {
     const row = await store.getByBot(botId);
     if (!row) return null;
     if (!inRange(row.displayIndex)) {
@@ -633,7 +657,7 @@ export function createTeamDesktopAllocator(options: {
     }
     await store.update(botId, { state: "stopped" });
     notifyCard(botId, row.state, "stopped");
-    getLogger().info("team desktop stopped", { botId, displayIndex: row.displayIndex });
+    getLogger().info("team desktop stopped", { botId, displayIndex: row.displayIndex, reason });
     return toStatus({ ...row, state: "stopped" });
   }
 
@@ -668,7 +692,11 @@ export function createTeamDesktopAllocator(options: {
       }
     }
     await store.delete(botId);
-    getLogger().info("team desktop released", { botId, displayIndex: row.displayIndex });
+    getLogger().info("team desktop released", {
+      botId,
+      displayIndex: row.displayIndex,
+      reason: "release",
+    });
   }
 
   async function syncBody(memberBotIds: readonly string[]): Promise<void> {
@@ -724,6 +752,7 @@ export function createTeamDesktopAllocator(options: {
   }
 
   async function reconcileBody(): Promise<void> {
+    const firstPass = lastReconcileAt === 0;
     lastReconcileAt = now().getTime();
     if (members) await syncBody(await members());
     try {
@@ -754,6 +783,7 @@ export function createTeamDesktopAllocator(options: {
     }
     const busy = await currentBusy();
     await releaseFinishedRuns(busy);
+    const leased = await currentLeases();
     const cutoff = idleCutoff();
     for (const row of await store.list()) {
       if (!inRange(row.displayIndex)) continue;
@@ -771,9 +801,21 @@ export function createTeamDesktopAllocator(options: {
         await markStopped(row);
         continue;
       }
+      if (leased.has(row.botId)) {
+        await store.update(row.botId, { lastUsedAt: now() });
+        continue;
+      }
       if (busy.has(row.botId)) continue;
-      if ((row.lastUsedAt?.getTime() ?? 0) <= cutoff) await stopBody(row.botId);
+      // Worker start used to idle-stop immediately, before a heartbeat could land.
+      if (firstPass) continue;
+      if ((row.lastUsedAt?.getTime() ?? 0) <= cutoff) await stopBody(row.botId, "idle");
     }
+  }
+
+  async function touchBody(botId: string): Promise<void> {
+    const row = await store.getByBot(botId);
+    if (row?.state !== "running") return;
+    await store.update(botId, { lastUsedAt: now() });
   }
 
   /**
@@ -813,6 +855,11 @@ export function createTeamDesktopAllocator(options: {
   async function currentBusy(): Promise<Set<string>> {
     if (!activeRuns) return new Set();
     return new Set(await activeRuns());
+  }
+
+  async function currentLeases(): Promise<Set<string>> {
+    if (!activeLeases) return new Set();
+    return new Set(await activeLeases());
   }
 
   /** A run that just ended starts its idle clock now, not from the last tool call. */
@@ -932,6 +979,24 @@ export async function listTeamDesktopActiveRunBotIds(prisma: PrismaClient): Prom
     distinct: ["botId"],
   });
   return rows.map((row) => row.botId);
+}
+
+/** Bots whose user control lease is still open. Heartbeats are not the only clock. */
+export async function listTeamDesktopControlLeaseBotIds(
+  prisma: PrismaClient,
+  now: Date = new Date(),
+): Promise<string[]> {
+  const rows = await prisma.computer.findMany({
+    where: {
+      controlHolder: "user",
+      controlLeaseId: { not: null },
+      controlLeaseExpiresAt: { gt: now },
+      controlBotId: { not: null },
+    },
+    select: { controlBotId: true },
+    distinct: ["controlBotId"],
+  });
+  return rows.flatMap((row) => (row.controlBotId ? [row.controlBotId] : []));
 }
 
 /** Non-archived team-computer bots, excluding Hub roster mirrors. Does not read chat groups. */

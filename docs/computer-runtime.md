@@ -24,7 +24,9 @@ desktop in 101–150, including when it switches from a private computer and
 including when it has no seat-map entry. Run setup and later calls use that
 display through `x-sand-display` and `x-sand-window-owner` on
 `http://127.0.0.1:1339`. A private computer, a missing computer, or an archived
-bot keeps the seat map. A desktop with a run still in progress is not idle-stopped. The pod
+bot keeps the seat map. A desktop with a run still in progress is not idle-stopped. A
+heartbeat or an open control lease refreshes that desktop's last use, and the first
+reconcile after the worker starts does not idle-stop. The pod
 workspace is `/workspace`, shared by sand windows, and it is not a Team B
 container. Sand hands on a dedicated seat are `computer_observe` plus `computer_act`
 kinds click, move, down, up, type, key, scroll, and wait. `focus`,

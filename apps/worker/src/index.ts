@@ -35,6 +35,7 @@ import {
   LocalArtifactStore,
   listTeamBMemberBotIds,
   listTeamDesktopActiveRunBotIds,
+  listTeamDesktopControlLeaseBotIds,
   McpConnector,
   McpOAuthBroker,
   messagingEnvFromProcess,
@@ -117,6 +118,7 @@ async function main() {
       reconcileSeconds: teamDesktopEnv.reconcileSeconds,
       members: () => listTeamBMemberBotIds(prisma),
       activeRuns: () => listTeamDesktopActiveRunBotIds(prisma),
+      activeLeases: () => listTeamDesktopControlLeaseBotIds(prisma),
       onState: (botId, state) => publishTeamDesktopComputerStatus(prisma, events, botId, state),
       startBrowser: createTeamDesktopChromeStarter({
         token: sandboxProviderOptionsFromEnv(process.env).sandHostToken,

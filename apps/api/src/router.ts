@@ -639,6 +639,12 @@ function mapSpaceLifecycleError(error: unknown): unknown {
   return error;
 }
 
+/** An open viewer or a granted lease counts as use. A non-running row is left alone. */
+async function touchTeamDesktop(deps: RouterDeps, botId: string): Promise<void> {
+  if (!deps.teamDesktops) return;
+  await deps.teamDesktops.touch(botId).catch(() => undefined);
+}
+
 function mapTeamDesktopError(error: unknown): unknown {
   if (error instanceof TeamDesktopMissingError) {
     return new ORPCError("NOT_FOUND", { message: error.message });
@@ -2817,6 +2823,7 @@ export function createRouter(deps: RouterDeps) {
             bot.computer.controlLeaseId!,
             bot.computer.controlLeaseExpiresAt!,
           );
+          await touchTeamDesktop(deps, bot.id);
           return {
             leaseId: bot.computer.controlLeaseId!,
             expiresAt: bot.computer.controlLeaseExpiresAt!.toISOString(),
@@ -2920,6 +2927,7 @@ export function createRouter(deps: RouterDeps) {
             current.controlLeaseId!,
             current.controlLeaseExpiresAt!,
           );
+          await touchTeamDesktop(deps, bot.id);
           return {
             leaseId: current.controlLeaseId!,
             expiresAt: current.controlLeaseExpiresAt!.toISOString(),
@@ -2950,6 +2958,7 @@ export function createRouter(deps: RouterDeps) {
           });
         }
         scheduleComputerSleep(deps.jobs, bot.computer.id);
+        await touchTeamDesktop(deps, bot.id);
         return { leaseId, expiresAt: expiresAt.toISOString() };
       }),
       release: authed.computer.release.handler(async ({ context, input }) => {
@@ -3298,6 +3307,7 @@ export function createRouter(deps: RouterDeps) {
             },
           ).catch(() => undefined);
         }
+        if (bot.computer?.state === "running") await touchTeamDesktop(deps, bot.id);
         return { ok: true as const };
       }),
     },
