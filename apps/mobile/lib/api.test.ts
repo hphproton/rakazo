@@ -2792,6 +2792,15 @@ describe("mobile thread event reduction", () => {
     expect(waiting?.activeRuns?.[0]?.status).toBe("waiting_takeover");
     expect(waiting?.messages.some((message) => message.id.startsWith("progress:"))).toBe(false);
     expect(waiting?.cursor).toBe(10);
+
+    const released = applyMobileThreadEvent(waiting, {
+      type: "computer.takeover.released",
+      runId: "run-1",
+      seq: 11,
+    });
+    expect(released?.run?.status).toBe("queued");
+    expect(released?.activeRuns?.[0]?.status).toBe("queued");
+    expect(released?.cursor).toBe(11);
   });
 
   it("inserts a peer takeover run that was absent from the open snapshot", () => {

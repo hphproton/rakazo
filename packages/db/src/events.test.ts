@@ -15,6 +15,7 @@ import {
   pauseRunForInput,
   pauseRunForTakeover,
   sendUserMessage,
+  settleReleasedTakeoverCards,
 } from "./events.js";
 import { RunHistoryWriteError } from "./messages.js";
 
@@ -544,6 +545,114 @@ describe("finalizeComputerControlRelease", () => {
     );
   });
 
+  it("settles a pending Needs you card on the run thread when control returns", async () => {
+    const fanout = new TestFanout();
+    const publish = vi.spyOn(fanout, "publish");
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "group-thread" }]),
+      computer: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      bot: {
+        findFirst: vi.fn().mockResolvedValue({
+          thread: { id: "bot-thread" },
+        }),
+      },
+      run: {
+        findUnique: vi.fn().mockResolvedValue({ threadId: "group-thread" }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      message: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "message-1",
+            blocks: [
+              { kind: "computer", state: "Needs you", text: "Sign in to continue." },
+              { kind: "text", text: "keep" },
+            ],
+          },
+          {
+            id: "message-2",
+            blocks: [{ kind: "computer", state: "Ready", text: "already" }],
+          },
+        ]),
+        update: vi.fn().mockResolvedValue({ id: "message-1" }),
+      },
+      thread: {
+        update: vi
+          .fn()
+          .mockResolvedValueOnce({ nextEventSeq: 8 })
+          .mockResolvedValueOnce({ nextEventSeq: 9 }),
+      },
+      event: {
+        create: vi.fn(
+          async ({ data }: { data: { seq: number; type: string; threadId: string } }) => ({
+            ...event(data.seq),
+            type: data.type,
+            threadId: data.threadId,
+          }),
+        ),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      finalizeComputerControlRelease(
+        prisma,
+        {
+          spaceId: "workspace-1",
+          computerId: "computer-1",
+          botId: "bot-1",
+          runId: "run-1",
+          leaseId: "lease-1",
+          holder: "bot",
+          reason: "done",
+        },
+        fanout,
+      ),
+    ).resolves.toEqual({ runId: "run-1" });
+
+    expect(tx.message.update).toHaveBeenCalledOnce();
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: "message-1" },
+      data: {
+        blocks: [
+          { kind: "computer", state: "Ready", text: "Sign in to continue." },
+          { kind: "text", text: "keep" },
+        ],
+      },
+    });
+    expect(tx.event.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "thread.message.updated",
+          threadId: "group-thread",
+          runId: "run-1",
+          payload: expect.objectContaining({
+            messageId: "message-1",
+            blocks: [
+              { kind: "computer", state: "Ready", text: "Sign in to continue." },
+              { kind: "text", text: "keep" },
+            ],
+          }),
+        }),
+      }),
+    );
+    expect(tx.event.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "computer.takeover.released",
+          threadId: "group-thread",
+          payload: { holder: "bot", leaseId: "lease-1", reason: "done" },
+        }),
+      }),
+    );
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith("thread:group-thread", JSON.stringify({ cursor: 8 }));
+  });
+
   it("clears the lease even if its controlling bot was deleted", async () => {
     const tx = {
       computer: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
@@ -567,6 +676,36 @@ describe("finalizeComputerControlRelease", () => {
     ).resolves.toEqual({ runId: null });
 
     expect(tx.computer.updateMany).toHaveBeenCalledOnce();
+  });
+});
+
+describe("settleReleasedTakeoverCards", () => {
+  it("does not write or notify when the takeover card is already settled", async () => {
+    const notify = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+      message: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "message-1",
+            blocks: [{ kind: "computer", state: "Ready", text: "Sign in to continue." }],
+          },
+        ]),
+        update: vi.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await settleReleasedTakeoverCards(
+      prisma,
+      { spaceId: "workspace-1", threadId: "thread-1", botId: "bot-1", runId: "run-1" },
+      notify,
+    );
+
+    expect(tx.message.update).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 

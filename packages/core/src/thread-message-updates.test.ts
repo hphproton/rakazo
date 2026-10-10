@@ -1,6 +1,12 @@
 import type { MessageBlock } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { takeLiveMessage, updateCloudAgentMessages } from "./thread-message-updates.js";
+import {
+  releasedTakeoverComputerBlocks,
+  TAKEOVER_COMPUTER_PENDING_STATE,
+  TAKEOVER_COMPUTER_RELEASED_STATE,
+  takeLiveMessage,
+  updateCloudAgentMessages,
+} from "./thread-message-updates.js";
 
 const cloud = (agentId: string): MessageBlock => ({
   kind: "cloud_agent",
@@ -47,5 +53,25 @@ describe("shared message updates", () => {
     expect(result[0]?.blocks[1]).toBe(messages[0]?.blocks[1]);
     expect(result[2]).toBe(messages[2]);
     expect(messages[0]?.blocks[0]).toMatchObject({ status: "running" });
+  });
+
+  it("settles only a pending takeover computer card", () => {
+    const pending = releasedTakeoverComputerBlocks([
+      { kind: "text", text: "keep" },
+      { kind: "computer", state: TAKEOVER_COMPUTER_PENDING_STATE, text: "Sign in if you want." },
+    ]);
+    expect(pending).toEqual([
+      { kind: "text", text: "keep" },
+      {
+        kind: "computer",
+        state: TAKEOVER_COMPUTER_RELEASED_STATE,
+        text: "Sign in if you want.",
+      },
+    ]);
+    expect(
+      releasedTakeoverComputerBlocks([
+        { kind: "computer", state: TAKEOVER_COMPUTER_RELEASED_STATE, text: "done" },
+      ]),
+    ).toBeNull();
   });
 });

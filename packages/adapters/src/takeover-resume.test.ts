@@ -7,11 +7,12 @@ import {
 } from "./takeover-resume.js";
 
 describe("takeoverResumeFromRelease", () => {
-  it("tells the bot the login finished after I'm done or a plain release", () => {
+  it("tells the bot control returned after I'm done or a plain release", () => {
     for (const reason of ["done", "released", undefined]) {
       const resume = takeoverResumeFromRelease(reason);
       expect(resume.checkpoint).toBe("takeover");
-      expect(resume.promptNote).toMatch(/finished the login/i);
+      expect(resume.promptNote).toMatch(/returned control/i);
+      expect(resume.promptNote).not.toMatch(/login/i);
     }
   });
 
@@ -41,6 +42,8 @@ describe("takeoverContinuePlan", () => {
     expect(done.heldForTakeover).toBe(false);
     expect(done.resumeHeldLease).toBe(true);
     expect(done.takeoverResume?.checkpoint).toBe("takeover");
+    expect(done.takeoverResume?.promptNote).toMatch(/returned control/i);
+    expect(done.takeoverResume?.promptNote).not.toMatch(/login/i);
 
     const skipped = takeoverContinuePlan({
       status: "queued",
