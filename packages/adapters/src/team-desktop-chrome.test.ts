@@ -56,9 +56,10 @@ describe("team desktop chrome owner", () => {
         "/opt/google/chrome/chrome",
         "--user-data-dir",
         teamDesktopChromeProfile(displayIndex),
+        "--remote-debugging-address",
+        "127.0.0.1",
         "--remote-debugging-port=9323",
       ],
-      display: ":101.0",
       sockets: ["42"],
     });
     expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("owned");
@@ -91,9 +92,10 @@ describe("team desktop chrome owner", () => {
     expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
 
     await writeProc(root, "20", {
-      argv: chromeArgv(displayIndex),
-      display: ":20",
-      sockets: ["42"],
+      argv: [],
+      cmdline: measuredCmdline("Fork-101"),
+      environ: clobberedEnviron(),
+      sockets: ["99"],
     });
     expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
 
@@ -121,7 +123,75 @@ describe("team desktop chrome owner", () => {
     await writeListen(root, port, "42", "0.0.0.0");
     await writeProc(root, "20", {
       argv: chromeArgv(displayIndex),
-      display: ":101",
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
+
+    await writeListen(root, port, "42");
+    await writeProc(root, "20", {
+      argv: [
+        "/opt/google/chrome/chrome",
+        "--user-data-dir=/home/box/chrome-profile/Fork-101",
+        "--remote-debugging-address=0.0.0.0",
+        "--remote-debugging-port=9323",
+      ],
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
+
+    await writeProc(root, "20", {
+      argv: [
+        "/opt/google/chrome/chrome",
+        "--user-data-dir=/home/box/chrome-profile/Fork-101",
+        "--remote-debugging-address",
+        "localhost",
+        "--remote-debugging-port=9323",
+      ],
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
+
+    await writeProc(root, "20", {
+      argv: [
+        "/opt/google/chrome/chrome",
+        "--user-data-dir=/home/box/chrome-profile/Fork-101",
+        "--remote-debugging-port=9323",
+      ],
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
+
+    await writeProc(root, "20", {
+      argv: chromeArgv(displayIndex),
+      exe: "/bin/bash",
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
+  });
+
+  it("accepts Chrome whose environ was overwritten and has no DISPLAY", async () => {
+    const root = await tempDir();
+    const displayIndex = 101;
+    const port = teamDesktopPorts(displayIndex).cdp;
+    const environ = clobberedEnviron();
+    expect(environ.length).toBe(10194);
+    expect(environ.includes(0)).toBe(false);
+    expect(environ.includes(Buffer.from("DISPLAY="))).toBe(false);
+    await writeListen(root, port, "42");
+    await writeProc(root, "4097904", {
+      argv: [],
+      cmdline: measuredCmdline("Fork-101"),
+      environ,
+      exe: "/opt/google/chrome/chrome",
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("owned");
+
+    await writeProc(root, "4097904", {
+      argv: [],
+      cmdline: measuredCmdline("Fork-20", 9242),
+      environ,
+      exe: "/opt/google/chrome/chrome",
       sockets: ["42"],
     });
     expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
@@ -342,15 +412,34 @@ function chromeArgv(
   ];
 }
 
+function clobberedEnviron(): Buffer {
+  return Buffer.alloc(10194, 0x78);
+}
+
+function measuredCmdline(fork: string, port = 9222 + Number(fork.slice("Fork-".length))): Buffer {
+  return Buffer.from(
+    `/opt/google/chrome/chrome --user-data-dir=/home/box/chrome-profile/${fork} --remote-debugging-port=${port} --remote-debugging-address=127.0.0.1`,
+  );
+}
+
 async function writeProc(
   root: string,
   pid: string,
-  opts: { argv: string[]; display?: string; exe?: string; sockets?: string[] },
+  opts: {
+    argv: string[];
+    display?: string;
+    exe?: string;
+    sockets?: string[];
+    cmdline?: Buffer;
+    environ?: Buffer;
+  },
 ): Promise<void> {
   const dir = path.join(root, pid);
   await mkdir(path.join(dir, "fd"), { recursive: true });
-  await writeFile(path.join(dir, "cmdline"), `${opts.argv.join("\0")}\0`);
-  if (opts.display) await writeFile(path.join(dir, "environ"), `DISPLAY=${opts.display}\0`);
+  const cmdline = opts.cmdline ?? Buffer.from(`${opts.argv.join("\0")}\0`);
+  await writeFile(path.join(dir, "cmdline"), cmdline);
+  if (opts.environ) await writeFile(path.join(dir, "environ"), opts.environ);
+  else if (opts.display) await writeFile(path.join(dir, "environ"), `DISPLAY=${opts.display}\0`);
   const exe = path.join(dir, "exe");
   await rm(exe, { force: true });
   await symlink(opts.exe ?? "/opt/google/chrome/chrome", exe);

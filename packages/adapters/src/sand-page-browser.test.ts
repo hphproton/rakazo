@@ -115,18 +115,23 @@ describe("sand page browser", () => {
     expect(await exists(marker)).toBe(false);
   });
 
-  it("refuses a Chrome on the right port with the wrong display or profile", async () => {
+  it("attaches when the listener is Chrome with a clobbered environment", async () => {
     const dir = await tempDir();
     const displayIndex = 101;
     const port = teamDesktopPorts(displayIndex).cdp;
     const { script, marker } = await markerScript(dir);
     await writeListen(dir, port, "8");
-    await writeProc(dir, "8", {
-      argv: chromeArgv(displayIndex),
-      display: ":20",
+    const environ = Buffer.alloc(10194, 0x78);
+    await writeProc(dir, "4097904", {
+      argv: [],
+      cmdline: Buffer.from(
+        "/opt/google/chrome/chrome --user-data-dir=/home/box/chrome-profile/Fork-101 --remote-debugging-port=9323 --remote-debugging-address=127.0.0.1",
+      ),
+      environ,
+      exe: "/opt/google/chrome/chrome",
       sockets: ["8"],
     });
-    const wrongDisplay = await runSandPageBrowser({
+    const attached = await runSandPageBrowser({
       displayIndex,
       command: { command: "snapshot" },
       signal: new AbortController().signal,
@@ -134,12 +139,39 @@ describe("sand page browser", () => {
       procRoot: dir,
       waitMs: 0,
     });
-    expect(wrongDisplay.ok).toBe(false);
-    expect(wrongDisplay.fallback).toBe("computer_act");
+    expect(attached).toMatchObject({ ok: true });
+    expect(await exists(marker)).toBe(true);
 
+    await writeProc(dir, "4097904", {
+      argv: [],
+      cmdline: Buffer.from(
+        "/opt/google/chrome/chrome --user-data-dir=/home/box/chrome-profile/Fork-20 --remote-debugging-port=9242 --remote-debugging-address=127.0.0.1",
+      ),
+      environ,
+      exe: "/opt/google/chrome/chrome",
+      sockets: ["8"],
+    });
+    const otherFork = await runSandPageBrowser({
+      displayIndex,
+      command: { command: "snapshot" },
+      signal: new AbortController().signal,
+      scriptPath: script,
+      procRoot: dir,
+      waitMs: 0,
+    });
+    expect(otherFork.ok).toBe(false);
+    expect(otherFork.error).toBe(
+      "Page browser refused: CDP port 9323 is not this desktop's Chrome.",
+    );
+  });
+
+  it("refuses a Chrome on the right port with the wrong profile", async () => {
+    const dir = await tempDir();
+    const displayIndex = 101;
+    const { script, marker } = await markerScript(dir);
+    await writeListen(dir, teamDesktopPorts(displayIndex).cdp, "8");
     await writeProc(dir, "8", {
       argv: chromeArgv(displayIndex, "/tmp/Fork-101"),
-      display: ":101",
       sockets: ["8"],
     });
     const wrongProfile = await runSandPageBrowser({
@@ -251,12 +283,21 @@ async function ownedChrome(root: string, displayIndex: number): Promise<void> {
 async function writeProc(
   root: string,
   pid: string,
-  opts: { argv: string[]; display?: string; exe?: string; sockets?: string[] },
+  opts: {
+    argv: string[];
+    display?: string;
+    exe?: string;
+    sockets?: string[];
+    cmdline?: Buffer;
+    environ?: Buffer;
+  },
 ): Promise<void> {
   const dir = path.join(root, pid);
   await mkdir(path.join(dir, "fd"), { recursive: true });
-  await writeFile(path.join(dir, "cmdline"), `${opts.argv.join("\0")}\0`);
-  if (opts.display) await writeFile(path.join(dir, "environ"), `DISPLAY=${opts.display}\0`);
+  const cmdline = opts.cmdline ?? Buffer.from(`${opts.argv.join("\0")}\0`);
+  await writeFile(path.join(dir, "cmdline"), cmdline);
+  if (opts.environ) await writeFile(path.join(dir, "environ"), opts.environ);
+  else if (opts.display) await writeFile(path.join(dir, "environ"), `DISPLAY=${opts.display}\0`);
   const exe = path.join(dir, "exe");
   await rm(exe, { force: true });
   await symlink(opts.exe ?? "/opt/google/chrome/chrome", exe);
