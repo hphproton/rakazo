@@ -1,7 +1,10 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ProcessEvent } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it } from "vitest";
 import { teamDesktopSpawnArgv } from "./sand-desktop-hands.js";
@@ -169,18 +172,26 @@ describe("team desktop chrome owner", () => {
     expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
   });
 
-  it("accepts Chrome whose environ was overwritten and has no DISPLAY", async () => {
+  it("accepts captured Chrome command lines, including one trailing NUL and a clobbered environment", async () => {
     const root = await tempDir();
     const displayIndex = 101;
     const port = teamDesktopPorts(displayIndex).cdp;
     const environ = clobberedEnviron();
+    const title = await readFile(titleFixture);
+    const argv = await readFile(argvFixture);
     expect(environ.length).toBe(10194);
     expect(environ.includes(0)).toBe(false);
     expect(environ.includes(Buffer.from("DISPLAY="))).toBe(false);
+    expect(nulCount(title)).toBe(1);
+    expect(title.at(-1)).toBe(0);
+    expect(title.subarray(0, -1).includes(0)).toBe(false);
+    expect(title.includes(Buffer.from(" --"))).toBe(true);
+    expect(nulCount(argv)).toBeGreaterThan(1);
+    expect(argv.includes(0)).toBe(true);
     await writeListen(root, port, "42");
     await writeProc(root, "4097904", {
       argv: [],
-      cmdline: measuredCmdline("Fork-101"),
+      cmdline: title,
       environ,
       exe: "/opt/google/chrome/chrome",
       sockets: ["42"],
@@ -189,13 +200,109 @@ describe("team desktop chrome owner", () => {
 
     await writeProc(root, "4097904", {
       argv: [],
-      cmdline: measuredCmdline("Fork-20", 9242),
+      cmdline: Buffer.concat([title, Buffer.from("\0\0")]),
+      environ,
+      exe: "/opt/google/chrome/chrome",
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("owned");
+
+    await writeProc(root, "4097904", {
+      argv: [],
+      cmdline: argv,
+      environ,
+      exe: "/opt/google/chrome/chrome",
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("owned");
+
+    const renderer = Buffer.from(`${title.subarray(0, -1).toString("utf8")} --type=renderer\0`);
+    await writeProc(root, "4097904", {
+      argv: [],
+      cmdline: renderer,
+      environ,
+      exe: "/opt/google/chrome/chrome",
+      sockets: ["42"],
+    });
+    expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
+
+    await writeProc(root, "4097904", {
+      argv: [],
+      cmdline: Buffer.from(title.toString("utf8").replaceAll("Fork-101", "Fork-20")),
       environ,
       exe: "/opt/google/chrome/chrome",
       sockets: ["42"],
     });
     expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("foreign");
   });
+
+  it.skipIf(!CHROME_BIN)(
+    "accepts the command line of a live headless Chrome, including its rewritten form",
+    async () => {
+      const bin = CHROME_BIN;
+      if (!bin) throw new Error("Chrome is not installed");
+      const root = await tempDir();
+      const displayIndex = 101;
+      const profile = await mkdtemp(path.join(tmpdir(), "rakazo-chrome-live-"));
+      dirs.push(profile);
+      const debugPort = await freePort();
+      const child = spawn(
+        bin,
+        [
+          "--headless=new",
+          "--no-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--no-first-run",
+          `--user-data-dir=${profile}`,
+          "--remote-debugging-address=127.0.0.1",
+          `--remote-debugging-port=${debugPort}`,
+          "about:blank",
+        ],
+        { stdio: "ignore", detached: true },
+      );
+      child.unref();
+      try {
+        await waitForDebugPort(debugPort);
+        if (!child.pid) throw new Error("Chrome did not start");
+        const live = await readFile(`/proc/${child.pid}/cmdline`);
+        expect(live.includes(Buffer.from(`--user-data-dir=${profile}`))).toBe(true);
+        expect(live.includes(Buffer.from("--remote-debugging-address=127.0.0.1"))).toBe(true);
+        const fork = "/home/box/chrome-profile/Fork-101";
+        const argv = Buffer.from(live.toString("utf8").replaceAll(profile, fork));
+        const title = Buffer.from(setprocTitle(live).toString("utf8").replaceAll(profile, fork));
+        expect(nulCount(title)).toBe(1);
+        expect(title.at(-1)).toBe(0);
+        expect(title.subarray(0, -1).includes(0)).toBe(false);
+        await writeListen(root, teamDesktopPorts(displayIndex).cdp, "42");
+        await writeProc(root, "4242", {
+          argv: [],
+          cmdline: argv,
+          environ: clobberedEnviron(),
+          exe: "/opt/google/chrome/chrome",
+          sockets: ["42"],
+        });
+        expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("owned");
+        await writeProc(root, "4242", {
+          argv: [],
+          cmdline: title,
+          environ: clobberedEnviron(),
+          exe: "/opt/google/chrome/chrome",
+          sockets: ["42"],
+        });
+        expect(await teamDesktopCdpStatus(displayIndex, root)).toBe("owned");
+      } finally {
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            child.kill("SIGKILL");
+          }
+        }
+      }
+    },
+    20_000,
+  );
 
   it("does not launch over a foreign listener or a Chrome that is already starting", async () => {
     const root = await tempDir();
@@ -416,10 +523,62 @@ function clobberedEnviron(): Buffer {
   return Buffer.alloc(10194, 0x78);
 }
 
+const titleFixture = fileURLToPath(
+  new URL("./fixtures/chrome-fork-101-setproctitle.bin", import.meta.url),
+);
+const argvFixture = fileURLToPath(new URL("./fixtures/chrome-fork-101-argv.bin", import.meta.url));
+const CHROME_BIN = [
+  "/opt/google/chrome/chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+].find((candidate) => existsSync(candidate));
+
+function nulCount(bytes: Buffer): number {
+  let count = 0;
+  for (const byte of bytes) if (byte === 0) count += 1;
+  return count;
+}
+
+function setprocTitle(raw: Buffer): Buffer {
+  const parts = raw
+    .toString("utf8")
+    .split("\0")
+    .filter((part) => part.length > 0);
+  return Buffer.from(`${parts.join(" ")}\0`);
+}
+
 function measuredCmdline(fork: string, port = 9222 + Number(fork.slice("Fork-".length))): Buffer {
   return Buffer.from(
-    `/opt/google/chrome/chrome --user-data-dir=/home/box/chrome-profile/${fork} --remote-debugging-port=${port} --remote-debugging-address=127.0.0.1`,
+    `/opt/google/chrome/chrome --no-sandbox --user-data-dir=/home/box/chrome-profile/${fork} --remote-debugging-port=${port} --remote-debugging-address=127.0.0.1\0`,
   );
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function waitForDebugPort(port: number): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (response.ok) return;
+    } catch {
+      // Chrome is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Chrome did not open its debugging port");
 }
 
 async function writeProc(

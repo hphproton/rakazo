@@ -1,6 +1,7 @@
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { pageBrowserFallback, runSandPageBrowser } from "./sand-page-browser.js";
 import { teamDesktopPorts } from "./team-desktop.js";
@@ -122,11 +123,15 @@ describe("sand page browser", () => {
     const { script, marker } = await markerScript(dir);
     await writeListen(dir, port, "8");
     const environ = Buffer.alloc(10194, 0x78);
+    const cmdline = await readFile(titleFixture);
+    expect(nulCount(cmdline)).toBe(1);
+    expect(cmdline.at(-1)).toBe(0);
+    expect(environ.length).toBe(10194);
+    expect(environ.includes(0)).toBe(false);
+    expect(environ.includes(Buffer.from("DISPLAY="))).toBe(false);
     await writeProc(dir, "4097904", {
       argv: [],
-      cmdline: Buffer.from(
-        "/opt/google/chrome/chrome --user-data-dir=/home/box/chrome-profile/Fork-101 --remote-debugging-port=9323 --remote-debugging-address=127.0.0.1",
-      ),
+      cmdline,
       environ,
       exe: "/opt/google/chrome/chrome",
       sockets: ["8"],
@@ -144,9 +149,7 @@ describe("sand page browser", () => {
 
     await writeProc(dir, "4097904", {
       argv: [],
-      cmdline: Buffer.from(
-        "/opt/google/chrome/chrome --user-data-dir=/home/box/chrome-profile/Fork-20 --remote-debugging-port=9242 --remote-debugging-address=127.0.0.1",
-      ),
+      cmdline: Buffer.from(cmdline.toString("utf8").replaceAll("Fork-101", "Fork-20")),
       environ,
       exe: "/opt/google/chrome/chrome",
       sockets: ["8"],
@@ -256,6 +259,16 @@ async function tempDir(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "rakazo-page-browser-"));
   dirs.push(dir);
   return dir;
+}
+
+const titleFixture = fileURLToPath(
+  new URL("./fixtures/chrome-fork-101-setproctitle.bin", import.meta.url),
+);
+
+function nulCount(bytes: Buffer): number {
+  let count = 0;
+  for (const byte of bytes) if (byte === 0) count += 1;
+  return count;
 }
 
 function chromeArgv(

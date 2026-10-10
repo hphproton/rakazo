@@ -76,7 +76,8 @@ and the debugger on `127.0.0.1:9222+N`. The page browser starts it the same
 way when it is not already listening, then attaches only when that listener
 is Chrome, its profile is exactly `/home/box/chrome-profile/Fork-N`, and
 `--remote-debugging-address` is `127.0.0.1`. Chrome's process environment is
-not read. Its shell is a sealed bridge to the pty
+not read. A command line Chrome has rewritten into one space-separated string
+is still that Chrome. Its shell is a sealed bridge to the pty
 websocket on `13600+N`; that websocket has no auth token and is not exposed.
 Takeover uses the existing control viewer. Snapshots stay off: the host has
 no snapshot API. A directory is listed or skipped; it is not passed to
