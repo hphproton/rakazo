@@ -245,14 +245,23 @@ function baseName(value: string): string {
 
 async function commandArgs(procRoot: string, pid: string): Promise<string[] | undefined> {
   const raw = await readBytes(procRoot, pid, "cmdline");
-  if (!raw) return undefined;
-  if (raw.includes(0)) {
-    const parts = raw.toString("utf8").split("\0");
-    if (parts.at(-1) === "") parts.pop();
-    return parts.filter((part) => part.length > 0);
+  if (!raw || raw.length === 0) return undefined;
+  const args = parseProcCmdline(raw);
+  return args.length > 0 ? args : undefined;
+}
+
+/**
+ * A normal command line is NUL-separated. Chrome's process-title rewrite leaves
+ * one space-joined string and a single trailing NUL. Split on NUL, drop empty
+ * trailing parts, and whitespace-split that single part when it holds ` --`.
+ */
+function parseProcCmdline(raw: Buffer): string[] {
+  const parts = raw.toString("utf8").split("\0");
+  while (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
+  if (parts.length === 1 && parts[0]?.includes(" --")) {
+    return parts[0].split(/\s+/).filter((part) => part.length > 0);
   }
-  const text = raw.toString("utf8").trim();
-  return text ? text.split(/\s+/) : [];
+  return parts.filter((part) => part.length > 0);
 }
 
 async function readExe(procRoot: string, pid: string): Promise<string | undefined> {
