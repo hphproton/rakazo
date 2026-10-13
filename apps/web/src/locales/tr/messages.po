@@ -718,7 +718,7 @@ msgstr ""
 msgid "Board"
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Booting live desktop…"
 msgstr "Canlı masaüstü başlatılıyor…"
 
@@ -1084,7 +1084,7 @@ msgstr "Tamamlandı"
 msgid "Computer"
 msgstr "Bilgisayar"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer failed to boot"
 msgstr "Bilgisayar başlatılamadı"
 
@@ -1092,11 +1092,11 @@ msgstr "Bilgisayar başlatılamadı"
 msgid "Computer is asleep"
 msgstr "Bilgisayar uykuda"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is asleep. Open it to wake."
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is stopped"
 msgstr "Bilgisayar durduruldu"
 
@@ -4479,13 +4479,13 @@ msgstr ""
 msgid "To do"
 msgstr ""
 
-#: src/pages/shell/bot-picker.tsx
-msgid "To:"
-msgstr "Kime:"
-
 #: src/pages/Shell.tsx
 msgid "To Hub · {name}"
 msgstr "Hub · {name} kişisine"
+
+#: src/pages/shell/bot-picker.tsx
+msgid "To:"
+msgstr "Kime:"
 
 #: src/pages/Artifacts.tsx
 #: src/pages/shell/chat-context.tsx
@@ -4522,6 +4522,7 @@ msgstr ""
 
 #: src/pages/ActivityList.tsx
 #: src/pages/Onboarding.tsx
+#: src/pages/Shell.tsx
 msgid "Try again"
 msgstr "Tekrar dene"
 

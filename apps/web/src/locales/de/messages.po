@@ -718,7 +718,7 @@ msgstr ""
 msgid "Board"
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Booting live desktop…"
 msgstr "Live-Desktop wird gestartet…"
 
@@ -1084,7 +1084,7 @@ msgstr "Abschließen"
 msgid "Computer"
 msgstr "Computer"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer failed to boot"
 msgstr "Computer konnte nicht gestartet werden"
 
@@ -1092,11 +1092,11 @@ msgstr "Computer konnte nicht gestartet werden"
 msgid "Computer is asleep"
 msgstr "Computer ist im Ruhezustand"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is asleep. Open it to wake."
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is stopped"
 msgstr "Computer ist gestoppt"
 
@@ -4479,13 +4479,13 @@ msgstr ""
 msgid "To do"
 msgstr ""
 
-#: src/pages/shell/bot-picker.tsx
-msgid "To:"
-msgstr "An:"
-
 #: src/pages/Shell.tsx
 msgid "To Hub · {name}"
 msgstr "An Hub · {name}"
+
+#: src/pages/shell/bot-picker.tsx
+msgid "To:"
+msgstr "An:"
 
 #: src/pages/Artifacts.tsx
 #: src/pages/shell/chat-context.tsx
@@ -4522,6 +4522,7 @@ msgstr ""
 
 #: src/pages/ActivityList.tsx
 #: src/pages/Onboarding.tsx
+#: src/pages/Shell.tsx
 msgid "Try again"
 msgstr "Erneut versuchen"
 

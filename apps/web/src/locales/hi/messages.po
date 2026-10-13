@@ -718,7 +718,7 @@ msgstr ""
 msgid "Board"
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Booting live desktop…"
 msgstr "लाइव डेस्कटॉप शुरू हो रहा है…"
 
@@ -1084,7 +1084,7 @@ msgstr "पूर्ण"
 msgid "Computer"
 msgstr "कंप्यूटर"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer failed to boot"
 msgstr "कंप्यूटर शुरू नहीं हो सका"
 
@@ -1092,11 +1092,11 @@ msgstr "कंप्यूटर शुरू नहीं हो सका"
 msgid "Computer is asleep"
 msgstr "कंप्यूटर निष्क्रिय है"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is asleep. Open it to wake."
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is stopped"
 msgstr "कंप्यूटर रुका हुआ है"
 
@@ -4479,13 +4479,13 @@ msgstr ""
 msgid "To do"
 msgstr ""
 
-#: src/pages/shell/bot-picker.tsx
-msgid "To:"
-msgstr "प्रति:"
-
 #: src/pages/Shell.tsx
 msgid "To Hub · {name}"
 msgstr "Hub · {name} को"
+
+#: src/pages/shell/bot-picker.tsx
+msgid "To:"
+msgstr "प्रति:"
 
 #: src/pages/Artifacts.tsx
 #: src/pages/shell/chat-context.tsx
@@ -4522,6 +4522,7 @@ msgstr ""
 
 #: src/pages/ActivityList.tsx
 #: src/pages/Onboarding.tsx
+#: src/pages/Shell.tsx
 msgid "Try again"
 msgstr "फिर से कोशिश करें"
 

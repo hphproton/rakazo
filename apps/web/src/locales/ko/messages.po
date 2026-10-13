@@ -718,7 +718,7 @@ msgstr ""
 msgid "Board"
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Booting live desktop…"
 msgstr "라이브 데스크톱 시작 중…"
 
@@ -1084,7 +1084,7 @@ msgstr "완료"
 msgid "Computer"
 msgstr "컴퓨터"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer failed to boot"
 msgstr "컴퓨터를 시작하지 못했습니다"
 
@@ -1092,11 +1092,11 @@ msgstr "컴퓨터를 시작하지 못했습니다"
 msgid "Computer is asleep"
 msgstr "컴퓨터가 절전 상태입니다"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is asleep. Open it to wake."
 msgstr "컴퓨터가 절전 상태입니다. 열어 깨우세요."
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is stopped"
 msgstr "컴퓨터가 중지됨"
 
@@ -4479,13 +4479,13 @@ msgstr ""
 msgid "To do"
 msgstr ""
 
-#: src/pages/shell/bot-picker.tsx
-msgid "To:"
-msgstr "받는 사람:"
-
 #: src/pages/Shell.tsx
 msgid "To Hub · {name}"
 msgstr "Hub · {name}에게"
+
+#: src/pages/shell/bot-picker.tsx
+msgid "To:"
+msgstr "받는 사람:"
 
 #: src/pages/Artifacts.tsx
 #: src/pages/shell/chat-context.tsx
@@ -4522,6 +4522,7 @@ msgstr ""
 
 #: src/pages/ActivityList.tsx
 #: src/pages/Onboarding.tsx
+#: src/pages/Shell.tsx
 msgid "Try again"
 msgstr "다시 시도"
 

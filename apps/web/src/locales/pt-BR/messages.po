@@ -718,7 +718,7 @@ msgstr ""
 msgid "Board"
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Booting live desktop…"
 msgstr "Iniciando a área de trabalho ao vivo..."
 
@@ -1084,7 +1084,7 @@ msgstr "Concluir"
 msgid "Computer"
 msgstr "Computador"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer failed to boot"
 msgstr "Falha ao inicializar o computador"
 
@@ -1092,11 +1092,11 @@ msgstr "Falha ao inicializar o computador"
 msgid "Computer is asleep"
 msgstr "O computador está dormindo"
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is asleep. Open it to wake."
 msgstr ""
 
-#: src/pages/Shell.tsx
+#: src/lib/computer-placeholder.ts
 msgid "Computer is stopped"
 msgstr "O computador está parado"
 
@@ -4479,13 +4479,13 @@ msgstr ""
 msgid "To do"
 msgstr ""
 
-#: src/pages/shell/bot-picker.tsx
-msgid "To:"
-msgstr "Para:"
-
 #: src/pages/Shell.tsx
 msgid "To Hub · {name}"
 msgstr "Para o Hub · {name}"
+
+#: src/pages/shell/bot-picker.tsx
+msgid "To:"
+msgstr "Para:"
 
 #: src/pages/Artifacts.tsx
 #: src/pages/shell/chat-context.tsx
@@ -4522,6 +4522,7 @@ msgstr ""
 
 #: src/pages/ActivityList.tsx
 #: src/pages/Onboarding.tsx
+#: src/pages/Shell.tsx
 msgid "Try again"
 msgstr "Tentar novamente"
 
