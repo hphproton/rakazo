@@ -164,6 +164,28 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * Read the pod workspace when this bot's team desktop is already up.
+   * Does not ensure, start a display, or exec. An asleep desktop and a Grok
+   * seat are left untouched. A ListDirectory 403 is not a missing layout.
+   */
+  async peekWorkspace(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    if (computer.kind !== "sand") return;
+    const gateway = this.opts.teamDesktops;
+    if (!gateway) return;
+    context.signal.throwIfAborted();
+    const botId = context.botId || computer.botId;
+    const resolved = await gateway.resolve(botId);
+    if (!resolved) return;
+    const route = this.desktopSession(resolved, botId);
+    try {
+      await route.host.listDirectory(route.agentId, SAND_WORKSPACE, context.signal);
+    } catch (error) {
+      if (isSandListDirectoryDenied(error)) return;
+      throw error;
+    }
+  }
+
+  /**
    * True only when this bot's team desktop is already up.
    * Reads the team_desktops row, the X socket, and exec port 14000+N.
    * Does not ensure, start a window, or write. Seats stay on the seat map.

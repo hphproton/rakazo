@@ -342,6 +342,7 @@ async function sandReuse(state: TeamDesktopState) {
   const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/GetCapabilities")) return Response.json({ computerUseSupported: true });
+    if (url.endsWith("/ListDirectory")) return Response.json({ entries: [] });
     if (url.endsWith("/Exec")) {
       return new Response(
         Buffer.concat([
