@@ -1,6 +1,12 @@
 import type { MessageBlock, ThreadMessage, ThreadMessagePage } from "@rakazo/contracts";
 import { MessageBlock as MessageBlockSchema } from "@rakazo/contracts";
-import { callIdFromClientNonce, isPeerReceiptBlocks } from "@rakazo/core";
+import {
+  BACKGROUND_RUN_TRIGGERS,
+  callIdFromClientNonce,
+  isBackgroundInputBlock,
+  isBackgroundRunTrigger,
+  isPeerReceiptBlocks,
+} from "@rakazo/core";
 import { messageReplyPreview } from "@rakazo/core/message-quote";
 import type { Prisma, PrismaClient } from "@rakazo/db";
 
@@ -107,21 +113,36 @@ export async function loadAllMessages(
   return pages.reverse().flat();
 }
 
-async function withoutPeerRunMessages<T extends { runId: string | null; blocks: Prisma.JsonValue }>(
-  prisma: MessageDb,
-  rows: T[],
-): Promise<T[]> {
+async function withoutPeerRunMessages<
+  T extends {
+    runId: string | null;
+    blocks: Prisma.JsonValue;
+  },
+>(prisma: MessageDb, rows: T[]): Promise<T[]> {
   const runIds = [...new Set(rows.flatMap((row) => (row.runId ? [row.runId] : [])))];
   if (runIds.length === 0) return rows;
-  const peerRuns = await prisma.run.findMany({
-    where: { id: { in: runIds }, trigger: "bot_message" },
-    select: { id: true },
+  const runs = await prisma.run.findMany({
+    where: {
+      id: { in: runIds },
+      trigger: { in: ["bot_message", ...BACKGROUND_RUN_TRIGGERS] },
+    },
+    select: { id: true, trigger: true },
   });
-  const peerRunIds = new Set(peerRuns.map((run) => run.id));
+  const backgroundRunIds = new Set(
+    runs.filter((run) => isBackgroundRunTrigger(run.trigger)).map((r) => r.id),
+  );
+  const peerRunIds = new Set(
+    runs.filter((run) => !backgroundRunIds.has(run.id)).map((run) => run.id),
+  );
   return rows.filter((row) => {
-    if (!row.runId || !peerRunIds.has(row.runId)) return true;
-    // Keep peer receipts (chips), ask cards, and the bot's own text reply.
+    if (!row.runId) return true;
     const blocks = row.blocks as MessageBlock[];
+    if (backgroundRunIds.has(row.runId)) {
+      // Ticket work stays off the transcript except existing user-input cards.
+      return blocks.some(isBackgroundInputBlock);
+    }
+    if (!peerRunIds.has(row.runId)) return true;
+    // Keep peer receipts (chips), ask cards, and the bot's own text reply.
     return blocks.some(
       (block) =>
         block.kind === "bot_message_sent" ||
@@ -147,6 +168,22 @@ export async function isPeerRun(
     cache.set(runId, peerRun);
   }
   return peerRun;
+}
+
+export async function isBackgroundRun(
+  prisma: MessageDb,
+  runId: string | undefined,
+  cache: Map<string, Promise<boolean>>,
+): Promise<boolean> {
+  if (!runId) return false;
+  let backgroundRun = cache.get(runId);
+  if (!backgroundRun) {
+    backgroundRun = prisma.run
+      .findUnique({ where: { id: runId }, select: { trigger: true } })
+      .then((run) => isBackgroundRunTrigger(run?.trigger));
+    cache.set(runId, backgroundRun);
+  }
+  return backgroundRun;
 }
 
 /** Peer-run SSE events that must still reach an open thread (terminals, waits, receipts, asks, text). */
@@ -181,6 +218,32 @@ export function shouldForwardPeerThreadEvent(event: {
           block.kind === "text"),
     )
   );
+}
+
+/**
+ * A background run's chatter stays off the transcript: no starts, progress, steps,
+ * or final text. An open thread still receives the state it needs to answer without
+ * a reload — waiting input, computer takeover, and terminal run events — plus the
+ * existing user-input cards.
+ */
+export function shouldForwardBackgroundThreadEvent(event: {
+  type: string;
+  payload: { blocks?: unknown };
+}): boolean {
+  if (
+    event.type === "run.completed" ||
+    event.type === "run.failed" ||
+    event.type === "run.cancelled" ||
+    event.type === "run.waiting_input" ||
+    event.type === "computer.takeover.requested"
+  ) {
+    return true;
+  }
+  if (event.type !== "thread.message.created" && event.type !== "thread.message.updated") {
+    return false;
+  }
+  const blocks = event.payload.blocks;
+  return Array.isArray(blocks) && blocks.some(isBackgroundInputBlock);
 }
 
 function toThreadMessage(row: {

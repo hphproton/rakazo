@@ -13,6 +13,7 @@ import type {
   ConnectionCatalogItem,
   Group,
   Me,
+  MessageReaction,
   ProductEvent,
   Routine,
   SearchHit,
@@ -30,14 +31,18 @@ import {
   ATTACHMENT_MAX_COUNT,
   canReactToThreadMessage,
   MESSAGE_REACTIONS,
-  type MessageReaction,
   normalizeCreateBotProfile,
 } from "@rakazo/contracts";
-import type { ComputerWakeErrors, HubFamilyChip, HubTopicChipPlan } from "@rakazo/core";
+import type {
+  ComposerMention,
+  ComputerWakeErrors,
+  HubFamilyChip,
+  HubTopicChipPlan,
+  SlashActionId,
+} from "@rakazo/core";
 import {
   attachmentsForThread,
   buildComposerMentionOptions,
-  type ComposerMention,
   clampMentionHighlightIndex,
   clearComputerWakeError,
   cronFromPreset,
@@ -65,7 +70,6 @@ import {
   resolveMentionPickerKey,
   runThreadSubscription,
   SLASH_ACTIONS,
-  type SlashActionId,
   searchHitThreadTarget,
   serializeComposerPrompt,
   speechFromBlocks,
@@ -75,6 +79,7 @@ import {
   visibleComputerWakeError,
   withLiveStreamingProgress,
 } from "@rakazo/core";
+import type { GroupAvatarMember } from "@rakazo/ui-web";
 import {
   AvatarStyleProvider,
   BotAvatar,
@@ -85,7 +90,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   GroupAvatar,
-  type GroupAvatarMember,
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
@@ -100,6 +104,7 @@ import {
   Bell,
   Box,
   ChevronDown,
+  CircleAlert,
   Clock,
   Copy,
   FolderOpen,
@@ -123,17 +128,15 @@ import {
   Settings,
   Smile,
   Square,
+  SquareKanban,
   TextQuote,
   Trash2,
   X,
 } from "lucide-react";
+import type { ClipboardEvent, DragEvent, MutableRefObject, RefObject } from "react";
 import {
-  type ClipboardEvent,
-  type DragEvent,
   Fragment,
-  type MutableRefObject,
   memo,
-  type RefObject,
   Suspense,
   useCallback,
   useEffect,
@@ -177,6 +180,10 @@ import { readActivityMode, writeActivityMode } from "../lib/activity-mode";
 import type { ArtifactTarget } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
+import {
+  getBotsSidebarDensity,
+  subscribeBotsSidebarDensity,
+} from "../lib/bots-sidebar-density-pref";
 import {
   BOTS_SIDEBAR_EDGE_DRAG_PX,
   readBotsSidebarCollapsed,
@@ -223,7 +230,11 @@ import {
   rightPanelStorageKey,
   writeRightPanelState,
 } from "../lib/right-panel-state";
-import { rosterWorkStatusLabel } from "../lib/roster-status";
+import {
+  compactRosterStatusLabel,
+  rosterHasUndismissedRunError,
+  rosterWorkStatusLabel,
+} from "../lib/roster-status";
 import { clearSpaceSelection, rpc, selectedSpaceId, selectSpace } from "../lib/rpc";
 import { readSeenRunErrorIds, rememberSeenRunErrorId } from "../lib/run-error-storage";
 import { sharedInflight } from "../lib/shared-inflight";
@@ -264,10 +275,10 @@ import type { ContextMenuPosition } from "./BotContextMenu";
 import { CreateGroupForm, GroupSettings, memberName } from "./GroupPanel";
 import { HostComputerPrompt } from "./HostComputerPrompt";
 import { ResizableSidePanel } from "./ResizableSidePanel";
+import type { RoutineDraftState } from "./RoutineEditor";
 import {
   draftFromRoutine,
   emptyRoutineDraft,
-  type RoutineDraftState,
   RoutineEditor,
   RoutineListHeader,
   RoutineListRow,
@@ -465,6 +476,11 @@ export function ShellPage() {
     subscribeToolActivity,
     getToolActivityEnabled,
     () => true,
+  );
+  const botsSidebarDensity = useSyncExternalStore(
+    subscribeBotsSidebarDensity,
+    getBotsSidebarDensity,
+    () => "comfortable",
   );
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [replyTarget, setReplyTarget] = useState<ThreadMessage | null>(null);
@@ -2763,8 +2779,8 @@ export function ShellPage() {
     return () => window.clearInterval(timer);
   }, [panel, computerOpen, computerBot?.id, active?.id, computer?.state]);
 
-  /** Open the computer view, taking control when possible. Resolves false if booting failed. */
-  async function openComputer(botId?: string) {
+  /** Open the computer view. Only an explicit Take control asks for the lease. */
+  async function openComputer(botId?: string, takeControl = false) {
     const id = botId ?? active?.id;
     if (!id) return false;
     const bot = botsRef.current.find((candidate) => candidate.id === id);
@@ -2781,7 +2797,7 @@ export function ShellPage() {
     setComputerOpen(true);
     computerOpenRef.current = true;
     computerVisible.current = true;
-    const needsTakeover = !userHoldsComputerControl(targetComputer, id);
+    const needsTakeover = takeControl && !userHoldsComputerControl(targetComputer, id);
     const blocked = computerTakeoverBlocked(targetComputer, snapshot?.run?.status);
     try {
       await bootComputer({
@@ -2801,29 +2817,25 @@ export function ShellPage() {
     void openComputerRef.current(botId);
   }, []);
 
-  const releaseComputer = useCallback(
-    async (reason?: ComputerReleaseReason) => {
-      const botId = computerBotIdRef.current ?? activeBotId.current;
-      if (!botId) return;
-      try {
-        await rpc.computer.release({ botId, reason });
-        if (computerBotIdRef.current !== botId && activeBotId.current !== botId) return;
-        setComputerOpen(false);
-        computerOpenRef.current = false;
-        const groupId = activeGroupId.current;
-        if (groupId) {
-          await refreshGroupThreadRef.current(groupId).catch(() => undefined);
-        } else {
-          await refreshThreadRef.current(botId).catch(() => undefined);
-        }
-      } catch {
-        if (computerBotIdRef.current !== botId && activeBotId.current !== botId) return;
-        setComputerError(t`Could not continue`);
-        setComputerErrorFromScreen(false);
+  async function releaseComputer(reason?: ComputerReleaseReason) {
+    const botId = computerBotIdRef.current ?? activeBotId.current;
+    if (!botId) return;
+    try {
+      await rpc.computer.release({ botId, reason });
+      if (computerBotIdRef.current !== botId && activeBotId.current !== botId) return;
+      await refreshComputerFor(botId).catch(() => undefined);
+      const groupId = activeGroupId.current;
+      if (groupId) {
+        await refreshGroupThreadRef.current(groupId).catch(() => undefined);
+      } else {
+        await refreshThreadRef.current(botId).catch(() => undefined);
       }
-    },
-    [t],
-  );
+    } catch {
+      if (computerBotIdRef.current !== botId && activeBotId.current !== botId) return;
+      setComputerError(t`Could not continue`);
+      setComputerErrorFromScreen(false);
+    }
+  }
 
   function dismissComposerError() {
     // The strip shows one message at a time, so only dismiss the run failure when it is the
@@ -2976,6 +2988,7 @@ export function ShellPage() {
       ) : null}
       <aside
         data-testid="bots-sidebar"
+        data-bots-sidebar-density={botsSidebarDensity}
         data-collapsed={botsSidebarCollapsed ? "true" : "false"}
         inert={botsSidebarCollapsed && !mobileSidebarOpen ? true : undefined}
         className={`absolute inset-y-0 start-0 z-40 flex w-[calc(100%-48px)] max-w-[316px] shrink-0 flex-col border-e border-sidebar-border bg-sidebar transition-[transform,width,opacity] md:static md:z-auto md:translate-x-0 ${
@@ -3234,15 +3247,30 @@ export function ShellPage() {
                         const selected =
                           (item.kind === "bot" && !inGroup && active?.id === item.chat.id) ||
                           (item.kind === "group" && inGroup && activeGroup?.id === item.chat.id);
+                        const compact = botsSidebarDensity === "compact";
                         const workStatusLabel =
                           item.kind === "bot" ? rosterWorkStatusLabel(item.chat.status) : null;
-                        const rosterLine =
-                          workStatusLabel ??
-                          (item.kind === "bot"
-                            ? item.chat.preview ||
-                              (item.chat.status !== "idle" ? item.chat.status : "")
-                            : item.chat.preview ||
-                              item.chat.members.map((member) => member.name).join(", "));
+                        const rowError =
+                          item.kind === "bot" &&
+                          (rosterHasUndismissedRunError(
+                            item.chat.runErrorId,
+                            dismissedRunErrorIds,
+                          ) ||
+                            (active?.id === item.chat.id && Boolean(displayedRunError)));
+                        const compactStatusLabel =
+                          compact && item.kind === "bot"
+                            ? rowError
+                              ? t`Error`
+                              : compactRosterStatusLabel(item.chat.status)
+                            : null;
+                        const rosterLine = compact
+                          ? compactStatusLabel
+                          : (workStatusLabel ??
+                            (item.kind === "bot"
+                              ? item.chat.preview ||
+                                (item.chat.status !== "idle" ? item.chat.status : "")
+                              : item.chat.preview ||
+                                item.chat.members.map((member) => member.name).join(", ")));
                         return (
                           <div
                             key={`${item.kind}:${item.chat.id}`}
@@ -3283,9 +3311,12 @@ export function ShellPage() {
                               type="button"
                               draggable={item.kind === "bot"}
                               data-roster-bot-id={item.kind === "bot" ? item.chat.id : undefined}
+                              data-roster-unread={item.chat.unread ? "true" : undefined}
+                              data-roster-error={rowError && compact ? "true" : undefined}
                               data-roster-depth={
                                 item.kind === "bot" && treeActive ? depth : undefined
                               }
+                              aria-current={selected ? "page" : undefined}
                               aria-keyshortcuts={
                                 item.kind === "bot" ? "Alt+ArrowUp Alt+ArrowDown" : undefined
                               }
@@ -3350,7 +3381,11 @@ export function ShellPage() {
                                   position: { x: event.clientX, y: event.clientY },
                                 });
                               }}
-                              className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-[10px] text-start ${
+                              className={`flex w-full items-center ${
+                                compact
+                                  ? "min-h-11 gap-2 rounded-xl px-2.5 py-1.5"
+                                  : "gap-3 rounded-xl px-2.5 py-[10px]"
+                              } text-start ${
                                 item.kind === "bot" ? "cursor-grab active:cursor-grabbing" : ""
                               } ${
                                 selected ? "bg-sidebar-accent" : "group-hover/row:bg-sidebar-accent"
@@ -3365,7 +3400,7 @@ export function ShellPage() {
                                 <BotAvatar
                                   color={item.chat.color}
                                   identity={item.chat.id}
-                                  size={38}
+                                  size={compact ? 28 : 38}
                                   status={item.chat.status}
                                 />
                               ) : (
@@ -3375,7 +3410,7 @@ export function ShellPage() {
                                       ? (activeSnapshot.members ?? item.chat.members)
                                       : item.chat.members
                                   }
-                                  size={38}
+                                  size={compact ? 28 : 38}
                                 />
                               )}
                               <div className="min-w-0 flex-1">
@@ -3397,9 +3432,11 @@ export function ShellPage() {
                                     ) : null}
                                   </div>
                                   <div className="flex shrink-0 items-center gap-1.5">
-                                    <span className="text-[11.5px] text-muted-foreground/60 tabular-nums">
-                                      {formatRosterTime(item.chat.updatedAt)}
-                                    </span>
+                                    {!compact ? (
+                                      <span className="text-[11.5px] text-muted-foreground/60 tabular-nums">
+                                        {formatRosterTime(item.chat.updatedAt)}
+                                      </span>
+                                    ) : null}
                                     {item.chat.unread ? (
                                       <span
                                         aria-hidden="true"
@@ -3408,23 +3445,53 @@ export function ShellPage() {
                                     ) : null}
                                   </div>
                                 </div>
-                                {item.kind === "bot" && item.chat.title ? (
+                                {!compact && item.kind === "bot" && item.chat.title ? (
                                   <div className="mt-1 flex">
                                     <span className="max-w-full truncate rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
                                       {item.chat.title}
                                     </span>
                                   </div>
                                 ) : null}
-                                <div
-                                  dir="auto"
-                                  className={`mt-1 line-clamp-2 text-[12.5px] break-words whitespace-normal ${
-                                    workStatusLabel || item.chat.unread
-                                      ? "font-medium text-foreground/75"
-                                      : "text-muted-foreground/60"
-                                  }`}
-                                >
-                                  {rosterLine}
-                                </div>
+                                {compact ? (
+                                  compactStatusLabel ? (
+                                    <div
+                                      dir="auto"
+                                      data-roster-status={
+                                        rowError
+                                          ? "error"
+                                          : item.kind === "bot"
+                                            ? item.chat.status
+                                            : undefined
+                                      }
+                                      className={`mt-0.5 flex items-center gap-1 text-[11.5px] ${
+                                        rowError
+                                          ? "font-medium text-destructive"
+                                          : workStatusLabel
+                                            ? "font-semibold text-status-working"
+                                            : "font-medium text-foreground/75"
+                                      }`}
+                                    >
+                                      {rowError ? (
+                                        <CircleAlert size={12} aria-hidden="true" />
+                                      ) : null}
+                                      <span>{compactStatusLabel}</span>
+                                    </div>
+                                  ) : null
+                                ) : (
+                                  <div
+                                    dir="auto"
+                                    data-roster-preview={!workStatusLabel ? "true" : undefined}
+                                    className={`mt-1 line-clamp-2 text-[12.5px] break-words whitespace-normal ${
+                                      workStatusLabel
+                                        ? "font-semibold text-status-working"
+                                        : item.chat.unread
+                                          ? "font-medium text-foreground/75"
+                                          : "text-muted-foreground/60"
+                                    }`}
+                                  >
+                                    {rosterLine}
+                                  </div>
+                                )}
                               </div>
                             </button>
                           </div>
@@ -3548,6 +3615,20 @@ export function ShellPage() {
               align="start"
               className="w-[calc(316px-1.5rem)] max-w-[calc(100vw-3rem)] gap-0 p-1 data-closed:animate-none"
             >
+              {bootstrapMe?.ticketBoardEnabled ? (
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start font-normal"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setMobileSidebarOpen(false);
+                    navigate("/app/board");
+                  }}
+                >
+                  <SquareKanban className="text-muted-foreground" strokeWidth={1.75} />
+                  <Trans>Board</Trans>
+                </Button>
+              ) : null}
               <Button
                 variant="ghost"
                 className="w-full justify-start font-normal"
@@ -4028,8 +4109,7 @@ export function ShellPage() {
                   setGroups((current) =>
                     current.map((group) => (group.id === updated.id ? updated : group)),
                   );
-                  setPanel(null);
-                  await Promise.all([refreshBots(), refreshGroupThread(activeGroup.id)]).catch(
+                  void Promise.all([refreshBots(), refreshGroupThread(activeGroup.id)]).catch(
                     () => undefined,
                   );
                 }}
@@ -4041,6 +4121,8 @@ export function ShellPage() {
                   navigate(firstThreadRoute(bots, remainingGroups), { replace: true });
                   await refreshBots().catch(() => undefined);
                 }}
+                onClose={() => setPanel(null)}
+                covered={computerOpen}
               />
             ) : null}
             {panel === "create" ? (
@@ -4797,6 +4879,17 @@ export function ShellPage() {
                     takeoverRequested={Boolean(computer?.takeoverRequested)}
                     onRelease={releaseComputer}
                   />
+                ) : computer?.state === "running" &&
+                  !computerTakeoverBlocked(computer, snapshot?.run?.status) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={booting}
+                    onClick={() => void openComputer(computerBot.id, true)}
+                  >
+                    <Trans>Take control</Trans>
+                  </Button>
                 ) : null}
                 {computerBot && !recordingSkill ? (
                   <TeachComputerOverlayControl
@@ -4845,7 +4938,7 @@ export function ShellPage() {
                   computer?.state === "running" &&
                   !hasControl &&
                   !computerTakeoverBlocked(computer, snapshot?.run?.status)
-                    ? () => openComputer(computerBot.id)
+                    ? () => openComputer(computerBot.id, true)
                     : undefined
                 }
               >
@@ -6625,7 +6718,7 @@ function ComputerReleaseActions({
   if (!takeoverRequested) {
     return (
       <Button type="button" variant="outline" size="sm" onClick={() => void onRelease()}>
-        <Trans>Release</Trans>
+        <Trans>Release control</Trans>
       </Button>
     );
   }

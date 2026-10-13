@@ -14,6 +14,7 @@ import type {
 import { GROUP_MEMBER_MIN, MessageBlock as MessageBlockSchema } from "@rakazo/contracts";
 import {
   ACTIVE_RUN_STATUSES,
+  BACKGROUND_RUN_TRIGGERS,
   callIdFromClientNonce,
   hubMirrorChatRefusal,
   isActive,
@@ -269,7 +270,7 @@ async function lockAndLoadGroupMembers(
       members: {
         where: { bot: { archivedAt: null } },
         include: { bot: { select: { id: true, name: true, color: true } } },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ createdAt: "asc" }, { botId: "asc" }],
       },
     },
   });
@@ -357,7 +358,8 @@ export async function threadSnapshot(
               orderBy: { seq: "desc" },
               select: { seq: true },
             }),
-            // Waiting asks win over a concurrent busy run (including peer bot_message).
+            // Waiting asks win over a concurrent busy run, including peer bot_message
+            // and ticket runs. Busy ticket work stays off the transcript below.
             tx.run.findFirst({
               where: {
                 botId: target.botId,
@@ -370,8 +372,8 @@ export async function threadSnapshot(
               where: {
                 botId: target.botId,
                 threadId: target.threadId,
-                // Hide peer bot_message busy/failed noise; waiting is handled above.
-                trigger: { not: "bot_message" },
+                // Hide peer bot_message and background ticket busy/failed noise; waiting is handled above.
+                trigger: { notIn: ["bot_message", ...BACKGROUND_RUN_TRIGGERS] },
                 status: { in: [...ACTIVE_RUN_STATUSES, "failed"] },
               },
               // The id tiebreak keeps ordering deterministic under equal
@@ -392,8 +394,8 @@ export async function threadSnapshot(
                   where: {
                     botId: target.botId,
                     threadId: target.threadId,
-                    // Peer bot_message failures must not bury a user-visible failure.
-                    trigger: { not: "bot_message" },
+                    // Peer bot_message and background failures must not bury a user-visible failure.
+                    trigger: { notIn: ["bot_message", ...BACKGROUND_RUN_TRIGGERS] },
                     status: { in: ["failed", "completed", "cancelled"] },
                   },
                   orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -454,9 +456,10 @@ export async function threadSnapshot(
           where: {
             threadId: target.threadId,
             status: { in: [...ACTIVE_RUN_STATUSES] },
-            // Include waiting peer runs so their ask cards stay answerable.
+            // Waiting peer and ticket asks stay answerable. Busy ticket runs stay off
+            // the transcript; only their waiting_input / waiting_takeover states surface.
             OR: [
-              { trigger: { not: "bot_message" } },
+              { trigger: { notIn: ["bot_message", ...BACKGROUND_RUN_TRIGGERS] } },
               { status: { in: ["waiting_input", "waiting_takeover"] } },
             ],
           },
@@ -467,7 +470,7 @@ export async function threadSnapshot(
         tx.run.findMany({
           where: {
             threadId: target.threadId,
-            trigger: { not: "bot_message" },
+            trigger: { notIn: ["bot_message", ...BACKGROUND_RUN_TRIGGERS] },
             status: { in: ["failed", "completed", "cancelled"] },
           },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
