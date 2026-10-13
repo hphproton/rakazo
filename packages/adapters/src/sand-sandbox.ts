@@ -44,6 +44,7 @@ import {
   SandDisplayForbiddenError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import { sandboxCommandArgv } from "./sandbox-command-environment.js";
 import { createStepSignal } from "./step-signal.js";
 import type { TeamDesktopBinding } from "./team-desktop.js";
 import {
@@ -226,7 +227,7 @@ export class SandSandboxProvider implements SandboxProvider {
       const env = route.displayIndex ? sandTeamExecEnv(request.env) : sandExecEnv(request.env);
       yield* route.host.exec(
         route.agentId,
-        { argv: request.argv, cwd, env, timeoutMs: 0 },
+        { argv: sandboxCommandArgv(request), cwd, env, timeoutMs: 0 },
         step.signal,
       );
     } catch (error) {
