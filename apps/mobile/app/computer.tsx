@@ -1,4 +1,5 @@
 import type { ComputerMode, ComputerReleaseReason } from "@rakazo/contracts";
+import { computerScreenUrlInput } from "@rakazo/contracts";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import type { RefObject } from "react";
@@ -52,6 +53,7 @@ export default function Computer() {
   const name = nameParam || t("Bot");
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
+  const [overlayScreenUrl, setOverlayScreenUrl] = useState<string | null>(null);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [readyBotId, setReadyBotId] = useState<string | null>(null);
@@ -60,6 +62,8 @@ export default function Computer() {
   const booting = bootingCount > 0;
   const switching = switchingCount > 0;
   const [computerOpen, setComputerOpen] = useState(false);
+  const computerOpenRef = useRef(false);
+  const openEpoch = useRef(0);
   const autoBooted = useRef<string | null>(null);
   const screenWebViewRef = useRef<WebView>(null);
   const keyboardGate = useRef({
@@ -70,14 +74,15 @@ export default function Computer() {
   const heldScreenUrl = useRef<string | null>(null);
 
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl, currentApiBase());
-  useEffect(() => setScreenError(null), [embeddedScreenUrl]);
+  const embeddedOverlayUrl = embeddableScreenUrl(overlayScreenUrl, currentApiBase());
+  useEffect(() => setScreenError(null), [embeddedScreenUrl, embeddedOverlayUrl]);
 
   const hasControl = computer?.controlHolder === "user" && computer.controlBotId === botId;
   const screenVisible =
-    computerOpen && computer?.state === "running" && Boolean(embeddedScreenUrl) && !screenError;
+    computerOpen && computer?.state === "running" && Boolean(embeddedOverlayUrl) && !screenError;
   const loadedScreenUrl = nextLoadedScreenUrl(
     heldScreenUrl.current,
-    embeddedScreenUrl,
+    embeddedOverlayUrl,
     screenVisible,
   );
   heldScreenUrl.current = loadedScreenUrl;
@@ -100,7 +105,7 @@ export default function Computer() {
     const webView = screenWebViewRef.current;
     if (!webView) return;
     webView.injectJavaScript(computerKeyboardReadyProbe(String(gate.session)));
-  }, [computerOpen, hasControl, loadedScreenUrl, embeddedScreenUrl, keyboardSession]);
+  }, [computerOpen, hasControl, loadedScreenUrl, embeddedOverlayUrl, keyboardSession]);
 
   function injectKeyboardCommands(commands: ComputerKeyboardCommand[]) {
     const webView = screenWebViewRef.current;
@@ -114,29 +119,41 @@ export default function Computer() {
     navigation.setOptions({ title: label });
   }, [label, navigation]);
 
-  const refreshController = useMemo(
-    () =>
-      createComputerRefresh({
-        readStatus: () => rpc<ComputerStatus>("computer/status", { botId }),
-        readScreen: (attempts) =>
-          readScreenUrl(() => rpc<{ url: string | null }>("computer/screenUrl", { botId }), {
-            attempts,
-          }),
-        onStatus: setComputer,
-        onScreen: setScreenUrl,
-        onReady: () => setReadyBotId(botId ?? null),
-        onInitialError: (err) => setError(errorText(err)),
-      }),
-    [botId],
-  );
+  const refreshController = useMemo(() => {
+    let requestedSurface: "card" | "overlay" = "card";
+    return createComputerRefresh({
+      readStatus: () => rpc<ComputerStatus>("computer/status", { botId }),
+      readScreen: (attempts) => {
+        requestedSurface = computerOpenRef.current ? "overlay" : "card";
+        return readScreenUrl(
+          () =>
+            rpc<{ url: string | null }>(
+              "computer/screenUrl",
+              computerScreenUrlInput(botId ?? "", requestedSurface),
+            ),
+          { attempts },
+        );
+      },
+      onStatus: setComputer,
+      onScreen: (url) => {
+        if (requestedSurface === "overlay") setOverlayScreenUrl(url);
+        else setScreenUrl(url);
+      },
+      onReady: () => setReadyBotId(botId ?? null),
+      onInitialError: (err) => setError(errorText(err)),
+    });
+  }, [botId]);
   const refresh = refreshController.refresh;
   const refreshAfterMaintenance = useCallback(async () => {
     await refresh();
   }, [refresh]);
 
   useEffect(() => {
+    openEpoch.current += 1;
+    computerOpenRef.current = false;
     setComputer(null);
     setScreenUrl(null);
+    setOverlayScreenUrl(null);
     setScreenError(null);
     setError(null);
     setReadyBotId(null);
@@ -218,19 +235,39 @@ export default function Computer() {
   /** Open the full window. Only an explicit Take control asks for the lease. */
   async function openComputer({ takeControl }: { takeControl: boolean }) {
     if (!botId) return;
+    const epoch = ++openEpoch.current;
+    computerOpenRef.current = true;
     const needsTakeover = takeControl && !hasControl;
+    const stillOpening = () => epoch === openEpoch.current && refreshController.isActive();
     try {
       const opened = await bootComputer({
         takeControl: needsTakeover,
         overlay: needsTakeover || computer?.state !== "running",
         force: computer?.state !== "running",
       });
-      if (!opened || !refreshController.isActive()) return;
+      if (!stillOpening()) return;
+      if (!opened) {
+        computerOpenRef.current = false;
+        setOverlayScreenUrl(null);
+        await refresh().catch(() => undefined);
+        return;
+      }
       setComputerOpen(true);
       setScreenError(null);
     } catch {
-      // error already set
+      if (!stillOpening()) return;
+      computerOpenRef.current = false;
+      setOverlayScreenUrl(null);
+      await refresh().catch(() => undefined);
     }
+  }
+
+  function closeComputer() {
+    openEpoch.current += 1;
+    computerOpenRef.current = false;
+    setComputerOpen(false);
+    setOverlayScreenUrl(null);
+    void refresh().catch(() => undefined);
   }
 
   async function releaseComputer(reason?: ComputerReleaseReason) {
@@ -239,7 +276,10 @@ export default function Computer() {
     try {
       await rpc("computer/release", { botId, reason });
       if (!action.isActive()) return;
+      openEpoch.current += 1;
+      computerOpenRef.current = false;
       setComputerOpen(false);
+      setOverlayScreenUrl(null);
       await action.refresh().catch(() => undefined);
     } catch {
       if (action.isActive()) setScreenError(t("Could not continue"));
@@ -265,6 +305,7 @@ export default function Computer() {
       if (!action.isActive()) return;
       setComputer(null);
       setScreenUrl(null);
+      setOverlayScreenUrl(null);
       autoBooted.current = null;
       await action.refresh();
     } catch (err) {
@@ -371,7 +412,7 @@ export default function Computer() {
         presentationStyle="fullScreen"
         supportedOrientations={["portrait", "landscape-left", "landscape-right"]}
         onRequestClose={() => {
-          if (!booting) setComputerOpen(false);
+          if (!booting) closeComputer();
         }}
       >
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -491,7 +532,7 @@ export default function Computer() {
                   )}
                   <GlassIconButton
                     accessibilityLabel={t("Close computer")}
-                    onPress={() => setComputerOpen(false)}
+                    onPress={() => closeComputer()}
                     ios="xmark"
                     android="close"
                     size={36}

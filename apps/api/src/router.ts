@@ -3124,16 +3124,17 @@ export function createRouter(deps: RouterDeps) {
           return { url: null };
         }
         const computer = bot.computer;
+        const leaseHeld = hasActiveComputerControl(computer) && computer.controlBotId === bot.id;
+        // The preview passes interactive: false so it does not open the control
+        // socket the overlay is using. Omitting the flag keeps the lease rule.
+        const interactive = input.interactive !== false && leaseHeld;
         const session = await deps.sandbox
           .connectScreen(
             toComputerRef(computer),
             {
               view: "stream",
-              interactive: hasActiveComputerControl(computer) && computer.controlBotId === bot.id,
-              controlToken:
-                computer.controlBotId === bot.id
-                  ? (computer.controlLeaseId ?? undefined)
-                  : undefined,
+              interactive,
+              controlToken: interactive ? (computer.controlLeaseId ?? undefined) : undefined,
             },
             await computerScreenContext(deps.prisma, context.actor, computer.id, bot.id, "screen"),
           )
@@ -3145,10 +3146,7 @@ export function createRouter(deps: RouterDeps) {
           });
         if (!session?.url) return { url: null };
         scheduleComputerSleep(deps.jobs, bot.computer.id);
-        const viewUrl = withViewOnly(
-          session.url,
-          !(hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id),
-        );
+        const viewUrl = withViewOnly(session.url, !interactive);
         return {
           url: addScreenProxyCapability(viewUrl, deps.env.screenProxySecret, deps.env.webOrigin, {
             botId: bot.id,

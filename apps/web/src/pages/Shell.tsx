@@ -30,6 +30,7 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
   canReactToThreadMessage,
+  computerScreenUrlInput,
   MESSAGE_REACTIONS,
   normalizeCreateBotProfile,
 } from "@rakazo/contracts";
@@ -689,6 +690,7 @@ export function ShellPage() {
   const [runningRoutine, setRunningRoutine] = useState(false);
   const [routineError, setRoutineError] = useState<string | null>(null);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
+  const [overlayScreenUrl, setOverlayScreenUrl] = useState<string | null>(null);
   const [computerOpen, setComputerOpen] = useState(false);
   const [computerBotId, setComputerBotId] = useState<string | undefined>();
   const computerOpenRef = useRef(false);
@@ -1103,20 +1105,33 @@ export function ShellPage() {
   async function refreshComputerScreen(id: string) {
     if (!computerVisible.current) return null;
     const request = ++screenRequest.current;
+    const surface = computerOpenRef.current ? "overlay" : "card";
     return loadComputerScreen({
-      load: () => rpc.computer.screenUrl({ botId: id }),
+      load: () => rpc.computer.screenUrl(computerScreenUrlInput(id, surface)),
       isCurrent: () =>
         request === screenRequest.current &&
         (activeBotId.current === id || computerBotIdRef.current === id) &&
-        computerVisible.current,
+        computerVisible.current &&
+        (computerOpenRef.current ? "overlay" : "card") === surface,
       commit: (screen) => {
-        setScreenUrl(screen.url);
+        if (surface === "overlay") setOverlayScreenUrl(screen.url);
+        else {
+          setScreenUrl(screen.url);
+          cacheComputerFor(id, { screenUrl: screen.url });
+        }
         setComputerError(screen.error);
         setComputerErrorFromScreen(Boolean(screen.error));
-        cacheComputerFor(id, { screenUrl: screen.url });
       },
       fallbackError: t`Could not connect to the computer screen`,
     });
+  }
+
+  function closeComputerOverlay() {
+    computerOpenRef.current = false;
+    setComputerOpen(false);
+    setOverlayScreenUrl(null);
+    const id = computerBotIdRef.current ?? activeBotId.current;
+    if (id) void refreshComputerScreen(id);
   }
 
   async function loadOlderMessages() {
@@ -2305,8 +2320,10 @@ export function ShellPage() {
     setTeachBusy(true);
     try {
       await rpc.skills.stop({ skillId: recording.id });
-      await refreshThreadRef.current(id);
+      computerOpenRef.current = false;
       setComputerOpen(false);
+      setOverlayScreenUrl(null);
+      await refreshThreadRef.current(id);
     } finally {
       setTeachBusy(false);
     }
@@ -2525,7 +2542,9 @@ export function ShellPage() {
   }, [panel, active?.id]);
 
   useEffect(() => {
+    computerOpenRef.current = false;
     setComputerOpen(false);
+    setOverlayScreenUrl(null);
     setComputerError(null);
     setComputerErrorFromScreen(false);
     setComputerBotId(active?.id);
@@ -2624,7 +2643,7 @@ export function ShellPage() {
   useEffect(() => {
     if (!computerOpen) return;
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setComputerOpen(false);
+      if (event.key === "Escape") closeComputerOverlay();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -2665,8 +2684,10 @@ export function ShellPage() {
     if (computer?.botId !== id) {
       commitComputer(targetComputer);
       setScreenUrl(targetScreen);
+      setOverlayScreenUrl(null);
     }
     setComputerOpen(true);
+    computerOpenRef.current = true;
     computerVisible.current = true;
     const needsTakeover = takeControl && !userHoldsComputerControl(targetComputer, id);
     const blocked = computerTakeoverBlocked(targetComputer, snapshot?.run?.status);
@@ -2718,8 +2739,10 @@ export function ShellPage() {
   }
 
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl);
+  const embeddedOverlayUrl = embeddableScreenUrl(overlayScreenUrl);
   const hasControl = userHoldsComputerControl(computer, computerBot?.id);
-  const hideScreenLoadError = computerErrorFromScreen && Boolean(embeddedScreenUrl);
+  const hideScreenLoadError =
+    computerErrorFromScreen && Boolean(computerOpen ? embeddedOverlayUrl : embeddedScreenUrl);
   const computerScreenError =
     computerError && !hideScreenLoadError ? (
       <div role="alert" className="flex flex-col items-center gap-3 px-6 text-center text-sm">
@@ -4736,7 +4759,7 @@ export function ShellPage() {
                   size="icon-sm"
                   className="text-muted-foreground"
                   aria-label={t`Close computer`}
-                  onClick={() => setComputerOpen(false)}
+                  onClick={() => closeComputerOverlay()}
                 >
                   <X size={16} strokeWidth={1.8} />
                 </Button>
@@ -4766,12 +4789,12 @@ export function ShellPage() {
               >
                 {computer?.kind === "desktop" ? (
                   <DesktopKindEmptyState className="grid h-full place-items-center px-8 text-center text-sm text-muted-foreground/80" />
-                ) : computer?.state === "running" && embeddedScreenUrl && !computerScreenError ? (
+                ) : computer?.state === "running" && embeddedOverlayUrl && !computerScreenError ? (
                   <>
                     <iframe
                       title={t`Bot screen`}
-                      src={embeddedScreenUrl}
-                      sandbox={screenIframeSandbox(embeddedScreenUrl)}
+                      src={embeddedOverlayUrl}
+                      sandbox={screenIframeSandbox(embeddedOverlayUrl)}
                       className="h-full w-full border-0 bg-black"
                       allow="clipboard-read; clipboard-write; fullscreen"
                       style={{

@@ -1400,14 +1400,18 @@ describe("computer screen url", () => {
     controlRunId: null,
   };
 
-  const callScreenUrl = async (connectScreen: () => Promise<unknown>, updateMany = vi.fn()) => {
+  const callScreenUrl = async (
+    connectScreen: () => Promise<unknown>,
+    updateMany = vi.fn(),
+    extras?: { json?: Record<string, unknown>; computer?: typeof computerRow },
+  ) => {
     const prisma = {
       bot: {
         findFirst: vi.fn().mockResolvedValue({
           id: "bot-1",
           screenGeneration: 2,
           thread: { id: "thread-1" },
-          computer: computerRow,
+          computer: extras?.computer ?? computerRow,
         }),
       },
       computer: { updateMany },
@@ -1431,7 +1435,7 @@ describe("computer screen url", () => {
       new Request("http://127.0.0.1/rpc/computer/screenUrl", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ json: { botId: "bot-1" } }),
+        body: JSON.stringify({ json: { botId: "bot-1", ...extras?.json } }),
       }),
       { prefix: "/rpc", context: { actor } },
     );
@@ -1456,6 +1460,47 @@ describe("computer screen url", () => {
       },
       target: { hostname: "screen.example", interactive: false },
     });
+  });
+
+  it("seals a view token for the preview and a control token for the overlay", async () => {
+    const held = {
+      ...computerRow,
+      controlHolder: "user",
+      controlLeaseId: "lease-1",
+      controlLeaseExpiresAt: new Date(Date.now() + 60_000),
+      controlBotId: "bot-1",
+    };
+    const connectScreen = async (ref: unknown, request: { interactive?: boolean }) => {
+      expect(ref).toEqual(expect.objectContaining({ id: "sandbox-ref-1" }));
+      return {
+        url: `https://screen.example/vnc.html?token=fake-token&view_only=${request.interactive ? "false" : "true"}`,
+      };
+    };
+    const preview = await callScreenUrl(connectScreen, vi.fn(), {
+      json: { interactive: false },
+      computer: held,
+    });
+    const overlay = await callScreenUrl(connectScreen, vi.fn(), { computer: held });
+    const forced = await callScreenUrl(connectScreen, vi.fn(), {
+      json: { interactive: true },
+      computer: computerRow,
+    });
+    expect(preview.response.status).toBe(200);
+    expect(overlay.response.status).toBe(200);
+    expect(forced.response.status).toBe(200);
+    const previewUrl = new URL((await preview.response.json()).json.url);
+    const overlayUrl = new URL((await overlay.response.json()).json.url);
+    const forcedUrl = new URL((await forced.response.json()).json.url);
+    expect(previewUrl.pathname).toContain("/novnc/session/view/");
+    expect(overlayUrl.pathname).toContain("/novnc/session/control/");
+    expect(previewUrl.pathname).not.toBe(overlayUrl.pathname);
+    expect(openScreenCapability(previewUrl.pathname, "fake-test-secret")?.target.interactive).toBe(
+      false,
+    );
+    expect(openScreenCapability(overlayUrl.pathname, "fake-test-secret")?.target.interactive).toBe(
+      true,
+    );
+    expect(forcedUrl.pathname).toContain("/novnc/session/view/");
   });
 
   it("returns desktop provider screen URLs without sealing them", async () => {

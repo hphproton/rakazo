@@ -60,9 +60,11 @@ vi.mock("react-native-webview", () => {
     WebView: (props: {
       accessibilityElementsHidden?: boolean;
       importantForAccessibility?: string;
+      source?: { uri?: string };
     }) =>
       createElement("iframe", {
         title: "screen",
+        src: props.source?.uri,
         "data-elements-hidden": String(Boolean(props.accessibilityElementsHidden)),
         "data-important": props.importantForAccessibility ?? "auto",
       }),
@@ -287,6 +289,46 @@ describe("computer screen", () => {
     const screen = view.querySelector("iframe");
     expect(screen?.getAttribute("data-elements-hidden")).toBe("true");
     expect(screen?.getAttribute("data-important")).toBe("no-hide-descendants");
+  });
+
+  it("asks the preview for a view seal and the full window for a separate control seal", async () => {
+    const viewUrl = "https://screen.example.test/view";
+    const controlUrl = "https://screen.example.test/control";
+    rpc.mockImplementation(async (method: string, body?: { interactive?: boolean }) => {
+      if (method === "computer/status") {
+        return { ...botWorking, controlHolder: "user", controlBotId: "bot-1", busyBotName: null };
+      }
+      if (method === "computer/screenUrl") {
+        return { url: body?.interactive === false ? viewUrl : controlUrl };
+      }
+      return {};
+    });
+    const view = await render();
+
+    const previewFrame = view.querySelector("iframe");
+    expect(previewFrame?.getAttribute("src")).toBe(viewUrl);
+    expect(calls("computer/screenUrl").every(([, body]) => body?.interactive === false)).toBe(true);
+
+    await act(async () => preview(view).click());
+    await settle();
+
+    const fullWindow = view.querySelector("section");
+    expect(fullWindow?.querySelector("iframe")?.getAttribute("src")).toBe(controlUrl);
+    expect(view.querySelectorAll("iframe")).toHaveLength(1);
+    const opened = calls("computer/screenUrl").at(-1);
+    expect(opened?.[1]).toEqual({ botId: "bot-1" });
+
+    await act(async () => {
+      view.querySelector<HTMLButtonElement>('[aria-label="Close computer"]')?.click();
+    });
+    await settle();
+
+    expect(view.querySelector("section")).toBeNull();
+    expect(view.querySelector("iframe")?.getAttribute("src")).toBe(viewUrl);
+    expect(calls("computer/screenUrl").at(-1)?.[1]).toEqual({
+      botId: "bot-1",
+      interactive: false,
+    });
   });
 
   it("keeps the screen accessible in the full window while the user has control", async () => {
