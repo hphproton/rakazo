@@ -1485,6 +1485,8 @@ describe("createRunExecutor", () => {
     expect(tools).not.toContain("save_shared_memory");
     expect(tools).not.toContain("task_catalog");
     expect(tools.some((tool) => tool.startsWith("scratchpad_"))).toBe(false);
+    expect(tools).not.toContain("board_tickets");
+    expect(tools.some((tool) => tool.startsWith("ticket_"))).toBe(false);
     expect(tools).toContain("web_fetch");
   });
 
@@ -3103,5 +3105,52 @@ describe("terminal model setup errors", () => {
     expect(isTerminalModelSetupError(new UnavailableModelForAuthError())).toBe(true);
     expect(isTerminalModelSetupError(new RetiredModelCredentialError("signed out"))).toBe(true);
     expect(isTerminalModelSetupError(new Error("socket hang up"))).toBe(false);
+  });
+});
+
+describe("ticket board tool capability", () => {
+  const options = {
+    graphicalToolsAllowed: false,
+    groupId: null,
+    trigger: "user",
+    semanticMemoryEnabled: false,
+    messagingChannelRun: false,
+  };
+  const ticketNames = [
+    "board_tickets",
+    "ticket_get",
+    "ticket_create",
+    "ticket_update",
+    "ticket_comment",
+  ];
+  it("omits ticket tools by default and when disabled", () => {
+    for (const ticketBoardEnabled of [undefined, false]) {
+      const names = selectBuiltinToolsForRun({ ...options, ticketBoardEnabled }).map(
+        (tool) => tool.name,
+      );
+      expect(
+        names.filter((name) => name === "board_tickets" || name.startsWith("ticket_")),
+      ).toEqual([]);
+    }
+  });
+  it("offers ticket tools and keeps ticket work out of chat tools", () => {
+    const names = selectBuiltinToolsForRun({ ...options, ticketBoardEnabled: true }).map(
+      (tool) => tool.name,
+    );
+    expect(names.filter((name) => name === "board_tickets" || name.startsWith("ticket_"))).toEqual(
+      ticketNames,
+    );
+    expect(
+      selectBuiltinToolsForRun({ ...options, trigger: "tickets", ticketBoardEnabled: true }).map(
+        (tool) => tool.name,
+      ),
+    ).not.toContain("message_user");
+    const backgroundNames = selectBuiltinToolsForRun({
+      ...options,
+      trigger: "tickets",
+      ticketBoardEnabled: true,
+    }).map((tool) => tool.name);
+    for (const name of ["message_bot", "handoff_to_bot", "message_agent"])
+      expect(backgroundNames).not.toContain(name);
   });
 });

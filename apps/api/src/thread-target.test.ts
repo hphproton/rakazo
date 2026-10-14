@@ -4,12 +4,12 @@ import { callClientNonce } from "@rakazo/core";
 import type * as MessageQuoteModule from "@rakazo/core/message-quote";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
+import type { ThreadTarget } from "./thread-target.js";
 import {
   cancelSupersededQueuedRuns,
   reactToThreadMessage,
   sendThreadMessage,
   stopThreadRuns,
-  type ThreadTarget,
   threadHead,
   threadSnapshot,
 } from "./thread-target.js";
@@ -290,7 +290,7 @@ describe("threadSnapshot", () => {
         where: expect.objectContaining({
           botId: "bot-1",
           threadId: "thread-1",
-          trigger: { not: "bot_message" },
+          trigger: { notIn: ["bot_message", "tickets"] },
           status: {
             in: ["queued", "leased", "running", "waiting_input", "waiting_takeover", "failed"],
           },
@@ -374,6 +374,55 @@ describe("threadSnapshot", () => {
     );
   });
 
+  it.each(["waiting_input", "running"])(
+    "only exposes ticket runs waiting for input (%s)",
+    async (status) => {
+      const waitingTicket = {
+        id: "run-ticket-waiting",
+        botId: "bot-1",
+        threadId: "thread-1",
+        taskId: "task-ticket",
+        status,
+        trigger: "tickets",
+        modelProvider: null,
+        modelId: null,
+        error: null,
+        startedAt: new Date("2026-08-23T00:00:02.000Z"),
+        completedAt: null,
+        createdAt: new Date("2026-08-23T00:00:02.000Z"),
+      };
+      const snapshot = await threadSnapshot(
+        {
+          prisma: {
+            $transaction: vi.fn(async (callback: (client: unknown) => unknown) =>
+              callback({
+                $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+                message: { findMany: vi.fn().mockResolvedValue([]) },
+                event: {
+                  findFirst: vi.fn().mockResolvedValue(null),
+                  findMany: vi.fn().mockResolvedValue([]),
+                },
+                run: { findFirst: botRunFindFirst([waitingTicket]) },
+              }),
+            ),
+          } as unknown as PrismaClient,
+        },
+        {
+          kind: "bot",
+          botId: "bot-1",
+          threadId: "thread-1",
+          bot: { computer: null },
+        } as ThreadTarget,
+      );
+
+      if (status === "waiting_input") {
+        expect(snapshot.run).toEqual(expect.objectContaining({ id: "run-ticket-waiting", status }));
+      } else {
+        expect(snapshot.run).toBeNull();
+      }
+    },
+  );
+
   it("drops a failed run once a newer run has finished", async () => {
     const failed = {
       id: "run-failed",
@@ -428,7 +477,7 @@ describe("threadSnapshot", () => {
     expect(findFirstRun).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          trigger: { not: "bot_message" },
+          trigger: { notIn: ["bot_message", "tickets"] },
           status: { in: ["failed", "completed", "cancelled"] },
         }),
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -496,7 +545,7 @@ describe("threadSnapshot", () => {
       expect.objectContaining({
         where: {
           threadId: "thread-1",
-          trigger: { not: "bot_message" },
+          trigger: { notIn: ["bot_message", "tickets"] },
           status: { in: ["failed", "completed", "cancelled"] },
         },
         orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -509,7 +558,7 @@ describe("threadSnapshot", () => {
           threadId: "thread-1",
           status: { in: ["queued", "leased", "running", "waiting_input", "waiting_takeover"] },
           OR: [
-            { trigger: { not: "bot_message" } },
+            { trigger: { notIn: ["bot_message", "tickets"] } },
             { status: { in: ["waiting_input", "waiting_takeover"] } },
           ],
         },
@@ -566,7 +615,7 @@ describe("threadSnapshot", () => {
       expect.objectContaining({
         where: expect.objectContaining({
           OR: [
-            { trigger: { not: "bot_message" } },
+            { trigger: { notIn: ["bot_message", "tickets"] } },
             { status: { in: ["waiting_input", "waiting_takeover"] } },
           ],
           status: { in: ["queued", "leased", "running", "waiting_input", "waiting_takeover"] },
@@ -576,7 +625,7 @@ describe("threadSnapshot", () => {
     expect(findManyRuns).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          trigger: { not: "bot_message" },
+          trigger: { notIn: ["bot_message", "tickets"] },
           status: { in: ["failed", "completed", "cancelled"] },
         }),
       }),
@@ -882,21 +931,32 @@ function isTerminalRunQuery(where: { status?: { in?: string[] } } | undefined) {
   return Array.isArray(statuses) && statuses.includes("failed") && statuses.includes("completed");
 }
 
+type TriggerFilter = { not?: string; notIn?: string[] };
+
+function matchesTriggerFilter(trigger: string | undefined, filter: TriggerFilter | undefined) {
+  if (!filter) return true;
+  if (filter.not !== undefined && trigger === filter.not) return false;
+  if (filter.notIn !== undefined && trigger !== undefined && filter.notIn.includes(trigger)) {
+    return false;
+  }
+  return true;
+}
+
 function matchesPeerActiveFilter(
   row: { trigger?: string; status?: string },
   where:
     | {
-        trigger?: { not?: string };
-        OR?: Array<{ trigger?: { not?: string }; status?: { in?: string[] } }>;
+        trigger?: TriggerFilter;
+        OR?: Array<{ trigger?: TriggerFilter; status?: { in?: string[] } }>;
       }
     | undefined,
 ) {
-  if (where?.trigger?.not === "bot_message") return row.trigger !== "bot_message";
+  if (where?.trigger) return matchesTriggerFilter(row.trigger, where.trigger);
   if (!where?.OR) return true;
   return where.OR.some((clause) => {
-    if (clause.trigger?.not === "bot_message") return row.trigger !== "bot_message";
+    if (!matchesTriggerFilter(row.trigger, clause.trigger)) return false;
     if (clause.status?.in) return clause.status.in.includes(row.status ?? "");
-    return false;
+    return true;
   });
 }
 
@@ -912,16 +972,14 @@ function botRunFindFirst(
     async (args: {
       where?: {
         status?: { in?: string[] };
-        trigger?: { not?: string };
+        trigger?: TriggerFilter;
       };
       select?: { id?: boolean };
     }) => {
       const statuses = args.where?.status?.in;
       const matched = rows
         .filter((row) => !statuses || statuses.includes(row.status))
-        .filter((row) =>
-          args.where?.trigger?.not === "bot_message" ? row.trigger !== "bot_message" : true,
-        )
+        .filter((row) => matchesTriggerFilter(row.trigger, args.where?.trigger))
         .sort((a, b) => {
           const byCreated = (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
           return byCreated !== 0 ? byCreated : b.id.localeCompare(a.id);

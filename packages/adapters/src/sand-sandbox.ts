@@ -44,6 +44,7 @@ import {
   SandDisplayForbiddenError,
   sandScreenSelectsForbiddenDisplay,
 } from "./sand-seat.js";
+import { sandboxCommandArgv } from "./sandbox-command-environment.js";
 import { createStepSignal } from "./step-signal.js";
 import type { TeamDesktopBinding } from "./team-desktop.js";
 import {
@@ -164,6 +165,28 @@ export class SandSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * Read the pod workspace when this bot's team desktop is already up.
+   * Does not ensure, start a display, or exec. An asleep desktop and a Grok
+   * seat are left untouched. A ListDirectory 403 is not a missing layout.
+   */
+  async peekWorkspace(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    if (computer.kind !== "sand") return;
+    const gateway = this.opts.teamDesktops;
+    if (!gateway) return;
+    context.signal.throwIfAborted();
+    const botId = context.botId || computer.botId;
+    const resolved = await gateway.resolve(botId);
+    if (!resolved) return;
+    const route = this.desktopSession(resolved, botId);
+    try {
+      await route.host.listDirectory(route.agentId, SAND_WORKSPACE, context.signal);
+    } catch (error) {
+      if (isSandListDirectoryDenied(error)) return;
+      throw error;
+    }
+  }
+
+  /**
    * True only when this bot's team desktop is already up.
    * Reads the team_desktops row, the X socket, and exec port 14000+N.
    * Does not ensure, start a window, or write. Seats stay on the seat map.
@@ -204,7 +227,7 @@ export class SandSandboxProvider implements SandboxProvider {
       const env = route.displayIndex ? sandTeamExecEnv(request.env) : sandExecEnv(request.env);
       yield* route.host.exec(
         route.agentId,
-        { argv: request.argv, cwd, env, timeoutMs: 0 },
+        { argv: sandboxCommandArgv(request), cwd, env, timeoutMs: 0 },
         step.signal,
       );
     } catch (error) {

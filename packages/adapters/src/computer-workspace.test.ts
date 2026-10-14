@@ -2,7 +2,12 @@ import { execFileSync } from "node:child_process";
 import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CommandRequest, ComputerRef, SandboxProvider } from "@rakazo/adapter-kit";
+import type {
+  CommandRequest,
+  ComputerRef,
+  ProcessEvent,
+  SandboxProvider,
+} from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import type { LogEvent } from "@rakazo/logging";
 import { createLogger, installLogger } from "@rakazo/logging";
@@ -18,6 +23,14 @@ import {
 } from "./computer-workspace.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { LocalAgentHomeStore } from "./home.js";
+import type {
+  SandComputerAction,
+  SandDirectoryEntry,
+  SandExecRequest,
+  SandHost,
+} from "./sand-host.js";
+import { SandHostError } from "./sand-host.js";
+import { SandSandboxProvider } from "./sand-sandbox.js";
 import { SandSeatUnmappedError } from "./sand-seat.js";
 
 const context = {
@@ -49,6 +62,92 @@ describe("provider-neutral computer workspace", () => {
       { argv: ["mkdir", "-p", "shared", "bots/bot-1"] },
       context,
     );
+  });
+
+  it("does not wake a team desktop or exec on a sand seat while preparing folders", async () => {
+    const asleep = await sandLayoutFixture({ running: false });
+    await ensureComputerWorkspaceLayout(
+      asleep.sandbox,
+      asleep.computer,
+      "team",
+      "bot-1",
+      asleep.context,
+    );
+    expect(asleep.ensured).toEqual([]);
+    expect(asleep.host.calls).toEqual([]);
+
+    const running = await sandLayoutFixture({ running: true });
+    await ensureComputerWorkspaceLayout(
+      running.sandbox,
+      running.computer,
+      "team",
+      "bot-1",
+      running.context,
+    );
+    expect(running.ensured).toEqual([]);
+    expect(running.host.calls).toEqual(["listDirectory"]);
+
+    const denied = await sandLayoutFixture({
+      running: true,
+      listError: new SandHostError("ControlService", "ListDirectory", 403),
+    });
+    await expect(
+      ensureComputerWorkspaceLayout(
+        denied.sandbox,
+        denied.computer,
+        "team",
+        "bot-1",
+        denied.context,
+      ),
+    ).resolves.toBeUndefined();
+    expect(denied.ensured).toEqual([]);
+    expect(denied.host.calls).toEqual(["listDirectory"]);
+
+    const seat = await sandLayoutFixture({ seatOnly: true });
+    await ensureComputerWorkspaceLayout(seat.sandbox, seat.computer, "team", "bot-1", seat.context);
+    expect(seat.host.calls).toEqual([]);
+  });
+
+  it("does not exec team folders when the live sandbox is sand", async () => {
+    const execute = vi.fn();
+    const sandbox = {
+      describe: () => ({ id: "sand" }),
+      execute,
+    } as unknown as SandboxProvider;
+    const computer: ComputerRef = {
+      id: "remote",
+      botId: "team",
+      kind: "e2b",
+      providerRef: "remote",
+    };
+
+    await ensureComputerWorkspaceLayout(sandbox, computer, "team", "bot-1", context);
+
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not exec team-folder cleanup on a sand computer", async () => {
+    const host = new LayoutHost();
+    const sandbox = new SandSandboxProvider({
+      policy: { resolve: () => ({ agentId: SEAT_AGENT }) },
+      host,
+    });
+    const computer = await sandbox.provision(
+      { botId: "bot-1", homePath: "/tmp", providerRef: SEAT_AGENT },
+      context,
+    );
+    const findMany = vi.fn();
+
+    await removeDeletedBotWorkspaces(
+      { prisma: { botDeletion: { findMany } } as unknown as PrismaClient, sandbox },
+      computer,
+      "workspace",
+      context,
+    );
+    await removeComputerWorkspaceDirectories(sandbox, computer, "bots", ["bot-1"], context);
+
+    expect(findMany).not.toHaveBeenCalled();
+    expect(host.calls).toEqual([]);
   });
 
   it("restores a checkpoint into a replacement provider machine", async () => {
@@ -532,6 +631,89 @@ async function seedFile(root: string, relative: string, content: string) {
 }
 
 /** Runs commands in a local folder that stands in for the computer's workspace. */
+const SEAT_AGENT = "11111111-1111-4111-8111-111111111111";
+
+class LayoutHost implements SandHost {
+  readonly calls: string[] = [];
+
+  constructor(private readonly listError?: unknown) {}
+
+  async capabilities() {
+    this.calls.push("capabilities");
+    return { computerUseSupported: true };
+  }
+
+  async *exec(
+    _agentId: string,
+    _request: SandExecRequest,
+    _signal: AbortSignal,
+  ): AsyncIterable<ProcessEvent> {
+    this.calls.push("exec");
+    yield { type: "exit", code: 0 };
+  }
+
+  async listDirectory(): Promise<SandDirectoryEntry[]> {
+    this.calls.push("listDirectory");
+    if (this.listError) throw this.listError;
+    return [];
+  }
+
+  async readFile() {
+    return new Uint8Array();
+  }
+
+  async writeFile() {}
+
+  async computerUse(_agentId: string, _actions: readonly SandComputerAction[]) {
+    this.calls.push("computerUse");
+    return {};
+  }
+
+  screenUrl() {
+    return null;
+  }
+}
+
+async function sandLayoutFixture(options: {
+  running?: boolean;
+  seatOnly?: boolean;
+  listError?: unknown;
+}) {
+  const host = new LayoutHost(options.listError);
+  const ensured: string[] = [];
+  const sandbox = new SandSandboxProvider({
+    policy: { resolve: () => ({ agentId: SEAT_AGENT }) },
+    host,
+    ...(options.seatOnly
+      ? {}
+      : {
+          teamDesktops: {
+            async resolve(botId: string) {
+              if (!options.running || botId !== "bot-1") return undefined;
+              return { displayIndex: 121, ownerToken: "fixture-owner-token" };
+            },
+            async ensure(botId: string) {
+              ensured.push(botId);
+              return { displayIndex: 121, ownerToken: "fixture-owner-token" };
+            },
+            async member(botId: string) {
+              return botId === "bot-1";
+            },
+          },
+        }),
+  });
+  const layoutContext = { ...context, botId: "bot-1" };
+  const computer = await sandbox.provision(
+    {
+      botId: "bot-1",
+      homePath: "/tmp",
+      providerRef: options.seatOnly ? SEAT_AGENT : "team-desktop",
+    },
+    layoutContext,
+  );
+  return { sandbox, host, ensured, computer, context: layoutContext };
+}
+
 function localWorkspaceSandbox(workspace: string) {
   return {
     execute: async function* (_computer: ComputerRef, request: CommandRequest) {

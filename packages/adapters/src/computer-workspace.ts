@@ -70,6 +70,13 @@ export async function ensureComputerWorkspaceLayout(
   context: AdapterContext,
 ): Promise<void> {
   if (scope !== "team" || !botId) return;
+  // Sand's disk is already the workspace. mkdir via execute wakes a Team B
+  // desktop (displays 101–150) or runs on a Grok seat. Read a desktop that is
+  // already up; a ListDirectory 403 is not a missing layout.
+  if (sandOwnsWorkspace(sandbox, computer)) {
+    await readOnlySandWorkspaceCheck(sandbox, computer, context);
+    return;
+  }
   let exitCode: number | undefined;
   let stderr = "";
   for await (const event of sandbox.execute(
@@ -83,6 +90,27 @@ export async function ensureComputerWorkspaceLayout(
   if (exitCode !== 0) {
     throw new Error(`Could not prepare Team Computer folders${stderr ? `: ${stderr.trim()}` : ""}`);
   }
+}
+
+type SandWorkspacePeek = {
+  peekWorkspace?(computer: ComputerRef, context: AdapterContext): Promise<void>;
+};
+
+async function readOnlySandWorkspaceCheck(
+  sandbox: SandboxProvider,
+  computer: ComputerRef,
+  context: AdapterContext,
+): Promise<void> {
+  const peek = (sandbox as SandWorkspacePeek).peekWorkspace;
+  if (!peek) return;
+  await peek.call(sandbox, computer, context);
+}
+
+/** Sand provider, including a Team computer and a seat that is not a Team desktop. */
+function sandOwnsWorkspace(sandbox: SandboxProvider, computer: Pick<ComputerRef, "kind">): boolean {
+  if (computer.kind === "sand") return true;
+  if (typeof sandbox.describe !== "function") return false;
+  return sandbox.describe().id === "sand";
 }
 
 const TEAM_BOT_FOLDER_NAME = /^[A-Za-z0-9_-]+$/;
@@ -139,6 +167,7 @@ export async function removeComputerWorkspaceDirectories(
   names: readonly string[],
   context: AdapterContext,
 ): Promise<void> {
+  if (sandOwnsWorkspace(sandbox, computer)) return;
   let exitCode: number | undefined;
   let stderr = "";
   for await (const event of sandbox.execute(
@@ -171,6 +200,8 @@ export async function removeDeletedBotWorkspaces(
   context: AdapterContext,
   budgetMs = DELETED_BOT_FOLDER_BUDGET_MS,
 ): Promise<void> {
+  // Listing and deleting through execute wakes a Team desktop or runs on a seat.
+  if (sandOwnsWorkspace(deps.sandbox, computer)) return;
   await withCleanupDeadline(context, budgetMs, (cleanupContext) =>
     removeDeletedBotFolders(deps, computer, spaceId, cleanupContext),
   );

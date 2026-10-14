@@ -266,6 +266,18 @@ describe("sand sandbox provider", () => {
         env: { FOO: "bar" },
       },
     });
+    for await (const event of sandbox.execute(
+      first,
+      { argv: ["echo", "ok"], unsetEnv: ["FAILED"] },
+      ctx,
+    )) {
+      if (event.type === "exit") expect(event.code).toBe(0);
+    }
+    expect(host.calls.at(-1)).toMatchObject({
+      method: "exec",
+      agentId: AGENT_A,
+      body: { argv: ["env", "-u", "FAILED", "--", "echo", "ok"] },
+    });
     for await (const event of sandbox.execute(second, { argv: ["pwd"], cwd: "notes" }, ctx)) {
       if (event.type === "exit") expect(event.code).toBe(0);
     }

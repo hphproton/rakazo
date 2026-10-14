@@ -37,6 +37,7 @@ import {
   createSecretStore,
   createTeamDesktopAllocator,
   createTeamDesktopChromeStarter,
+  createTicketChangeNotifier,
   createWebProvider,
   deletePushToken,
   destroyBot,
@@ -86,6 +87,7 @@ import type { Actor, AuthCapabilities } from "@rakazo/contracts";
 import { signupAllowlistBootUpdate, signupPolicyFromEnv } from "@rakazo/core";
 import type { Pool, PrismaClient } from "@rakazo/db";
 import {
+  createBoardEvents,
   createDb,
   createPool,
   createThreadEvents,
@@ -220,6 +222,8 @@ export async function createApp(
   const events = createThreadEvents(prisma, realtime, {
     runSecretWriter: createRunSecretWriter(secrets),
   });
+  const ticketBoardEnabled = env.ticketBoardEnabled;
+  const boardEvents = createBoardEvents(realtime);
   const environmentSignupPolicy = signupPolicyFromEnv(env);
   const deploymentSettings = await prisma.deploymentSettings.upsert({
     where: { id: "default" },
@@ -304,6 +308,12 @@ export async function createApp(
       logger.error("team desktop membership sync failed", error);
     }
   }
+  const ticketChanges = createTicketChangeNotifier({
+    boardEvents,
+    jobs,
+    prisma,
+    ticketBoardEnabled,
+  });
   const sandbox: SandboxProvider =
     sandboxOverride ??
     createRunSandbox(env.sandboxProvider, {
@@ -516,6 +526,8 @@ export async function createApp(
     notifications,
     jobs,
     events,
+    onTicketChange: ticketChanges,
+    ticketBoardEnabled,
     messaging: messaging ? createMessagingContextLoader(prisma) : undefined,
     web: createWebProvider(),
     cloudAgent,
@@ -559,6 +571,8 @@ export async function createApp(
     codexCatalog,
     prisma,
     events,
+    ticketChanges,
+    boardEvents,
     auth,
     jobs,
     sandbox,
@@ -581,6 +595,7 @@ export async function createApp(
       openSignup: env.messagingOpenSignup,
     },
     env: {
+      ticketBoardEnabled,
       agentRuntime: env.agentRuntime,
       defaultProvider: env.defaultProvider,
       defaultModel: env.defaultModel,
@@ -617,8 +632,14 @@ export async function createApp(
       credentials: true,
     }),
   );
+  // Session and account replies must never be stored by a client or an HTTP cache.
+  for (const path of ["/api/auth/*", "/rpc/*"]) {
+    app.use(path, async (c, next) => {
+      await next();
+      c.header("cache-control", "no-store");
+    });
+  }
   app.get("/api/auth/capabilities", (c) => {
-    c.header("cache-control", "no-store");
     return c.json({
       sso: env.oidc
         ? { name: env.oidc.name, availability: auth.ssoAvailability() ?? "checking" }
@@ -646,7 +667,7 @@ export async function createApp(
     if (isBlockedAuthPath(path)) {
       return c.json({ error: "Not available in version 1" }, 404);
     }
-    return auth.handler(c.req.raw);
+    return auth.handler(emptyAuthBodyAsJson(c.req.raw));
   });
   mountLocalSettings(app, { token: env.desktopStackToken, prisma, rpc });
   const requestSession = async (request: Request) => {
@@ -1079,6 +1100,24 @@ export async function actorFromMembership(membership: Promise<Actor>): Promise<A
     if (error instanceof IsolationError) return null;
     throw error;
   }
+}
+
+/**
+ * Some clients POST auth actions with an empty body (older phone sign-out, the web deletion code);
+ * Better Auth rejects that before the endpoint runs.
+ */
+function emptyAuthBodyAsJson(request: Request) {
+  if (
+    request.method !== "POST" ||
+    request.headers.get("content-length") !== "0" ||
+    request.headers.has("transfer-encoding")
+  ) {
+    return request;
+  }
+  const headers = new Headers(request.headers);
+  headers.set("content-type", "application/json");
+  headers.delete("content-length");
+  return new Request(request, { headers, body: "{}" });
 }
 
 function sessionHeaders(request: Request) {
