@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import type {
   Api,
   AssistantMessage,
@@ -265,9 +266,10 @@ describe("reliableModelStream idle gating", () => {
 
     const plain = reliableModelStream(models, other, context, options, undefined);
     const plainOptions = streamSimple.mock.calls[1]?.[2];
-    expect(plainOptions?.signal).toBe(caller.signal);
+    expect(plainOptions?.signal).not.toBe(caller.signal);
+    expect(plainOptions?.signal?.aborted).toBe(false);
     expect(plainOptions?.fetch).toBe(callerFetch);
-    expect(plain).toBe(inner);
+    expect(plain).not.toBe(inner);
 
     // Before the first event the idle budget stays unarmed, so a headers
     // timeout leaves a retried attempt its own full timeoutMs.
@@ -427,5 +429,48 @@ describe("reliableModelStream idle gating", () => {
       "no api key",
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps request abort listeners off the run signal", async () => {
+    const run = new AbortController();
+    const other = { provider: "openrouter", api: "openai-completions" } as Model<Api>;
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) =>
+        new AssistantMessageEventStream(),
+    );
+    for (let i = 0; i < 5; i += 1) {
+      const stream = reliableModelStream(
+        { streamSimple } as unknown as Models,
+        other,
+        context,
+        { signal: run.signal },
+        undefined,
+      );
+      const handed = streamSimple.mock.calls.at(-1)?.[2]?.signal;
+      expect(handed).toBeDefined();
+      expect(handed).not.toBe(run.signal);
+      expect(getEventListeners(run.signal, "abort").length).toBeLessThanOrEqual(1);
+      handed?.addEventListener("abort", () => undefined);
+      expect(getEventListeners(run.signal, "abort").length).toBeLessThanOrEqual(1);
+      await stream[Symbol.asyncIterator]().return?.(undefined);
+      expect(getEventListeners(run.signal, "abort")).toHaveLength(0);
+    }
+    expect(run.signal.aborted).toBe(false);
+    run.abort(new Error("stopped"));
+    const follow = reliableModelStream(
+      { streamSimple } as unknown as Models,
+      other,
+      context,
+      { signal: run.signal },
+      undefined,
+    );
+    const followed = streamSimple.mock.calls.at(-1)?.[2]?.signal;
+    const reason = followed?.reason;
+    expect(followed?.aborted).toBe(true);
+    expect(reason).toBeInstanceOf(Error);
+    if (!(reason instanceof Error)) throw new Error("expected an abort reason");
+    expect(reason.message).toBe("stopped");
+    await follow[Symbol.asyncIterator]().return?.(undefined);
+    expect(getEventListeners(run.signal, "abort")).toHaveLength(0);
   });
 });

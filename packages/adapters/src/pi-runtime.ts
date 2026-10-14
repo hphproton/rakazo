@@ -69,6 +69,7 @@ import type { RuntimeContextDecision } from "./runtime-context.js";
 import { createRuntimeContextPolicy, VERBATIM_TOOL_RESULTS } from "./runtime-context.js";
 import type { FinishedShellCommand } from "./shell-command-stream.js";
 import { deliverFinishedShells } from "./shell-command-stream.js";
+import { createStepSignal } from "./step-signal.js";
 import { textContentArg } from "./tool-text.js";
 
 const running = new Map<string, { controller: AbortController; work: Promise<void> }>();
@@ -2862,7 +2863,13 @@ export function reliableModelStream(
   runStream?: (options: ModelsSimpleStreamOptions) => AssistantMessageEventStream,
   cacheRetention?: ModelsSimpleStreamOptions["cacheRetention"],
 ): AssistantMessageEventStream {
-  const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(options?.signal) : undefined;
+  // Fetch and SDK abort listeners attach to this step, not the long-lived run signal.
+  const turn = createStepSignal(options?.signal);
+  const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(turn.signal) : undefined;
+  const dispose = () => {
+    watchdog?.dispose();
+    turn.dispose();
+  };
   try {
     const preparedOptions = reliableStreamOptions(
       model,
@@ -2878,7 +2885,7 @@ export function reliableModelStream(
               return options?.onResponse?.(response, requestModel);
             },
           }
-        : options,
+        : { ...options, signal: turn.signal },
       configuredMaxTokens,
       accessToken,
       cacheRetention,
@@ -2886,11 +2893,46 @@ export function reliableModelStream(
     const stream = runStream
       ? runStream(preparedOptions)
       : models.streamSimple(model, context, preparedOptions);
-    return watchdog ? watchdog.wrap(stream) : stream;
+    return settleStep(watchdog ? watchdog.wrap(stream) : stream, dispose);
   } catch (error) {
-    watchdog?.dispose();
+    dispose();
     throw error;
   }
+}
+
+function settleStep(
+  stream: AssistantMessageEventStream,
+  dispose: () => void,
+): AssistantMessageEventStream {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    dispose();
+  };
+  class Settled extends AssistantMessageEventStream {
+    override [Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+      const iterator = (async function* settledStream() {
+        try {
+          yield* stream;
+        } finally {
+          finish();
+        }
+      })();
+      // return() before the first next() closes a generator without entering
+      // its body, so the finally above would not run.
+      const close = iterator.return.bind(iterator);
+      iterator.return = (value) => {
+        finish();
+        return close(value);
+      };
+      return iterator;
+    }
+    override result(): Promise<AssistantMessage> {
+      return stream.result().finally(finish);
+    }
+  }
+  return new Settled();
 }
 
 const CODEX_RESIDENCY_HEADER = "x-openai-internal-codex-residency";
