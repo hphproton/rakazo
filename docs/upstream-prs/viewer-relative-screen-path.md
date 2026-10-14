@@ -10,11 +10,7 @@ Return sealed screen URLs as viewer-relative paths
 
 A sealed screen URL was an absolute address on the configured web origin, often `http://127.0.0.1:5173`. Opening the app through another host on that same port, such as a tailnet address or a reverse proxy, made the browser load the page and its websocket from that configured origin. The picture stayed black.
 
-### Repro
-
-Seal a screen with web origin `http://127.0.0.1:5173` and open the app at `http://machine.tailnet.ts.net:5173`. The seal is `http://127.0.0.1:5173/novnc/session/...`. The iframe and the websocket connect to the viewer's own loopback.
-
-### Fix
+### What
 
 `sealScreenCapability` returns a path and query (`/novnc/session/.../vnc.html?...`). The `path` query is the relative sibling `websockify`, and `host` is not set.
 
@@ -24,21 +20,12 @@ This is the opposite shape from upstream #1333. That change set an origin-absolu
 
 The ciphertext, policy, generation checks, and remote-seal reuse are unchanged. The configured origin is still only a reuse key.
 
-The web app already resolves a screen URL against `window.location`. Mobile WebViews need an absolute URI, so `embeddableScreenUrl` resolves a `/novnc/` seal with `new URL(url, apiBase)`. An absolute loopback provider URL still keeps its port and takes a non-loopback API host.
+The web app already resolves a screen URL against `window.location`. Mobile WebViews need an absolute URI, so `embeddableScreenUrl` resolves a `/novnc/` seal with `new URL(url, apiBase)`. An absolute loopback provider URL still keeps its port and takes a non-loopback API host. `desktop://` URLs stay unsealed.
 
-### Tests
+### How tested
 
-- `viewer %s connects a seal of %s on its own origin`
-- `keeps noVNC routing public and nested provider socket credentials sealed`
-- `resolves a relative seal against the page that embedded it`
-- `resolves a relative seal against the API origin`
-- `issues lifecycle-bound capabilities for managed-provider screens too`
-- `opens a terminal only for the user holding this bot's control lease`
+`sealed screen capabilities > viewer <host> connects a seal of <upstream> on its own origin` failed before the change: the seal did not start with `/novnc/session/` and was an absolute URL on the configured origin. After the change, a tailnet viewer and a loopback viewer each seal a remote `vnc.html` and a loopback `embed.html` as a path and query with `path=websockify` and no `host`. Stock noVNC 1.7 and the shipped embed both resolve that sibling to `/novnc/session/.../websockify` on the viewer's own host, and opening that path still returns the sealed provider socket without the provider token.
 
-## Evidence
+Also covered by `keeps noVNC routing public and nested provider socket credentials sealed`, `resolves a relative seal against the page that embedded it`, `resolves a relative seal against the API origin`, `issues lifecycle-bound capabilities for managed-provider screens too`, and `opens a terminal only for the user holding this bot's control lease`.
 
-Test `sealed screen capabilities > viewer <host> connects a seal of <upstream> on its own origin`, for a tailnet viewer and a loopback viewer, each sealing a remote `vnc.html` and a loopback `embed.html`.
-
-Before: the seal did not start with `/novnc/session/`. It was an absolute URL on the configured origin, which is what #1333 left in place. All four viewer cases failed on that assertion.
-
-After: the seal is a path and query with `path=websockify` and no `host`. Stock noVNC 1.7 and the shipped embed both resolve that sibling to `/novnc/session/.../websockify` on the viewer's own host, and opening that path still returns the sealed provider socket without the provider token. Web and mobile resolvers turn the same path into an absolute URL on the page origin and the API origin. Screen-capability, screen-proxy, the two router screen cases, web `computer-screen`, and mobile `computer` unit tests passed. Typecheck passed for core, API, web, and mobile. Biome passed on the touched files. End-to-end was not run; the isolation spec resolves the returned path against the page origin before navigation.
+PR CI: `pnpm lint` (including the translation-catalog check), `pnpm check`, `pnpm build` with the Electron preload smoke, `pnpm test`, `pnpm test:integration`, and `pnpm test:e2e`.
