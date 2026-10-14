@@ -1444,8 +1444,11 @@ describe("computer screen url", () => {
     }));
     expect(response.status).toBe(200);
     const { json } = await response.json();
-    const url = new URL(json.url);
-    expect(url.origin).toBe("http://127.0.0.1:5173");
+    expect(json.url.startsWith("/novnc/session/")).toBe(true);
+    expect(json.url).not.toContain("://");
+    const url = new URL(json.url, "http://machine.tailnet.ts.net:5173/bots/chief");
+    expect(url.host).toBe("machine.tailnet.ts.net:5173");
+    expect(url.searchParams.get("path")).toBe("websockify");
     expect(openScreenCapability(url.pathname, "fake-test-secret")).toMatchObject({
       scope: {
         botId: "bot-1",
@@ -1665,8 +1668,11 @@ describe("computer terminal and file transfer", () => {
       { controlToken: "lease-1", cwd: "bots/bot-1" },
       expect.anything(),
     );
-    const url = new URL(body.json.url);
-    expect(url.origin).toBe("http://127.0.0.1:5173");
+    expect(body.json.url.startsWith("/novnc/session/")).toBe(true);
+    expect(body.json.url).not.toContain("://");
+    const url = new URL(body.json.url, "http://machine.tailnet.ts.net:5173/bots/chief");
+    expect(url.host).toBe("machine.tailnet.ts.net:5173");
+    expect(url.searchParams.get("path")).toBe("websockify");
     expect(openScreenCapability(url.pathname, "fake-test-secret")).toMatchObject({
       scope: { botId: "bot-1", controlLeaseId: "lease-1" },
       target: { hostname: "screen.example", interactive: true },

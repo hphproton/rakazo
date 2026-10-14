@@ -97,6 +97,17 @@ describe("embeddableScreenUrl", () => {
       "https://screen.example:6080/vnc.html",
     );
   });
+
+  it("resolves a relative seal against the page that embedded it", () => {
+    vi.stubGlobal("window", {
+      location: { href: "http://machine.tailnet.ts.net:5173/bots/chief" },
+    });
+    const sealed =
+      "/novnc/session/view/1.token/vnc.html?autoconnect=true&path=websockify&view_only=true";
+    expect(embeddableScreenUrl(sealed)).toBe(
+      "http://machine.tailnet.ts.net:5173/novnc/session/view/1.token/vnc.html?autoconnect=true&path=websockify&view_only=true",
+    );
+  });
 });
 
 describe("screenIframeSandbox", () => {

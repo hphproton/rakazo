@@ -69,6 +69,17 @@ describe("embeddableScreenUrl", () => {
     ).toBeNull();
     expect(embeddableScreenUrl("not a URL", "http://10.0.2.2:3100")).toBeNull();
   });
+
+  it("resolves a relative seal against the API origin", () => {
+    const sealed =
+      "/novnc/session/view/1.token/vnc.html?autoconnect=true&path=websockify&view_only=true";
+    expect(embeddableScreenUrl(sealed, "http://192.168.1.20:3100")).toBe(
+      "http://192.168.1.20:3100/novnc/session/view/1.token/vnc.html?autoconnect=true&path=websockify&view_only=true",
+    );
+    expect(embeddableScreenUrl(sealed, "http://127.0.0.1:3100")).toBe(
+      "http://127.0.0.1:3100/novnc/session/view/1.token/vnc.html?autoconnect=true&path=websockify&view_only=true",
+    );
+  });
 });
 
 describe("screen stream identity", () => {
@@ -81,6 +92,10 @@ describe("screen stream identity", () => {
   it("treats rotating capability tokens as the same running view stream", () => {
     expect(screenStreamKey(view("aaaToken"))).toBe(screenStreamKey(view("bbbToken")));
     expect(retainScreenSource(view("aaaToken"), view("bbbToken"), now)).toBe(view("aaaToken"));
+    const relative = (token: string) =>
+      `/novnc/session/view/${now + 60 * 60_000}.${token}/embed.html?path=websockify`;
+    expect(screenStreamKey(relative("aaaToken"))).toBe(screenStreamKey(relative("bbbToken")));
+    expect(screenRenewReadAt(relative("aaaToken"), now)).toBe(now);
   });
 
   it("adopts a same-stream URL once the held capability is in the renew window", () => {

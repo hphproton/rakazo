@@ -69,17 +69,20 @@ export function sealScreenCapability(
   const token = Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString("base64url");
   const prefix = `/novnc/session/${policy}/${expiresAt}.${token}`;
   const result = new URL(`${prefix}${target.pathname || "/"}`, new URL(origin).origin);
-  // noVNC reads these from the browser URL. Keep its socket inside the capability
-  // route while the provider's nested socket token stays sealed server-side.
+  // Path and query only. The viewer resolves them against the page that embedded
+  // the screen, so a proxy or another host is not sent to the configured origin.
+  // Stock noVNC 1.7 leaves host unset and resolves `path` with
+  // `new URL(path, location.href)`. The custom embed joins that same relative
+  // path onto the capability directory. `websockify` is the sibling of the page
+  // for both. Do not set `host`: stock would then open `/websockify` at the root.
+  // A capability prefix without a leading slash nests under the page directory.
   result.search = new URLSearchParams({
     autoconnect: "true",
     resize: "scale",
     view_only: policy === "control" ? "false" : "true",
-    // noVNC can resolve paths relative to its document directory. An absolute
-    // path prevents it from repeating the capability prefix.
-    path: target.pathname === "/embed.html" ? "websockify" : `${prefix}/websockify`,
+    path: "websockify",
   }).toString();
-  return result.toString();
+  return `${result.pathname}${result.search}`;
 }
 
 const remoteScreenSeals = new Map<string, { sealed: string; expiresAt: number }>();

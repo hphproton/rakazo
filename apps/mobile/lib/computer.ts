@@ -53,13 +53,15 @@ export async function readScreenUrl(
   return null;
 }
 
-/** Point a loopback noVNC URL at the same host the app uses for the API. */
+/** Resolve a seal against the API origin. A WebView needs an absolute URI. */
 export function embeddableScreenUrl(url: string | null, apiBase: string): string | null {
   if (!url) return null;
   try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     const api = new URL(apiBase);
+    // Only a capability path is resolved against the API. Anything else must
+    // already be an absolute URL, so a stray string cannot become a path.
+    const parsed = url.startsWith("/novnc/") ? new URL(url, api) : new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     if (isLocalHostname(parsed.hostname) && !isLocalHostname(api.hostname)) {
       parsed.hostname = api.hostname;
     }
@@ -69,13 +71,18 @@ export function embeddableScreenUrl(url: string | null, apiBase: string): string
   }
 }
 
+/** Absolute URLs keep their origin. A relative seal has none until a viewer resolves it. */
+function parseScreenUrl(url: string): URL {
+  return new URL(url, "http://screen.invalid");
+}
+
 /**
  * Identity of a live screen stream, ignoring rotating capability tokens.
  * View vs control stays in the key so takeover/release still reconnects.
  */
 export function screenStreamKey(url: string): string {
   try {
-    const parsed = new URL(url);
+    const parsed = parseScreenUrl(url);
     const match = parsed.pathname.match(/^\/novnc\/session\/(view|control)\/[^/]+(\/.*)?$/);
     if (match) return `${parsed.origin}/novnc/session/${match[1]}${match[2] ?? ""}`;
     const viewOnly = parsed.searchParams.get("view_only");
@@ -98,7 +105,9 @@ const SCREEN_SOURCE_RENEW_REMAINING_MS =
 
 function screenCapabilityExpiresAt(url: string): number | null {
   try {
-    const match = new URL(url).pathname.match(/^\/novnc\/session\/(?:view|control)\/(\d+)\./);
+    const match = parseScreenUrl(url).pathname.match(
+      /^\/novnc\/session\/(?:view|control)\/(\d+)\./,
+    );
     if (!match) return null;
     const expiresAt = Number(match[1]);
     return Number.isSafeInteger(expiresAt) ? expiresAt : null;
