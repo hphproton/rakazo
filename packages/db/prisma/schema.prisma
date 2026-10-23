@@ -1472,6 +1472,7 @@ model ExternalMessage {
   updatedAt              DateTime              @updatedAt
 
   @@unique([externalConversationId, providerEventId])
+  @@index([externalConversationId, replyThreadId])
   @@index([status, nextAttemptAt])
   @@index([externalConversationId, senderIsBot, createdAt])
   @@map("external_messages")

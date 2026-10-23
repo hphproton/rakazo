@@ -374,7 +374,11 @@ describe("team chat bridge", () => {
   });
 
   describe("thread history", () => {
-    function setup(input: { knownThread: boolean; history?: TeamChatInboundMessage[] | Error }) {
+    function setup(input: {
+      knownThread: boolean;
+      knownConversation?: boolean;
+      history?: TeamChatInboundMessage[] | Error;
+    }) {
       const rows = new Map<string, Record<string, unknown>>();
       const upsert = vi.fn(async ({ create }: { create: Record<string, unknown> }) => {
         const id = `external-${String(create.providerEventId)}`;
@@ -402,7 +406,12 @@ describe("team chat bridge", () => {
       };
       const prisma = {
         artifact: { findMany: vi.fn(async () => []) },
-        externalConversation: { upsert: vi.fn(async () => conversation) },
+        externalConversation: {
+          findUnique: vi.fn(async () =>
+            input.knownConversation === false ? null : { id: conversation.id },
+          ),
+          upsert: vi.fn(async () => conversation),
+        },
         externalMessage: {
           findFirst,
           findMany: vi.fn(
@@ -657,11 +666,25 @@ describe("team chat bridge", () => {
       expect(fetchThreadHistory).not.toHaveBeenCalled();
       expect(findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({
+          where: {
+            externalConversationId: "conversation-1",
             OR: [{ providerEventId: "100.1" }, { replyThreadId: "100.1" }],
-          }),
+          },
         }),
       );
+    });
+
+    it("fetches thread history when the conversation does not exist yet", async () => {
+      const { bridge, fetchThreadHistory, findFirst } = setup({
+        knownThread: false,
+        knownConversation: false,
+        history: [earlier("100.1")],
+      });
+
+      await bridge.receive(mention, { queueAgent: false });
+
+      expect(fetchThreadHistory).toHaveBeenCalledOnce();
+      expect(findFirst).not.toHaveBeenCalled();
     });
 
     it("still records the mention when history cannot be read", async () => {

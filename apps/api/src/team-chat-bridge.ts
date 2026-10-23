@@ -385,14 +385,22 @@ export class TeamChatBridge {
   private async knowsReplyThread(message: TeamChatInboundMessage): Promise<boolean> {
     const replyThreadId = message.replyThreadId;
     if (!replyThreadId || replyThreadId === message.eventId) return true;
-    const known = await this.deps.prisma.externalMessage.findFirst({
+    const conversation = await this.deps.prisma.externalConversation.findUnique({
       where: {
-        OR: [{ providerEventId: replyThreadId }, { replyThreadId }],
-        externalConversation: {
+        provider_workspaceId_externalKey: {
           provider: this.deps.providerId,
           workspaceId: message.workspaceId,
           externalKey: message.conversationKey,
         },
+      },
+      select: { id: true },
+    });
+    if (!conversation) return false;
+    // Filter externalConversationId directly so each OR branch can use an index.
+    const known = await this.deps.prisma.externalMessage.findFirst({
+      where: {
+        externalConversationId: conversation.id,
+        OR: [{ providerEventId: replyThreadId }, { replyThreadId }],
       },
       select: { id: true },
     });
