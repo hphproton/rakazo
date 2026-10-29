@@ -366,6 +366,22 @@ export async function returnBotMessageOutcome(
     await markBotOutcomeReturned(deps.prisma, run.id);
     return true;
   }
+  // Same live-bot lookup messageBot uses. An archived or deleted requester can
+  // never receive the outcome, so retrying it would loop forever.
+  const requester = await deps.prisma.bot.findFirst({
+    where: {
+      id: source.fromBotId,
+      spaceId: run.spaceId,
+      userId: run.userId,
+      archivedAt: null,
+    },
+    select: { id: true },
+  });
+  if (!requester) {
+    await markBotOutcomeReturned(deps.prisma, run.id);
+    // Handled: nothing to deliver. Return true so callers do not release a reservation.
+    return true;
+  }
   const outcome = await messageBot(
     deps,
     run,

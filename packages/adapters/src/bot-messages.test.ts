@@ -70,6 +70,7 @@ function deps(
             { id: "bot-target", name: "Analyst", title: "", thread: { id: "thread-target" } },
           ],
         ),
+      findFirst: vi.fn().mockResolvedValue(options.targetArchived ? null : { id: "bot-target" }),
     },
     message: { findUnique: messageFindUnique, findMany: vi.fn().mockResolvedValue([]) },
     run: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
@@ -741,5 +742,50 @@ describe("automatic outcome return", () => {
     expect(returned).toBe(true);
     expect(harness.enqueue).not.toHaveBeenCalled();
     expect(harness.deps.prisma.run.updateMany).toHaveBeenCalled();
+  });
+
+  it("marks the outcome returned when the requesting bot is archived", async () => {
+    const hopBlocks = [
+      {
+        kind: "bot_message_received",
+        fromBotId: "bot-target",
+        fromBotName: "Coordinator",
+        text: "research this",
+        hop: 1,
+        intent: "request",
+        returnToMessageId: "message-request",
+      },
+    ];
+    const archived = deps({ targetArchived: true, hopBlocks });
+    const returned = await returnBotMessageOutcome(
+      archived.deps,
+      { ...run, sourceMessageId: "message-source" },
+      sender,
+      "The answer is 42.",
+    );
+
+    expect(returned).toBe(true);
+    expect(archived.deps.prisma.run.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: run.id,
+        status: { in: ["completed", "failed", "cancelled"] },
+        botOutcomeReturnedAt: null,
+      },
+      data: { botOutcomeReturnedAt: expect.any(Date) },
+    });
+    expect(archived.enqueue).not.toHaveBeenCalled();
+    expect(archived.tx.message.create).not.toHaveBeenCalled();
+    expect(archived.tx.run.create).not.toHaveBeenCalled();
+
+    const live = deps({ hopBlocks });
+    const delivered = await returnBotMessageOutcome(
+      live.deps,
+      { ...run, sourceMessageId: "message-source" },
+      sender,
+      "The answer is 42.",
+    );
+    expect(delivered).toBe(true);
+    expect(live.enqueue).toHaveBeenCalledOnce();
+    expect(live.tx.message.create).toHaveBeenCalled();
   });
 });
