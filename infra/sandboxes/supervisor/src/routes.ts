@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core/node/sandbox-command";
+import { canTakeScreenLease } from "@rakazo/core/node/screen-lease";
 import { getLogger } from "@rakazo/logging";
 import { requestLogging } from "@rakazo/logging/hono";
 import type Docker from "dockerode";
@@ -401,6 +402,66 @@ app.get("/computers/:id", async (c) => {
   }
 });
 
+/** Team exec: the acting bot's screen is not the container-label bot. */
+function teamScopedExec(headers: { botId?: string; screenId?: string }): boolean {
+  return Boolean(headers.screenId && headers.screenId !== headers.botId);
+}
+
+function execScreenKey(id: string, headers: { botId?: string; screenId?: string }): string {
+  return headers.screenId || headers.botId || id;
+}
+
+/**
+ * Slot this execution may use. A lease a newer execution owns is not usable; screen setup
+ * then refuses it the way /terminal does, instead of running on that display.
+ */
+function usableExecScreenIndex(
+  id: string,
+  screen: { key: string; leaseId: string | undefined },
+): number | undefined {
+  const slot = computerScreens.get(id)?.get(screen.key);
+  if (!slot) return undefined;
+  const { leaseId } = screen;
+  if (
+    leaseId &&
+    slot.leaseId &&
+    slot.leaseId !== leaseId &&
+    !canTakeScreenLease(slot.leaseId, leaseId)
+  ) {
+    return undefined;
+  }
+  return slot.index;
+}
+
+async function resolveExecLayout(
+  id: string,
+  container: Docker.Container,
+  headers: ReturnType<typeof identityHeaders>,
+): Promise<ReturnType<typeof screenPorts>> {
+  const screen = { key: execScreenKey(id, headers), leaseId: headers.screenLeaseId };
+  // Personal scope keeps today's read: the recorded index, or slot 0 when this bot has none.
+  if (!teamScopedExec(headers)) {
+    return screenPorts(computerScreens.get(id)?.get(screen.key)?.index ?? 0);
+  }
+  const assigned = usableExecScreenIndex(id, screen);
+  if (assigned !== undefined) return screenPorts(assigned);
+  // Setup holds the lock. The caller's command runs after this returns and does not hold it.
+  return withComputerScreenLock(id, async () => {
+    const current = usableExecScreenIndex(id, screen);
+    if (current !== undefined) return screenPorts(current);
+    // /terminal boots the slot and does not restore a control session.
+    const ensured = await ensureManagedScreen(
+      id,
+      container,
+      headers.botId,
+      headers.screenId,
+      headers.screenLeaseId,
+      false,
+    );
+    return ensured.layout;
+  });
+}
+
 const EXEC_KEEP_ALIVE_MS = 15_000;
 
 app.post("/computers/:id/exec", async (c) => {
@@ -422,11 +483,16 @@ app.post("/computers/:id/exec", async (c) => {
     // Docker would fail the exec inside the stream; answer up front so the caller can boot it.
     if (!managed.info.State.Running) return c.json({ error: "computer is not running" }, 409);
     container = managed.container;
-    const screenId = headers.screenId || headers.botId || id;
-    const screenIndex = computerScreens.get(id)?.get(screenId)?.index ?? 0;
-    layout = screenPorts(screenIndex);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    return c.json({ stdout: "", stderr: message, code: 1 }, 200);
+  }
+  try {
+    layout = await resolveExecLayout(id, container, headers);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Setup failed the way /terminal reports it. Do not run the command, and do not use slot 0.
+    if (teamScopedExec(headers)) return c.json({ error: message }, 400);
     return c.json({ stdout: "", stderr: message, code: 1 }, 200);
   }
   const encoder = new TextEncoder();
